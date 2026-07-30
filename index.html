@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP Range Test</title>
+<style>
+:root{
+  --bg:#111318; --panel:#1b1e26; --line:#2a2e3a; --text:#e8eaf0; --muted:#8b91a3;
+  --accent:#5b9dff; --good:#39d98a; --warn:#e8b339; --bad:#f2545b;
+  --s-espnow:#5b9dff; --s-blepeer-own:#39d98a; --s-blepeer-peer:#9dd6b0;
+  --s-blephone-own:#e8b339; --s-blephone-adv:#f2b8bb;
+}
+@media (prefers-color-scheme: light){
+  :root{ --bg:#f4f5f8; --panel:#ffffff; --line:#d8dbe3; --text:#1a1c22; --muted:#5a6070; }
+}
+:root[data-theme="dark"]{ --bg:#111318; --panel:#1b1e26; --line:#2a2e3a; --text:#e8eaf0; --muted:#8b91a3; }
+:root[data-theme="light"]{ --bg:#f4f5f8; --panel:#ffffff; --line:#d8dbe3; --text:#1a1c22; --muted:#5a6070; }
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px}
+.wrap{max-width:900px;margin:0 auto;padding:12px}
+h1{font-size:1.1rem;margin:.2em 0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 12px;font-size:.9rem;cursor:pointer}
+button.secondary{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.4;cursor:default}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.muted{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:right}
+td:first-child,th:first-child{text-align:left}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:.8rem;margin:6px 0}
+.legend label{display:flex;align-items:center;gap:5px;cursor:pointer}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+canvas{width:100%;display:block;background:var(--bg);border-radius:8px}
+#timelineCanvas{height:180px}
+#mapCanvas{height:260px}
+.status{font-size:.8rem;color:var(--muted)}
+input[type=text]{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px;width:100%}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ESP Range Test</h1>
+  <div class="panel row">
+    <button id="btnConnect">Connect to board</button>
+    <button id="btnDisconnect" class="secondary" disabled>Disconnect</button>
+    <span id="connStatus" class="status">not connected</span>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <button id="btnGps" class="secondary">Start GPS tracking</button>
+      <button id="btnMark" class="secondary">Mark point</button>
+      <button id="btnCsv" class="secondary">Export CSV</button>
+      <span id="gpsStatus" class="status">GPS idle</span>
+    </div>
+  </div>
+
+  <div class="panel" id="boardPanel" style="display:none">
+    <div class="row" style="justify-content:space-between">
+      <b id="thisBoardName">-</b>
+      <button id="btnPinThis" class="secondary">Pin this board's location</button>
+    </div>
+    <table id="thisTable"></table>
+    <div class="row" style="justify-content:space-between;margin-top:8px">
+      <b id="peerBoardName" class="muted">peer (relayed)</b>
+      <button id="btnPinPeer" class="secondary">Pin peer board's location</button>
+    </div>
+    <table id="peerTable"></table>
+  </div>
+
+  <div class="panel">
+    <div class="legend" id="legend"></div>
+    <canvas id="timelineCanvas"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <b>Position</b>
+      <span class="muted status">phone track + pinned boards - click a point, or scrub the timeline above</span>
+    </div>
+    <canvas id="mapCanvas"></canvas>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ---- Wire protocol (must match config.h / stats.h on the boards) ----
+const SVC_UUID  = '9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const CH_OWN    = '9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const CH_PEER   = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const CH_INFO   = '9c7a0004-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+
+function parseLinkStat(dv, off) {
+  return {
+    rxCount: dv.getUint16(off, true),
+    pdr: dv.getUint8(off + 2) === 0xFF ? null : dv.getUint8(off + 2),
+    rssiAvg: dv.getInt8(off + 3),
+    rssiMin: dv.getInt8(off + 4),
+    rssiMax: dv.getInt8(off + 5),
+    mode: dv.getUint8(off + 6),
+  };
+}
+function parseSnapshot(dv) {
+  let o = 0;
+  const boardId = dv.getUint32(o, true); o += 4;
+  const uptimeMs = dv.getUint32(o, true); o += 4;
+  const espnow = parseLinkStat(dv, o); o += 7;
+  const blePeer = parseLinkStat(dv, o); o += 7;
+  const blePhone = parseLinkStat(dv, o); o += 7;
+  const phoneConnected = dv.getUint8(o) !== 0; o += 1;
+  const txPowerDbm = dv.getInt8(o); o += 1;
+  return { boardId, uptimeMs, espnow, blePeer, blePhone, phoneConnected, txPowerDbm };
+}
+function bleModeName(m) { return { 0: '-', 1: '1M', 2: '2M', 3: 'Coded' }[m] || m; }
+function idHex(id) { return id ? id.toString(16).toUpperCase().padStart(8, '0') : '-'; }
+
+// ---- State ----
+let device = null, server = null, charOwn = null, charPeer = null;
+let lastOwn = null, lastPeer = null;
+
+const samples = []; // {t, source, link, rssi, pdr, mode, lat, lon}
+const marks = [];   // {t, label, lat, lon}
+let gpsWatchId = null;
+let lastFix = null; // {lat, lon, acc, t}
+const gpsTrack = [];
+let boardPins = JSON.parse(localStorage.getItem('esprt_pins') || '{}'); // {boardIdHex: {lat, lon}}
+
+const SERIES = {
+  espnow:        { label: 'ESP-NOW LR (from peer)',   color: getCss('--s-espnow'),        on: true, get: s => s && s.own && s.own.espnow },
+  blepeer_own:   { label: 'BLE peer (we hear them)',  color: getCss('--s-blepeer-own'),   on: true, get: s => s && s.own && s.own.blePeer },
+  blepeer_peer:  { label: 'BLE peer (they hear us)',  color: getCss('--s-blepeer-peer'),  on: true, get: s => s && s.peer && s.peer.blePeer },
+  blephone_own:  { label: 'BLE phone (board hears us)', color: getCss('--s-blephone-own'), on: true, get: s => s && s.own && s.own.blePhone },
+};
+function getCss(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+// ---- BLE connect ----
+document.getElementById('btnConnect').onclick = async () => {
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'ESPRT-' }],
+      optionalServices: [SVC_UUID],
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus('connecting...');
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC_UUID);
+    charOwn = await svc.getCharacteristic(CH_OWN);
+    charPeer = await svc.getCharacteristic(CH_PEER);
+    await charOwn.startNotifications();
+    charOwn.addEventListener('characteristicvaluechanged', e => onSnapshot('own', e.target.value));
+    await charPeer.startNotifications();
+    charPeer.addEventListener('characteristicvaluechanged', e => onSnapshot('peer', e.target.value));
+
+    document.getElementById('thisBoardName').textContent = device.name || 'board';
+    document.getElementById('boardPanel').style.display = '';
+    document.getElementById('btnDisconnect').disabled = false;
+    setStatus('connected to ' + device.name);
+    tryWatchAdvertisements();
+  } catch (err) {
+    setStatus('connect failed: ' + err.message);
+  }
+};
+document.getElementById('btnDisconnect').onclick = () => { if (device && device.gatt.connected) device.gatt.disconnect(); };
+function onDisconnected() { setStatus('disconnected'); document.getElementById('btnDisconnect').disabled = true; }
+function setStatus(s) { document.getElementById('connStatus').textContent = s; }
+
+function onSnapshot(which, dataView) {
+  const snap = parseSnapshot(dataView);
+  const t = Date.now();
+  const pos = lastFix ? { lat: lastFix.lat, lon: lastFix.lon } : { lat: null, lon: null };
+
+  if (which === 'own') lastOwn = snap; else lastPeer = snap;
+  const combined = { own: lastOwn, peer: lastPeer };
+
+  for (const key in SERIES) {
+    const s = SERIES[key].get(combined);
+    if (s && s.rxCount > 0) {
+      samples.push({ t, key, rssi: s.rssiAvg, rssiMin: s.rssiMin, rssiMax: s.rssiMax, pdr: s.pdr, mode: s.mode, lat: pos.lat, lon: pos.lon });
+    }
+  }
+  if (samples.length > 5000) samples.splice(0, samples.length - 5000);
+
+  renderTables();
+  renderTimeline();
+  renderMap();
+}
+
+// ---- Tables ----
+function linkRow(label, s) {
+  if (!s) return `<tr><td>${label}</td><td colspan=5 class="muted">-</td></tr>`;
+  return `<tr><td>${label}</td><td>${s.rxCount}</td><td>${s.pdr === null ? 'n/a' : s.pdr + '%'}</td>` +
+         `<td>${s.rssiAvg}</td><td>${s.rssiMin}/${s.rssiMax}</td><td>${bleModeName(s.mode)}</td></tr>`;
+}
+function renderTables() {
+  const head = '<tr><th>link</th><th>rx</th><th>pdr</th><th>rssi</th><th>min/max</th><th>mode</th></tr>';
+  document.getElementById('thisTable').innerHTML = head +
+    linkRow('ESP-NOW (from peer)', lastOwn && lastOwn.espnow) +
+    linkRow('BLE (from peer)', lastOwn && lastOwn.blePeer) +
+    linkRow('BLE (from phone, this board)', lastOwn && lastOwn.blePhone);
+  document.getElementById('peerBoardName').textContent = 'peer ' + idHex(lastPeer && lastPeer.boardId) + ' (relayed)';
+  document.getElementById('peerTable').innerHTML = head +
+    linkRow('ESP-NOW (from us)', lastPeer && lastPeer.espnow) +
+    linkRow('BLE (from us)', lastPeer && lastPeer.blePeer) +
+    linkRow('BLE (from phone, peer board)', lastPeer && lastPeer.blePhone);
+}
+
+// ---- watchAdvertisements: phone's own view of the board's signal, if supported ----
+function tryWatchAdvertisements() {
+  if (typeof device.watchAdvertisements !== 'function') {
+    SERIES.watch_adv = null;
+    return;
+  }
+  SERIES.watch_adv = { label: 'BLE adv (phone hears board)', color: getCss('--s-blephone-adv'), on: true, get: () => null };
+  device.addEventListener('advertisementreceived', e => {
+    if (typeof e.rssi !== 'number') return;
+    const pos = lastFix ? { lat: lastFix.lat, lon: lastFix.lon } : { lat: null, lon: null };
+    samples.push({ t: Date.now(), key: 'watch_adv', rssi: e.rssi, rssiMin: e.rssi, rssiMax: e.rssi, pdr: null, mode: 0, lat: pos.lat, lon: pos.lon });
+    renderTimeline();
+  });
+  device.watchAdvertisements().catch(() => { SERIES.watch_adv = null; });
+}
+
+// ---- GPS ----
+document.getElementById('btnGps').onclick = () => {
+  if (gpsWatchId !== null) {
+    navigator.geolocation.clearWatch(gpsWatchId);
+    gpsWatchId = null;
+    document.getElementById('btnGps').textContent = 'Start GPS tracking';
+    document.getElementById('gpsStatus').textContent = 'GPS stopped';
+    return;
+  }
+  if (!navigator.geolocation) { document.getElementById('gpsStatus').textContent = 'no geolocation available'; return; }
+  gpsWatchId = navigator.geolocation.watchPosition(pos => {
+    lastFix = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, t: Date.now() };
+    gpsTrack.push(lastFix);
+    document.getElementById('gpsStatus').textContent =
+      `${lastFix.lat.toFixed(6)}, ${lastFix.lon.toFixed(6)} (±${Math.round(lastFix.acc)}m)`;
+    renderMap();
+  }, err => {
+    document.getElementById('gpsStatus').textContent = 'GPS error: ' + err.message;
+  }, { enableHighAccuracy: true, maximumAge: 1000 });
+  document.getElementById('btnGps').textContent = 'Stop GPS tracking';
+};
+
+document.getElementById('btnMark').onclick = () => {
+  const label = prompt('Label for this point (optional):', '') || '';
+  const pos = lastFix ? { lat: lastFix.lat, lon: lastFix.lon } : { lat: null, lon: null };
+  marks.push({ t: Date.now(), label, lat: pos.lat, lon: pos.lon });
+  renderTimeline(); renderMap();
+};
+
+document.getElementById('btnPinThis').onclick = () => pinBoard(lastOwn && lastOwn.boardId);
+document.getElementById('btnPinPeer').onclick = () => pinBoard(lastPeer && lastPeer.boardId);
+function pinBoard(boardId) {
+  if (!boardId) { alert('No data from that board yet.'); return; }
+  if (!lastFix) { alert('Start GPS tracking first so there is a current position to pin.'); return; }
+  boardPins[idHex(boardId)] = { lat: lastFix.lat, lon: lastFix.lon };
+  localStorage.setItem('esprt_pins', JSON.stringify(boardPins));
+  renderMap();
+}
+
+// ---- CSV export ----
+document.getElementById('btnCsv').onclick = () => {
+  let csv = 'time_iso,link,rssi_avg,rssi_min,rssi_max,pdr_percent,mode,lat,lon\n';
+  for (const s of samples) {
+    csv += [new Date(s.t).toISOString(), s.key, s.rssi, s.rssiMin, s.rssiMax, s.pdr === null ? '' : s.pdr, s.mode,
+            s.lat === null ? '' : s.lat, s.lon === null ? '' : s.lon].join(',') + '\n';
+  }
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'esp_range_test_' + Date.now() + '.csv';
+  a.click();
+};
+
+// ---- Legend ----
+function renderLegend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  for (const key in SERIES) {
+    const s = SERIES[key];
+    if (!s) continue;
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" ${s.on ? 'checked' : ''} data-key="${key}"><span class="sw" style="background:${s.color}"></span>${s.label}`;
+    label.querySelector('input').onchange = e => { SERIES[key].on = e.target.checked; renderTimeline(); };
+    el.appendChild(label);
+  }
+}
+renderLegend();
+
+// ---- Timeline canvas (time on X, rssi dBm on Y) ----
+let highlightT = null;
+const timelineCanvas = document.getElementById('timelineCanvas');
+function renderTimeline() {
+  const c = timelineCanvas;
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight || 180;
+  c.width = w * dpr; c.height = h * dpr;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (samples.length === 0) return;
+
+  const tMin = samples[0].t, tMax = samples[samples.length - 1].t || tMin + 1;
+  const rMin = -100, rMax = -20; // typical BLE/ESP-NOW dBm range
+  const x = t => 30 + (w - 40) * (t - tMin) / Math.max(1, tMax - tMin);
+  const y = r => h - 20 - (h - 30) * (r - rMin) / (rMax - rMin);
+
+  ctx.strokeStyle = getCss('--line'); ctx.fillStyle = getCss('--muted'); ctx.font = '10px sans-serif';
+  for (let r = rMin; r <= rMax; r += 20) {
+    ctx.beginPath(); ctx.moveTo(30, y(r)); ctx.lineTo(w - 10, y(r)); ctx.stroke();
+    ctx.fillText(r + 'dBm', 2, y(r) + 3);
+  }
+
+  for (const key in SERIES) {
+    const s = SERIES[key];
+    if (!s || !s.on) continue;
+    const pts = samples.filter(p => p.key === key);
+    if (pts.length === 0) continue;
+    ctx.strokeStyle = s.color; ctx.fillStyle = s.color; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    pts.forEach((p, i) => { const px = x(p.t), py = y(p.rssi); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+    ctx.stroke();
+    pts.forEach(p => { ctx.beginPath(); ctx.arc(x(p.t), y(p.rssi), 1.6, 0, 7); ctx.fill(); });
+  }
+
+  for (const m of marks) {
+    const px = x(m.t);
+    ctx.strokeStyle = getCss('--warn'); ctx.beginPath(); ctx.moveTo(px, 10); ctx.lineTo(px, h - 20); ctx.stroke();
+  }
+
+  if (highlightT !== null) {
+    const px = x(highlightT);
+    ctx.strokeStyle = getCss('--text'); ctx.beginPath(); ctx.moveTo(px, 5); ctx.lineTo(px, h - 15); ctx.stroke();
+  }
+}
+timelineCanvas.addEventListener('click', e => {
+  const rect = timelineCanvas.getBoundingClientRect();
+  const w = timelineCanvas.clientWidth;
+  if (samples.length === 0) return;
+  const tMin = samples[0].t, tMax = samples[samples.length - 1].t || tMin + 1;
+  const frac = (e.clientX - rect.left - 30) / Math.max(1, w - 40);
+  highlightT = tMin + frac * (tMax - tMin);
+  renderTimeline(); renderMap();
+});
+
+// ---- Position canvas: simple local-tangent-plane projection, no map tiles ----
+const mapCanvas = document.getElementById('mapCanvas');
+function project(lat, lon, origin) {
+  const R = 111320; // meters per degree latitude, approx
+  const dx = (lon - origin.lon) * R * Math.cos(origin.lat * Math.PI / 180);
+  const dy = (lat - origin.lat) * R;
+  return { x: dx, y: -dy }; // north = up
+}
+let lastMapProj = null; // {origin, minX, minY, scale, pad} - reused by the click handler for accurate hit-testing
+function renderMap() {
+  const c = mapCanvas;
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight || 260;
+  c.width = w * dpr; c.height = h * dpr;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const pins = Object.values(boardPins);
+  const trackPts = gpsTrack.map(f => ({ lat: f.lat, lon: f.lon }));
+  const all = [...pins, ...trackPts];
+  if (all.length === 0) {
+    ctx.fillStyle = getCss('--muted'); ctx.fillText('No location data yet - start GPS tracking and/or pin a board.', 10, 20);
+    lastMapProj = null;
+    return;
+  }
+  const origin = all[0];
+  const pts = all.map(p => project(p.lat, p.lon, origin));
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const minX = Math.min(...xs, -5), maxX = Math.max(...xs, 5);
+  const minY = Math.min(...ys, -5), maxY = Math.max(...ys, 5);
+  const pad = 20;
+  const scale = Math.min((w - pad * 2) / Math.max(1, maxX - minX), (h - pad * 2) / Math.max(1, maxY - minY));
+  const sx = x => pad + (x - minX) * scale;
+  const sy = y => pad + (y - minY) * scale;
+  lastMapProj = { origin, minX, minY, scale, pad };
+
+  // track
+  if (trackPts.length > 1) {
+    ctx.strokeStyle = getCss('--accent'); ctx.lineWidth = 2; ctx.beginPath();
+    trackPts.forEach((p, i) => { const P = project(p.lat, p.lon, origin); const X = sx(P.x), Y = sy(P.y); if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y); });
+    ctx.stroke();
+  }
+  // marks
+  ctx.fillStyle = getCss('--warn');
+  for (const m of marks) {
+    if (m.lat === null) continue;
+    const P = project(m.lat, m.lon, origin);
+    ctx.beginPath(); ctx.arc(sx(P.x), sy(P.y), 3, 0, 7); ctx.fill();
+  }
+  // highlighted sample point
+  if (highlightT !== null) {
+    const near = samples.filter(s => s.lat !== null).sort((a, b) => Math.abs(a.t - highlightT) - Math.abs(b.t - highlightT))[0];
+    if (near) {
+      const P = project(near.lat, near.lon, origin);
+      ctx.strokeStyle = getCss('--text'); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx(P.x), sy(P.y), 7, 0, 7); ctx.stroke();
+    }
+  }
+  // board pins
+  ctx.fillStyle = getCss('--bad');
+  for (const key in boardPins) {
+    const p = boardPins[key];
+    const P = project(p.lat, p.lon, origin);
+    const X = sx(P.x), Y = sy(P.y);
+    ctx.beginPath(); ctx.rect(X - 4, Y - 4, 8, 8); ctx.fill();
+    ctx.fillStyle = getCss('--text'); ctx.font = '10px sans-serif'; ctx.fillText(key, X + 6, Y + 3);
+    ctx.fillStyle = getCss('--bad');
+  }
+}
+mapCanvas.addEventListener('click', e => {
+  if (samples.length === 0 || !lastMapProj) return;
+  // find nearest plotted sample point in screen space (using the same projection/scale
+  // renderMap just drew with) and jump the timeline to it
+  const rect = mapCanvas.getBoundingClientRect();
+  const clickX = e.clientX - rect.left, clickY = e.clientY - rect.top;
+  const { origin, minX, minY, scale, pad } = lastMapProj;
+  const sx = x => pad + (x - minX) * scale;
+  const sy = y => pad + (y - minY) * scale;
+  let best = null, bestD = Infinity;
+  for (const s of samples) {
+    if (s.lat === null) continue;
+    const P = project(s.lat, s.lon, origin);
+    const d = Math.hypot(sx(P.x) - clickX, sy(P.y) - clickY);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  if (best && bestD < 20) { highlightT = best.t; renderTimeline(); renderMap(); }
+});
+
+renderTables();
+renderTimeline();
+renderMap();
+window.addEventListener('resize', () => { renderTimeline(); renderMap(); });
+</script>
+</body>
+</html>

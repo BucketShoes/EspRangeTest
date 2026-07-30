@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Kaldosh/Documents/Arduino/libraries/NimBLE-Arduino/src/**)",
+      "Read(//c/Users/Kaldosh/AppData/Local/Arduino15/packages/esp32/hardware/esp32/3.3.8/libraries/ESP_NOW/src/**)",
+      "Skill(fewer-permission-prompts)",
+      "Skill(fewer-permission-prompts:*)",
+      "PowerShell(python3 \"C:\\\\Users\\\\Kaldosh\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Kaldosh-Documents-Arduino-EspRangeTest\\\\65cf03e6-ede7-4a77-8bc1-50e2281ae10a\\\\scratchpad\\\\scan_perms.py\")"
+    ]
+  }
+}
