@@ -177,6 +177,7 @@ function onSnapshot(which, dataView) {
   const combined = { own: lastOwn, peer: lastPeer };
 
   for (const key in SERIES) {
+    if (!SERIES[key]) continue;
     const s = SERIES[key].get(combined);
     if (s && s.rxCount > 0) {
       samples.push({ t, key, rssi: s.rssiAvg, rssiMin: s.rssiMin, rssiMax: s.rssiMax, pdr: s.pdr, mode: s.mode, lat: pos.lat, lon: pos.lon });
@@ -211,7 +212,7 @@ function renderTables() {
 // ---- watchAdvertisements: phone's own view of the board's signal, if supported ----
 function tryWatchAdvertisements() {
   if (typeof device.watchAdvertisements !== 'function') {
-    SERIES.watch_adv = null;
+    delete SERIES.watch_adv;
     return;
   }
   SERIES.watch_adv = { label: 'BLE adv (phone hears board)', color: getCss('--s-blephone-adv'), on: true, get: () => null };
@@ -221,7 +222,7 @@ function tryWatchAdvertisements() {
     samples.push({ t: Date.now(), key: 'watch_adv', rssi: e.rssi, rssiMin: e.rssi, rssiMax: e.rssi, pdr: null, mode: 0, lat: pos.lat, lon: pos.lon });
     renderTimeline();
   });
-  device.watchAdvertisements().catch(() => { SERIES.watch_adv = null; });
+  device.watchAdvertisements().catch(() => { delete SERIES.watch_adv; });
 }
 
 // ---- GPS ----
@@ -306,12 +307,29 @@ function renderTimeline() {
   if (samples.length === 0) return;
 
   const tMin = samples[0].t, tMax = samples[samples.length - 1].t || tMin + 1;
-  const rMin = -100, rMax = -20; // typical BLE/ESP-NOW dBm range
+
+  // Auto-scale the RSSI axis to the visible data (padded), clamped to a realistic
+  // dBm envelope - BLE/WiFi receiver sensitivity floors run down around -100 to -110,
+  // Coded PHY S=8 a bit lower still, so don't hardcode a floor that clips real readings.
+  const visibleRssi = [];
+  for (const key in SERIES) {
+    if (!SERIES[key] || !SERIES[key].on) continue;
+    for (const p of samples) if (p.key === key) visibleRssi.push(p.rssi);
+  }
+  let rMin = -100, rMax = -20;
+  if (visibleRssi.length > 0) {
+    rMin = Math.min(...visibleRssi) - 5;
+    rMax = Math.max(...visibleRssi) + 5;
+  }
+  rMin = Math.max(-120, Math.min(rMin, -30));
+  rMax = Math.min(0, Math.max(rMax, -20));
+
   const x = t => 30 + (w - 40) * (t - tMin) / Math.max(1, tMax - tMin);
   const y = r => h - 20 - (h - 30) * (r - rMin) / (rMax - rMin);
 
   ctx.strokeStyle = getCss('--line'); ctx.fillStyle = getCss('--muted'); ctx.font = '10px sans-serif';
-  for (let r = rMin; r <= rMax; r += 20) {
+  const gridStep = 20;
+  for (let r = Math.ceil(rMin / gridStep) * gridStep; r <= rMax; r += gridStep) {
     ctx.beginPath(); ctx.moveTo(30, y(r)); ctx.lineTo(w - 10, y(r)); ctx.stroke();
     ctx.fillText(r + 'dBm', 2, y(r) + 3);
   }

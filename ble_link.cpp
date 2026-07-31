@@ -106,8 +106,15 @@ void bleLinkInit() {
   charInfo->setValue(identityDeviceName());
   svc->start();
 
+  // Primary advertisement (31-byte budget) carries just the name, which is what both
+  // the peer-discovery scan filter and Chrome's requestDevice() namePrefix match on.
+  // The service UUID goes in the scan response instead (separate 31-byte budget) -
+  // trying to fit both in the primary packet overflows it and silently drops the UUID.
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-  adv->addServiceUUID(BLE_SVC_UUID);
+  adv->setName(identityDeviceName());
+  NimBLEAdvertisementData scanResponse;
+  scanResponse.addServiceUUID(BLE_SVC_UUID);
+  adv->setScanResponseData(scanResponse);
   adv->start();
 
   NimBLEScan* scan = NimBLEDevice::getScan();

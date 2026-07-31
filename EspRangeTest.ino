@@ -24,7 +24,8 @@ void setup() {
   WiFi.mode(WIFI_AP_STA);
   // Fixed channel shared by both boards so the LR-mode STA interface and the softAP
   // land on the same channel (required for AP+STA concurrent operation anyway).
-  WiFi.softAP(identityDeviceName(), HTTP_AP_PASSWORD, ESPNOW_CHANNEL);
+  bool apOk = WiFi.softAP(identityDeviceName(), HTTP_AP_PASSWORD, ESPNOW_CHANNEL);
+  Serial.printf("softAP() = %s, IP = %s, mode = %d\n", apOk ? "true" : "false", WiFi.softAPIP().toString().c_str(), WiFi.getMode());
   esp_wifi_set_max_tx_power(WIFI_TX_POWER_DBM_QUARTER);
 
   espNowLinkInit();

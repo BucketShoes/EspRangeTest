@@ -11,8 +11,8 @@
 #define BLE_CHAR_PEER_UUID "9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: peer's BoardSnapshot (relayed via ESP-NOW)
 #define BLE_CHAR_INFO_UUID "9c7a0004-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // read: board id/name string
 
-#define BLE_SNAPSHOT_PERIOD_MS 1000
-#define BLE_RSSI_POLL_MS       300
+#define BLE_SNAPSHOT_PERIOD_MS 500  // 2Hz
+#define BLE_RSSI_POLL_MS       150
 #define BLE_SCAN_KICK_MS       5000
 #define BLE_SCAN_DURATION_S    3
 
