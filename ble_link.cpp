@@ -20,8 +20,6 @@ static NimBLEClient* s_client = nullptr;
 
 static uint16_t s_peerConnHandle = kNoHandle;
 static uint16_t s_phoneConnHandle = kNoHandle;
-static uint8_t s_peerPhy = 0;
-static uint8_t s_phonePhy = 0;
 
 static void requestCodedPhy(uint16_t connHandle, bool viaClient) {
   if (viaClient && s_client) {
@@ -46,29 +44,21 @@ class RangeScanCB : public NimBLEScanCallbacks {
 };
 static RangeScanCB s_scanCB;
 
-// ---- Peripheral role: phone connects here, and/or peer board connects here if we lost the tie-break. ----
+// ---- Peripheral role: phone connects here, and/or peer board connects here if we lost the tie-break.
+// Which incoming connection is "the peer" vs "the phone" is NOT decided here - see the
+// reclassification loop in bleLinkLoop(). Deciding it once, at connect time, races against
+// our own scan learning the peer's address (whichever side connects first can easily beat
+// the other side's scan), which permanently misclassifies the connection as "phone" if it
+// loses that race. Recomputing it every cycle self-heals once the address is known. ----
 class RangeServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, NimBLEConnInfo& info) override {
-    uint16_t h = info.getConnHandle();
-    bool isPeer = s_havePeerAddr && (info.getAddress() == s_peerAddr);
-    if (isPeer) {
-      s_peerConnHandle = h;
-    } else {
-      s_phoneConnHandle = h;
+    requestCodedPhy(info.getConnHandle(), false);
+    // Legacy advertising stops once a connection is accepted - restart it (while under
+    // the connection limit) so this board stays reachable for a second connection
+    // (peer + phone at once).
+    if (server->getConnectedCount() < CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
+      NimBLEDevice::startAdvertising();
     }
-    requestCodedPhy(h, false);
-  }
-
-  void onDisconnect(NimBLEServer* server, NimBLEConnInfo& info, int reason) override {
-    uint16_t h = info.getConnHandle();
-    if (h == s_peerConnHandle) s_peerConnHandle = kNoHandle;
-    if (h == s_phoneConnHandle) s_phoneConnHandle = kNoHandle;
-  }
-
-  void onPhyUpdate(NimBLEConnInfo& info, uint8_t txPhy, uint8_t rxPhy) override {
-    uint16_t h = info.getConnHandle();
-    if (h == s_peerConnHandle) s_peerPhy = rxPhy;
-    if (h == s_phoneConnHandle) s_phonePhy = rxPhy;
   }
 };
 static RangeServerCB s_serverCB;
@@ -83,10 +73,6 @@ class RangeClientCB : public NimBLEClientCallbacks {
   void onDisconnect(NimBLEClient* client, int reason) override {
     if (client->getConnHandle() == s_peerConnHandle) s_peerConnHandle = kNoHandle;
     s_client = nullptr;  // allow a fresh connect attempt later
-  }
-
-  void onPhyUpdate(NimBLEClient* client, uint8_t txPhy, uint8_t rxPhy) override {
-    s_peerPhy = rxPhy;
   }
 };
 static RangeClientCB s_clientCB;
@@ -124,12 +110,19 @@ void bleLinkInit() {
   scan->setWindow(80);
 }
 
-static void pollConnection(uint16_t handle, RollingLink& link) {
+// PHY is fetched fresh at poll time (rather than cached from onPhyUpdate events) so it
+// stays correct regardless of which connection a handle turns out to be classified as.
+static void pollHandle(uint16_t handle, RollingLink& link, bool isClientHandle) {
   if (handle == kNoHandle) return;
   int8_t rssi = 0;
   if (ble_gap_conn_rssi(handle, &rssi) != 0) return;
-  uint8_t mode = (handle == s_peerConnHandle) ? s_peerPhy : s_phonePhy;
-  link.onRx(rssi, mode);
+  uint8_t txPhy = 0, rxPhy = 0;
+  if (isClientHandle && s_client) {
+    s_client->getPhy(&txPhy, &rxPhy);
+  } else if (g_server) {
+    g_server->getPhy(handle, &txPhy, &rxPhy);
+  }
+  link.onRx(rssi, rxPhy);
 }
 
 void bleLinkLoop() {
@@ -137,10 +130,32 @@ void bleLinkLoop() {
   static uint32_t lastScanKick = 0;
   uint32_t now = millis();
 
+  // Reclassify every currently-connected server-side (peripheral) handle fresh each
+  // cycle, rather than trusting a one-time decision made at connect time.
+  uint16_t serverPeerHandle = kNoHandle;
+  uint16_t serverPhoneHandle = kNoHandle;
+  if (g_server) {
+    for (uint16_t h : g_server->getPeerDevices()) {
+      NimBLEConnInfo info = g_server->getPeerInfoByHandle(h);
+      if (s_havePeerAddr && info.getAddress() == s_peerAddr) {
+        serverPeerHandle = h;
+      } else {
+        serverPhoneHandle = h;
+      }
+    }
+  }
+  s_phoneConnHandle = serverPhoneHandle;
+  // If we're the central for the peer link, that handle (tracked via the client
+  // callbacks) is already authoritative - don't let a stale/absent server-side lookup
+  // clobber it.
+  if (s_client == nullptr) {
+    s_peerConnHandle = serverPeerHandle;
+  }
+
   if (now - lastRssiPoll >= BLE_RSSI_POLL_MS) {
     lastRssiPoll = now;
-    pollConnection(s_peerConnHandle, s_rxFromPeer);
-    pollConnection(s_phoneConnHandle, s_rxFromPhone);
+    pollHandle(s_peerConnHandle, s_rxFromPeer, s_client != nullptr);
+    pollHandle(s_phoneConnHandle, s_rxFromPhone, false);
   }
 
   // Keep looking for the peer's address if we don't have it yet, and (if we're the

@@ -191,20 +191,22 @@ function onSnapshot(which, dataView) {
 }
 
 // ---- Tables ----
-function linkRow(label, s) {
+function espnowModeName(m) { return m === 1 ? 'LR' : m === 0 ? 'normal' : m; }
+function linkRow(label, s, modeFn) {
+  modeFn = modeFn || bleModeName;
   if (!s) return `<tr><td>${label}</td><td colspan=5 class="muted">-</td></tr>`;
   return `<tr><td>${label}</td><td>${s.rxCount}</td><td>${s.pdr === null ? 'n/a' : s.pdr + '%'}</td>` +
-         `<td>${s.rssiAvg}</td><td>${s.rssiMin}/${s.rssiMax}</td><td>${bleModeName(s.mode)}</td></tr>`;
+         `<td>${s.rssiAvg}</td><td>${s.rssiMin}/${s.rssiMax}</td><td>${modeFn(s.mode)}</td></tr>`;
 }
 function renderTables() {
   const head = '<tr><th>link</th><th>rx</th><th>pdr</th><th>rssi</th><th>min/max</th><th>mode</th></tr>';
   document.getElementById('thisTable').innerHTML = head +
-    linkRow('ESP-NOW (from peer)', lastOwn && lastOwn.espnow) +
+    linkRow('ESP-NOW (from peer)', lastOwn && lastOwn.espnow, espnowModeName) +
     linkRow('BLE (from peer)', lastOwn && lastOwn.blePeer) +
     linkRow('BLE (from phone, this board)', lastOwn && lastOwn.blePhone);
   document.getElementById('peerBoardName').textContent = 'peer ' + idHex(lastPeer && lastPeer.boardId) + ' (relayed)';
   document.getElementById('peerTable').innerHTML = head +
-    linkRow('ESP-NOW (from us)', lastPeer && lastPeer.espnow) +
+    linkRow('ESP-NOW (from us)', lastPeer && lastPeer.espnow, espnowModeName) +
     linkRow('BLE (from us)', lastPeer && lastPeer.blePeer) +
     linkRow('BLE (from phone, peer board)', lastPeer && lastPeer.blePhone);
 }
