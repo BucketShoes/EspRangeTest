@@ -6,3 +6,4 @@ void identityInit();
 
 uint32_t identityBoardId();        // 4-byte id derived from BT MAC (last 4 bytes)
 const char* identityDeviceName();  // "ESPRT-XXXX", used for BLE name + AP SSID
+const uint8_t* identityMac();      // full 6-byte BT MAC - also this board's public BLE address

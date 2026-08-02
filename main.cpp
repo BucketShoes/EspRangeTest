@@ -3,6 +3,14 @@
 //
 // Board identity, BLE name and AP SSID are all derived automatically from this chip's
 // own BT MAC (see identity.cpp) - nothing to configure per-board.
+//
+// Plain .cpp instead of a .ino: PlatformIO's .ino-to-.cpp conversion step was writing a
+// transient intermediate into the project root (visible/writable by every environment
+// sharing this src_dir) and racing when two environments built concurrently. A plain
+// .cpp with setup()/loop() defined works identically under framework=arduino (the
+// framework's own cores/esp32/main.cpp calls extern setup()/loop() regardless of
+// whether they came from a .ino conversion or a normal translation unit) - no Arduino
+// library usage changes, just skips that conversion step entirely.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -53,6 +61,7 @@ void loop() {
   own.blePhone = bleLinkGetPhoneStat();
   own.phoneConnected = bleLinkPhoneConnected() ? 1 : 0;
   own.txPowerDbm = BLE_TX_POWER_DBM;
+  memcpy(own.bleMac, identityMac(), 6);
 
   BoardSnapshot peerRelay = espNowLinkGetLastPeerSnapshot();
 
@@ -60,8 +69,14 @@ void loop() {
   bleLinkPublish(own, peerRelay);
   webServerLinkPublish(own, peerRelay);
 
-  Serial.printf("[%lus] espnow rx=%u pdr=%u%% rssi=%d | ble-peer rx=%u rssi=%d phy=%u | ble-phone %s rssi=%d phy=%u\n",
-                now / 1000, own.espnow.rxCount, own.espnow.pdrPercent == 0xFF ? 0 : own.espnow.pdrPercent, own.espnow.rssiAvg,
+  char pdrStr[6];
+  if (own.espnow.pdrPercent == 0xFF) {
+    snprintf(pdrStr, sizeof(pdrStr), "n/a");
+  } else {
+    snprintf(pdrStr, sizeof(pdrStr), "%u%%", own.espnow.pdrPercent);
+  }
+  Serial.printf("[%lus] espnow rx=%u pdr=%s rssi=%d | ble-peer rx=%u rssi=%d phy=%u | ble-phone %s rssi=%d phy=%u\n",
+                now / 1000, own.espnow.rxCount, pdrStr, own.espnow.rssiAvg,
                 own.blePeer.rxCount, own.blePeer.rssiAvg, own.blePeer.mode, own.phoneConnected ? "connected" : "-",
                 own.blePhone.rssiAvg, own.blePhone.mode);
 }

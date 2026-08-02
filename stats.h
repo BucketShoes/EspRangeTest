@@ -21,6 +21,8 @@ struct __attribute__((packed)) BoardSnapshot {
   LinkStat blePhone;  // this board's RX from phone over BLE (only meaningful if phoneConnected)
   uint8_t phoneConnected;
   int8_t txPowerDbm;
+  uint8_t bleMac[6];  // this board's public BLE address - lets the peer dial us directly over
+                       // BLE without ever scanning (ESP-NOW hands the address over instead)
 };
 
 struct __attribute__((packed)) EspNowPacket {
@@ -44,8 +46,17 @@ class RollingLink {
   int8_t m_rssiMin = 127;
   int8_t m_rssiMax = -128;
   uint8_t m_mode = 0;
+
+  // PDR is tracked over a longer, separately-reset accumulation than the rssi/rxCount
+  // window above. At ~2 packets per reporting window, a per-window PDR could only ever
+  // read 0%, 50%, or 100% - too coarse to mean anything. Accumulating over several
+  // reporting periods before resetting gives enough packets for real percentages while
+  // still staying responsive to changing conditions over the course of a walk.
   bool m_haveSeq = false;
-  bool m_windowSeqStarted = false;
-  uint32_t m_seqWindowStart = 0;
-  uint32_t m_seqLast = 0;
+  bool m_pdrWindowStarted = false;
+  uint32_t m_pdrSeqStart = 0;
+  uint32_t m_pdrSeqLast = 0;
+  uint32_t m_pdrRxCount = 0;
+  uint8_t m_snapshotsSincePdrReset = 0;
+  static const uint8_t kPdrResetEveryNSnapshots = 10;
 };

@@ -54,6 +54,7 @@ input[type=text]{background:var(--bg);color:var(--text);border:1px solid var(--l
       <button id="btnGps" class="secondary">Start GPS tracking</button>
       <button id="btnMark" class="secondary">Mark point</button>
       <button id="btnCsv" class="secondary">Export CSV</button>
+      <button id="btnClear" class="secondary">Clear timeline</button>
       <span id="gpsStatus" class="status">GPS idle</span>
     </div>
   </div>
@@ -168,6 +169,8 @@ document.getElementById('btnDisconnect').onclick = () => { if (device && device.
 function onDisconnected() { setStatus('disconnected'); document.getElementById('btnDisconnect').disabled = true; }
 function setStatus(s) { document.getElementById('connStatus').textContent = s; }
 
+const everActive = {}; // key -> bool: has this series ever delivered data? (avoids flagging a link as "missing" before it's ever connected)
+
 function onSnapshot(which, dataView) {
   const snap = parseSnapshot(dataView);
   const t = Date.now();
@@ -179,8 +182,18 @@ function onSnapshot(which, dataView) {
   for (const key in SERIES) {
     if (!SERIES[key]) continue;
     const s = SERIES[key].get(combined);
-    if (s && s.rxCount > 0) {
-      samples.push({ t, key, rssi: s.rssiAvg, rssiMin: s.rssiMin, rssiMax: s.rssiMax, pdr: s.pdr, mode: s.mode, lat: pos.lat, lon: pos.lon });
+    if (!s) continue;
+    if (s.rxCount > 0) {
+      everActive[key] = true;
+      samples.push({ t, key, rssi: s.rssiAvg, rssiMin: s.rssiMin, rssiMax: s.rssiMax, pdr: s.pdr, mode: s.mode, lat: pos.lat, lon: pos.lon, miss: false });
+    } else {
+      // Zero packets this window. Only worth flagging as a miss once the link is
+      // actually expected to be delivering something, otherwise every series would
+      // show as "missing" before it's ever connected in the first place.
+      const shouldBeActive = key === 'blephone_own' ? !!(combined.own && combined.own.phoneConnected) : !!everActive[key];
+      if (shouldBeActive) {
+        samples.push({ t, key, rssi: null, rssiMin: null, rssiMax: null, pdr: s.pdr, mode: s.mode, lat: pos.lat, lon: pos.lon, miss: true });
+      }
     }
   }
   if (samples.length > 5000) samples.splice(0, samples.length - 5000);
@@ -266,11 +279,25 @@ function pinBoard(boardId) {
   renderMap();
 }
 
+// ---- Clear: reset the timeline/graph without touching the live BLE connection or
+// saved board pins (chrome-refresh-and-reconnect does the same but also drops the
+// connection, which is the whole thing this button is meant to avoid). ----
+document.getElementById('btnClear').onclick = () => {
+  samples.length = 0;
+  marks.length = 0;
+  gpsTrack.length = 0;
+  for (const k in everActive) delete everActive[k];
+  highlightT = null;
+  renderTables();
+  renderTimeline();
+  renderMap();
+};
+
 // ---- CSV export ----
 document.getElementById('btnCsv').onclick = () => {
-  let csv = 'time_iso,link,rssi_avg,rssi_min,rssi_max,pdr_percent,mode,lat,lon\n';
+  let csv = 'time_iso,link,miss,rssi_avg,rssi_min,rssi_max,pdr_percent,mode,lat,lon\n';
   for (const s of samples) {
-    csv += [new Date(s.t).toISOString(), s.key, s.rssi, s.rssiMin, s.rssiMax, s.pdr === null ? '' : s.pdr, s.mode,
+    csv += [new Date(s.t).toISOString(), s.key, s.miss ? '1' : '0', s.rssi, s.rssiMin, s.rssiMax, s.pdr === null ? '' : s.pdr, s.mode,
             s.lat === null ? '' : s.lat, s.lon === null ? '' : s.lon].join(',') + '\n';
   }
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -316,7 +343,7 @@ function renderTimeline() {
   const visibleRssi = [];
   for (const key in SERIES) {
     if (!SERIES[key] || !SERIES[key].on) continue;
-    for (const p of samples) if (p.key === key) visibleRssi.push(p.rssi);
+    for (const p of samples) if (p.key === key && !p.miss) visibleRssi.push(p.rssi);
   }
   let rMin = -100, rMax = -20;
   if (visibleRssi.length > 0) {
@@ -339,7 +366,7 @@ function renderTimeline() {
   for (const key in SERIES) {
     const s = SERIES[key];
     if (!s || !s.on) continue;
-    const pts = samples.filter(p => p.key === key);
+    const pts = samples.filter(p => p.key === key && !p.miss);
     if (pts.length === 0) continue;
     ctx.strokeStyle = s.color; ctx.fillStyle = s.color; ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -347,6 +374,28 @@ function renderTimeline() {
     ctx.stroke();
     pts.forEach(p => { ctx.beginPath(); ctx.arc(x(p.t), y(p.rssi), 1.6, 0, 7); ctx.fill(); });
   }
+
+  // Missed windows: a window where the link was expected to deliver something but
+  // didn't (see the `miss` flag set in onSnapshot). Plotted as a row of ticks along the
+  // bottom, one row per series, in that series' color - a rebooted/dropped link that
+  // looked fine on a quick glance can otherwise hide a long silent gap.
+  const seriesKeys = Object.keys(SERIES).filter(k => SERIES[k]);
+  seriesKeys.forEach((key, rowIndex) => {
+    const s = SERIES[key];
+    if (!s.on) return;
+    const missPts = samples.filter(p => p.key === key && p.miss);
+    if (missPts.length === 0) return;
+    const rowY = h - 6 - rowIndex * 4;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    missPts.forEach(p => {
+      const px = x(p.t);
+      ctx.beginPath();
+      ctx.moveTo(px, rowY - 2);
+      ctx.lineTo(px, rowY + 2);
+      ctx.stroke();
+    });
+  });
 
   for (const m of marks) {
     const px = x(m.t);

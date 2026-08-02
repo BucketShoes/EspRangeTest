@@ -10,11 +10,15 @@
 #define BLE_CHAR_OWN_UUID  "9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: this board's BoardSnapshot
 #define BLE_CHAR_PEER_UUID "9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: peer's BoardSnapshot (relayed via ESP-NOW)
 #define BLE_CHAR_INFO_UUID "9c7a0004-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // read: board id/name string
+#define BLE_CHAR_HELLO_UUID "9c7a0005-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // write: sender's boardId, used by the peripheral side to positively identify the peer board vs. the phone
 
 #define BLE_SNAPSHOT_PERIOD_MS 500  // 2Hz
 #define BLE_RSSI_POLL_MS       150
-#define BLE_SCAN_KICK_MS       5000
-#define BLE_SCAN_DURATION_S    3
+// Advertising interval, in 0.625ms units (NimBLE/HCI convention) - 20-30ms is the
+// standard "fast" connectable interval. Left unset, NimBLE-Arduino's default is 0
+// ("use stack default"), which is ambiguous - set explicitly instead.
+#define BLE_ADV_INTERVAL_MIN 32  // 32 * 0.625ms = 20ms
+#define BLE_ADV_INTERVAL_MAX 48  // 48 * 0.625ms = 30ms
 
 // ---- ESP-NOW ----
 #define ESPNOW_MAGIC       0x54524553UL  // "SERT" tag, used to ignore stray packets

@@ -20,3 +20,7 @@ uint32_t identityBoardId() {
 const char* identityDeviceName() {
   return s_name;
 }
+
+const uint8_t* identityMac() {
+  return s_mac;
+}
