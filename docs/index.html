@@ -82,6 +82,11 @@ input[type=text]{background:var(--bg);color:var(--text);border:1px solid var(--l
       <b>Position</b>
       <span class="muted status">phone track + pinned boards - click a point, or scrub the timeline above</span>
     </div>
+    <div class="row">
+      <label>Horizontal: <select id="selAxisX"></select></label>
+      <label>Vertical: <select id="selAxisY"></select></label>
+      <span class="muted status">each point drawn as a cross - arm length/color = local (own) RSSI for the chosen link, weak (red) to strong (green)</span>
+    </div>
     <canvas id="mapCanvas"></canvas>
   </div>
 </div>
@@ -408,6 +413,54 @@ function project(lat, lon, origin) {
   const dy = (lat - origin.lat) * R;
   return { x: dx, y: -dy }; // north = up
 }
+
+// Axis pickers for the per-position cross markers - local (own) links only. Remote/
+// relayed numbers are close enough to symmetric (within a few dB) that showing them too
+// would just be visual noise on the map; the timeline is where the peer-relayed view
+// belongs if it's ever needed.
+const AXIS_OPTIONS = [
+  { key: '', label: '-' },
+  { key: 'espnow', label: 'ESP-NOW' },
+  { key: 'blepeer_own', label: 'BLE peer' },
+  { key: 'blephone_own', label: 'BLE phone' },
+];
+const selAxisX = document.getElementById('selAxisX');
+const selAxisY = document.getElementById('selAxisY');
+for (const opt of AXIS_OPTIONS) {
+  const oX = document.createElement('option'); oX.value = opt.key; oX.textContent = opt.label; selAxisX.appendChild(oX);
+  const oY = document.createElement('option'); oY.value = opt.key; oY.textContent = opt.label; selAxisY.appendChild(oY);
+}
+selAxisX.value = 'espnow';
+selAxisY.value = 'blepeer_own';
+selAxisX.onchange = () => renderMap();
+selAxisY.onchange = () => renderMap();
+
+// Groups samples by the GPS position they were tagged with (same lastFix -> identical
+// lat/lon), keeping the latest value seen per link at that position - lets one cross
+// marker show multiple links' readings without needing to match timestamps by hand.
+function buildPositionPoints() {
+  const points = [];
+  let cur = null;
+  for (const p of samples) {
+    if (p.lat === null || p.miss) continue;
+    if (p.key !== 'espnow' && p.key !== 'blepeer_own' && p.key !== 'blephone_own') continue;
+    if (!cur || cur.lat !== p.lat || cur.lon !== p.lon) {
+      cur = { lat: p.lat, lon: p.lon, t: p.t };
+      points.push(cur);
+    }
+    cur[p.key] = p.rssi;
+    cur.t = p.t;
+  }
+  return points;
+}
+
+// Weak (-100dBm) -> red, strong (-30dBm) -> green, clamped and interpolated.
+function rssiColor(rssi) {
+  const t = Math.max(0, Math.min(1, (rssi + 100) / 70));
+  const r = Math.round(230 * (1 - t) + 20 * t);
+  const g = Math.round(60 * (1 - t) + 210 * t);
+  return `rgb(${r},${g},60)`;
+}
 let lastMapProj = null; // {origin, minX, minY, scale, pad} - reused by the click handler for accurate hit-testing
 function renderMap() {
   const c = mapCanvas;
@@ -443,6 +496,29 @@ function renderMap() {
     trackPts.forEach((p, i) => { const P = project(p.lat, p.lon, origin); const X = sx(P.x), Y = sy(P.y); if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y); });
     ctx.stroke();
   }
+  // Per-position cross markers: horizontal arm = selected X-axis link's local RSSI,
+  // vertical arm = selected Y-axis link's local RSSI. Arm length and color both encode
+  // strength (short/red = weak, long/green = strong) so the map is scannable on its own
+  // without cross-referencing the timeline for a specific spot.
+  {
+    const axisX = selAxisX.value, axisY = selAxisY.value;
+    const armMin = 3, armMax = 16, rMinArm = -100, rMaxArm = -30;
+    const armLen = rssi => armMin + Math.max(0, Math.min(1, (rssi - rMinArm) / (rMaxArm - rMinArm))) * (armMax - armMin);
+    for (const pp of buildPositionPoints()) {
+      const P = project(pp.lat, pp.lon, origin);
+      const X = sx(P.x), Y = sy(P.y);
+      if (axisX && pp[axisX] !== undefined) {
+        const len = armLen(pp[axisX]);
+        ctx.strokeStyle = rssiColor(pp[axisX]); ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(X - len, Y); ctx.lineTo(X + len, Y); ctx.stroke();
+      }
+      if (axisY && pp[axisY] !== undefined) {
+        const len = armLen(pp[axisY]);
+        ctx.strokeStyle = rssiColor(pp[axisY]); ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(X, Y - len); ctx.lineTo(X, Y + len); ctx.stroke();
+      }
+    }
+  }
   // marks
   ctx.fillStyle = getCss('--warn');
   for (const m of marks) {
@@ -468,6 +544,26 @@ function renderMap() {
     ctx.beginPath(); ctx.rect(X - 4, Y - 4, 8, 8); ctx.fill();
     ctx.fillStyle = getCss('--text'); ctx.font = '10px sans-serif'; ctx.fillText(key, X + 6, Y + 3);
     ctx.fillStyle = getCss('--bad');
+  }
+
+  // Distance scale bar - there's no basemap/tiles here, so without this there's no way
+  // to tell how far apart two points on the canvas actually are.
+  {
+    const targetPx = 60;
+    const rawMeters = targetPx / scale;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawMeters)));
+    const norm = rawMeters / mag;
+    const niceMeters = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * mag;
+    const barPx = niceMeters * scale;
+    const bx = 10, by = h - 10;
+    ctx.strokeStyle = getCss('--text'); ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(bx, by); ctx.lineTo(bx + barPx, by);
+    ctx.moveTo(bx, by - 4); ctx.lineTo(bx, by + 4);
+    ctx.moveTo(bx + barPx, by - 4); ctx.lineTo(bx + barPx, by + 4);
+    ctx.stroke();
+    ctx.fillStyle = getCss('--text'); ctx.font = '10px sans-serif';
+    ctx.fillText(niceMeters >= 1000 ? (niceMeters / 1000) + 'km' : niceMeters + 'm', bx, by - 6);
   }
 }
 mapCanvas.addEventListener('click', e => {
