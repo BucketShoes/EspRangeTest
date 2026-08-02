@@ -454,9 +454,11 @@ function buildPositionPoints() {
   return points;
 }
 
-// Weak (-100dBm) -> red, strong (-30dBm) -> green, clamped and interpolated.
+// -110dBm (red) to -80dBm (green) - anything -80 or stronger just isn't a range test
+// anymore, so the scale is deliberately narrowed to where it actually matters instead
+// of spreading resolution across the whole "fine either way" region.
 function rssiColor(rssi) {
-  const t = Math.max(0, Math.min(1, (rssi + 100) / 70));
+  const t = Math.max(0, Math.min(1, (rssi + 110) / 30));
   const r = Math.round(230 * (1 - t) + 20 * t);
   const g = Math.round(60 * (1 - t) + 210 * t);
   return `rgb(${r},${g},60)`;
@@ -502,19 +504,19 @@ function renderMap() {
   // without cross-referencing the timeline for a specific spot.
   {
     const axisX = selAxisX.value, axisY = selAxisY.value;
-    const armMin = 3, armMax = 16, rMinArm = -100, rMaxArm = -30;
+    const armMin = 3, armMax = 16, rMinArm = -110, rMaxArm = -80;
     const armLen = rssi => armMin + Math.max(0, Math.min(1, (rssi - rMinArm) / (rMaxArm - rMinArm))) * (armMax - armMin);
     for (const pp of buildPositionPoints()) {
       const P = project(pp.lat, pp.lon, origin);
       const X = sx(P.x), Y = sy(P.y);
       if (axisX && pp[axisX] !== undefined) {
         const len = armLen(pp[axisX]);
-        ctx.strokeStyle = rssiColor(pp[axisX]); ctx.lineWidth = 2.5;
+        ctx.strokeStyle = rssiColor(pp[axisX]); ctx.lineWidth = 0.5;
         ctx.beginPath(); ctx.moveTo(X - len, Y); ctx.lineTo(X + len, Y); ctx.stroke();
       }
       if (axisY && pp[axisY] !== undefined) {
         const len = armLen(pp[axisY]);
-        ctx.strokeStyle = rssiColor(pp[axisY]); ctx.lineWidth = 2.5;
+        ctx.strokeStyle = rssiColor(pp[axisY]); ctx.lineWidth = 0.5;
         ctx.beginPath(); ctx.moveTo(X, Y - len); ctx.lineTo(X, Y + len); ctx.stroke();
       }
     }
