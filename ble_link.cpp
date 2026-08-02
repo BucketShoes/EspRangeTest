@@ -4,6 +4,7 @@
 #include "config.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#include <esp_random.h>
 #include <string.h>
 
 static const uint16_t kNoHandle = 0xFFFF;
@@ -32,12 +33,17 @@ static void requestCodedPhy(uint16_t connHandle, bool viaClient) {
   }
 }
 
-// ---- Peripheral role: phone connects here, and/or peer board connects here if we lost
-// the tie-break. Peer-vs-phone identity is established by HelloCharCB's write handler,
-// not decided here. ----
+// ---- Peripheral role: phone connects here, and the peer board connects here too (both
+// boards always dial each other now - see bleLinkLoop()). Peer-vs-phone identity is
+// established by HelloCharCB's write handler, not decided here. ----
 class RangeServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, NimBLEConnInfo& info) override {
-    requestCodedPhy(info.getConnHandle(), false);
+    uint16_t h = info.getConnHandle();
+    requestCodedPhy(h, false);
+    // Request the longest allowed supervision timeout so the link survives a fade at
+    // the edge of range instead of tearing down and forcing a full reconnect. The
+    // central (phone or peer) can decline; this is a request, not a guarantee.
+    server->updateConnParams(h, BLE_CONN_INTERVAL_MIN, BLE_CONN_INTERVAL_MAX, 0, BLE_CONN_SUPERVISION_TIMEOUT);
     // Legacy advertising stops once a connection is accepted - restart it (while under
     // the connection limit) so this board stays reachable for a second connection
     // (peer + phone at once).
@@ -63,7 +69,11 @@ class RangeClientCB : public NimBLEClientCallbacks {
     NimBLERemoteCharacteristic* hello = svc ? svc->getCharacteristic(BLE_CHAR_HELLO_UUID) : nullptr;
     if (hello) {
       uint32_t myId = identityBoardId();
-      hello->writeValue((const uint8_t*)&myId, sizeof(myId), false);
+      // response=true (Write Request) - the characteristic was declared with the WRITE
+      // property (not WRITE_NR), and a mismatched write type here was silently dropped
+      // by the peripheral rather than erroring, which is why the peer-vs-phone
+      // classification was failing on one side without any visible error.
+      hello->writeValue((const uint8_t*)&myId, sizeof(myId), true);
     }
   }
 
@@ -115,8 +125,10 @@ void bleLinkInit() {
   // trying to fit both in the primary packet overflows it and silently drops the UUID.
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->setName(identityDeviceName());
-  adv->setMinInterval(BLE_ADV_INTERVAL_MIN);
-  adv->setMaxInterval(BLE_ADV_INTERVAL_MAX);
+  // Per-boot random jitter so two otherwise-identical boards don't run perfectly
+  // synchronized advertising timing against each other.
+  adv->setMinInterval(BLE_ADV_INTERVAL_MIN + (esp_random() % BLE_ADV_INTERVAL_JITTER));
+  adv->setMaxInterval(BLE_ADV_INTERVAL_MAX + (esp_random() % BLE_ADV_INTERVAL_JITTER));
   NimBLEAdvertisementData scanResponse;
   scanResponse.addServiceUUID(BLE_SVC_UUID);
   adv->setScanResponseData(scanResponse);
@@ -140,6 +152,7 @@ static void pollHandle(uint16_t handle, RollingLink& link, bool isClientHandle) 
 
 void bleLinkLoop() {
   static uint32_t lastRssiPoll = 0;
+  static uint32_t nextConnectAttempt = 0;
   uint32_t now = millis();
 
   // Any currently-connected server-side handle that isn't the hello-verified peer is,
@@ -164,22 +177,32 @@ void bleLinkLoop() {
     pollHandle(s_phoneConnHandle, s_rxFromPhone, false);
   }
 
-  // Both the peer's identity (boardId) and its exact connectable BLE address (bleMac)
-  // come from ESP-NOW, which is already working reliably - no BLE scanning at all for
-  // inter-board discovery. This means we never scan, so we can never end up dialing some
-  // other nearby BLE device by mistake, and the tie-break + connect can happen as soon
-  // as ESP-NOW has exchanged one packet each way (well under a second), not however long
-  // a BLE scan happens to take to catch the peer's advertisement.
-  bool weAreSenior = espNowLinkHasPeer() && (identityBoardId() < espNowLinkGetLastPeerSnapshot().boardId);
-  if (weAreSenior && s_peerConnHandle == kNoHandle && s_client == nullptr) {
+  // Both boards always try to dial the peer - no elected "central" board. Two redundant
+  // peer-to-peer links (we-initiated + they-initiated) can coexist fine; whichever one
+  // we dialed ourselves takes priority for reporting (see the s_client check above).
+  // This used to be gated on a boardId tie-break so only one side ever dialed out, which
+  // concentrated all the central-role work on whichever board had the lower boardId -
+  // that board then had a harder time also servicing its own peripheral role (accepting
+  // the phone), which is why one specific board was consistently the flaky one to
+  // connect a phone to. Splitting the work evenly fixes that asymmetry.
+  //
+  // The peer's identity (boardId) and its exact connectable BLE address (bleMac) both
+  // come from ESP-NOW - no BLE scanning at all for inter-board discovery, so we can
+  // never end up dialing some other nearby BLE device by mistake.
+  if (espNowLinkHasPeer() && s_peerConnHandle == kNoHandle && s_client == nullptr && now >= nextConnectAttempt) {
     NimBLEAddress peerAddr(espNowLinkGetLastPeerSnapshot().bleMac, BLE_ADDR_PUBLIC);
     s_client = NimBLEDevice::createClient(peerAddr);
     s_client->setClientCallbacks(&s_clientCB, false);
+    s_client->setConnectionParams(BLE_CONN_INTERVAL_MIN, BLE_CONN_INTERVAL_MAX, 0, BLE_CONN_SUPERVISION_TIMEOUT);
     // Async - a blocking connect() here freezes the shared main loop() (ESP-NOW TX, BLE
     // peripheral servicing, HTTP server, everything) for as long as the connection
     // attempt takes, which can be many seconds or longer if it doesn't succeed cleanly.
     // Completion arrives via onConnect()/onConnectFail() instead.
     s_client->connect(true, true, true);
+    // Cooldown (with jitter) before the next attempt, whether this one succeeds or not -
+    // keeps a peer that's out of range from being hammered with reconnect attempts, and
+    // keeps the two boards' attempts from staying in lockstep with each other.
+    nextConnectAttempt = now + BLE_CONNECT_RETRY_MS + (esp_random() % BLE_CONNECT_RETRY_JITTER_MS);
   }
 }
 
