@@ -45,16 +45,18 @@ class RollingLink {
   int8_t m_rssiMax = -128;
   uint8_t m_mode = 0;
 
-  // PDR is tracked over a longer, separately-reset accumulation than the rssi/rxCount
-  // window above. At ~2 packets per reporting window, a per-window PDR could only ever
-  // read 0%, 50%, or 100% - too coarse to mean anything. Accumulating over several
-  // reporting periods before resetting gives enough packets for real percentages while
-  // still staying responsive to changing conditions over the course of a walk.
+  // PDR accumulates continuously rather than resetting to empty on a timer - a hard
+  // reset created a window where "haven't received anything in the new window yet" (a
+  // few hundred ms of totally normal silence between packets) was indistinguishable
+  // from "no data" and reported as n/a, even seconds into an otherwise-healthy link.
+  // Instead, expected/received counts just get halved periodically ("decayed") so old
+  // history fades out without ever creating a from-scratch gap - once the first packet
+  // has ever arrived, pdrPercent is always a real 0-100 number; n/a only ever means
+  // "nothing has arrived from this link yet, ever."
   bool m_haveSeq = false;
-  bool m_pdrWindowStarted = false;
-  uint32_t m_pdrSeqStart = 0;
-  uint32_t m_pdrSeqLast = 0;
-  uint32_t m_pdrRxCount = 0;
-  uint8_t m_snapshotsSincePdrReset = 0;
-  static const uint8_t kPdrResetEveryNSnapshots = 10;
+  uint32_t m_pdrLastSeq = 0;
+  uint32_t m_pdrExpectedTotal = 0;
+  uint32_t m_pdrReceivedTotal = 0;
+  uint8_t m_snapshotsSincePdrDecay = 0;
+  static const uint8_t kPdrDecayEveryNSnapshots = 10;
 };

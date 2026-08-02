@@ -39,14 +39,10 @@
 #define BLE_CONN_INTERVAL_MIN 24  // 24 * 1.25ms = 30ms
 #define BLE_CONN_INTERVAL_MAX 40  // 40 * 1.25ms = 50ms
 // Supervision timeout, in 10ms units - how long a connection tolerates zero successful
-// packet exchange before the controller gives up on it. Was set to the BLE spec max
-// (32s) to survive a fade at the edge of range, but that meant a board that got power-
-// cycled (routine during bench testing) left a zombie connection on the other end for
-// up to 32s, blocking reconnection the whole time. 4s is still a real improvement on
-// typical defaults (a couple seconds) without creating that problem. Worth revisiting
-// once the connection logic itself is proven solid, specifically for the long-range
-// field test where riding out a longer fade matters more than fast bench-test recovery.
-#define BLE_CONN_SUPERVISION_TIMEOUT 400  // 400 * 10ms = 4s
+// packet exchange before the controller gives up on it. Needs to be long enough to ride
+// out a real fade at the edge of range during a field walk without forcing a full
+// reconnect (which could mean walking back into range just to re-pair) - 16s.
+#define BLE_CONN_SUPERVISION_TIMEOUT 1600  // 1600 * 10ms = 16s
 
 // Both boards always try to dial the peer (no elected "central" board) - a cooldown
 // with jitter between attempts keeps a peer that's out of range from being hammered

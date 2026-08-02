@@ -10,13 +10,19 @@ void RollingLink::onRx(int8_t rssi, uint8_t mode) {
 
 void RollingLink::onRxSeq(int8_t rssi, uint8_t mode, uint32_t seq) {
   onRx(rssi, mode);
-  m_haveSeq = true;
-  m_pdrRxCount++;
-  if (!m_pdrWindowStarted) {
-    m_pdrSeqStart = seq;
-    m_pdrWindowStarted = true;
+  if (!m_haveSeq) {
+    m_haveSeq = true;
+    m_pdrExpectedTotal = 1;
+    m_pdrReceivedTotal = 1;
+  } else {
+    // Gap since the immediately previous packet: 1 = none missed, >1 = some missed.
+    // A non-positive gap (reorder/duplicate) can't tell us anything about loss, so
+    // just count this packet as expected-and-received rather than corrupting the ratio.
+    uint32_t gap = (seq > m_pdrLastSeq) ? (seq - m_pdrLastSeq) : 1;
+    m_pdrExpectedTotal += gap;
+    m_pdrReceivedTotal += 1;
   }
-  m_pdrSeqLast = seq;
+  m_pdrLastSeq = seq;
 }
 
 LinkStat RollingLink::snapshot() {
@@ -34,13 +40,11 @@ LinkStat RollingLink::snapshot() {
   }
   s.mode = m_mode;
 
-  if (m_haveSeq && m_pdrWindowStarted) {
-    uint32_t expected = (m_pdrSeqLast - m_pdrSeqStart) + 1;
-    if (expected < m_pdrRxCount) expected = m_pdrRxCount;  // guard against reorder/wrap
-    uint32_t pct = (m_pdrRxCount * 100UL) / expected;
+  if (m_haveSeq) {
+    uint32_t pct = (m_pdrReceivedTotal * 100UL) / m_pdrExpectedTotal;
     s.pdrPercent = (uint8_t)(pct > 100 ? 100 : pct);
   } else {
-    s.pdrPercent = 0xFF;
+    s.pdrPercent = 0xFF;  // nothing has ever arrived from this link
   }
 
   m_rxCount = 0;
@@ -48,11 +52,16 @@ LinkStat RollingLink::snapshot() {
   m_rssiMin = 127;
   m_rssiMax = -128;
 
-  m_snapshotsSincePdrReset++;
-  if (m_snapshotsSincePdrReset >= kPdrResetEveryNSnapshots) {
-    m_snapshotsSincePdrReset = 0;
-    m_pdrWindowStarted = false;
-    m_pdrRxCount = 0;
+  // Decay (halve) the accumulated totals periodically so old history fades out and the
+  // ratio stays responsive to current conditions - without ever fully clearing back to
+  // "nothing yet", which is what caused the misleading n/a mid-session.
+  m_snapshotsSincePdrDecay++;
+  if (m_snapshotsSincePdrDecay >= kPdrDecayEveryNSnapshots) {
+    m_snapshotsSincePdrDecay = 0;
+    if (m_haveSeq) {
+      m_pdrExpectedTotal = (m_pdrExpectedTotal + 1) / 2;
+      m_pdrReceivedTotal = (m_pdrReceivedTotal + 1) / 2;
+    }
   }
 
   return s;
