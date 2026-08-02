@@ -42,7 +42,7 @@
 // packet exchange before the controller gives up on it. Needs to be long enough to ride
 // out a real fade at the edge of range during a field walk without forcing a full
 // reconnect (which could mean walking back into range just to re-pair) - 16s.
-#define BLE_CONN_SUPERVISION_TIMEOUT 1600  // 1600 * 10ms = 16s
+#define BLE_CONN_SUPERVISION_TIMEOUT 3000  // 1600 * 10ms = 16s
 
 // Both boards always try to dial the peer (no elected "central" board) - a cooldown
 // with jitter between attempts keeps a peer that's out of range from being hammered

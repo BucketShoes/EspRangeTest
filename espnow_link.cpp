@@ -23,6 +23,23 @@ static void addPeerIfNeeded(const uint8_t mac[6]) {
   p.ifidx = WIFI_IF_STA;
   p.encrypt = false;
   esp_now_add_peer(&p);
+
+  // esp_wifi_set_protocol(..., WIFI_PROTOCOL_LR) only makes the LR PHY available on the
+  // interface - it does not select it as the rate actually used for transmission. That
+  // has to be set per peer. On WiFi 6/HE chips (the C6 is one), the older interface-wide
+  // esp_wifi_config_espnow_rate() doesn't work at all (esp_now.h documents this
+  // explicitly), so esp_now_set_peer_rate_config() is the only way to actually get LR
+  // packets rather than a standard 802.11 rate. Without this call, every ESP-NOW packet
+  // sent so far has been at whatever the default non-LR rate is - "LR mode" in the logs
+  // was a label, not a fact.
+  esp_now_rate_config_t rate{};
+  rate.phymode = WIFI_PHY_MODE_LR;
+  rate.rate = WIFI_PHY_RATE_LORA_250K;
+  rate.ersu = false;
+  rate.dcm = false;
+  esp_err_t rc = esp_now_set_peer_rate_config(mac, &rate);
+  Serial.printf("esp_now_set_peer_rate_config(%02X:%02X:%02X:%02X:%02X:%02X) = %d\n", mac[0], mac[1], mac[2], mac[3],
+                mac[4], mac[5], (int)rc);
 }
 
 static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
@@ -44,7 +61,7 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
 }
 
 void espNowLinkInit() {
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR | WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N );
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR );
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
   addPeerIfNeeded(kBroadcast);
