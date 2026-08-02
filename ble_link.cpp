@@ -58,21 +58,24 @@ class RangeServerCB : public NimBLEServerCallbacks {
 };
 static RangeServerCB s_serverCB;
 
-// ---- Central role: only used if this board wins the boardId tie-break with the peer. ----
+// ---- Central role: both boards run this now (see bleLinkLoop()). ----
 class RangeClientCB : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient* client) override {
     s_peerConnHandle = client->getConnHandle();
     requestCodedPhy(s_peerConnHandle, true);
     // Identify ourselves to the peer's peripheral side so it can positively recognize
     // this connection as "the peer" rather than guessing from a scan result.
+    //
+    // getService()/getCharacteristic() only search whatever's already been discovered -
+    // they never trigger discovery themselves. Without an explicit getServices(true)
+    // first, getService() here always returned nullptr and this whole block silently
+    // no-op'd, which is the actual reason the peer-vs-phone classification was never
+    // working on either side.
+    client->getServices(true);
     NimBLERemoteService* svc = client->getService(BLE_SVC_UUID);
     NimBLERemoteCharacteristic* hello = svc ? svc->getCharacteristic(BLE_CHAR_HELLO_UUID) : nullptr;
     if (hello) {
       uint32_t myId = identityBoardId();
-      // response=true (Write Request) - the characteristic was declared with the WRITE
-      // property (not WRITE_NR), and a mismatched write type here was silently dropped
-      // by the peripheral rather than erroring, which is why the peer-vs-phone
-      // classification was failing on one side without any visible error.
       hello->writeValue((const uint8_t*)&myId, sizeof(myId), true);
     }
   }
@@ -192,6 +195,14 @@ void bleLinkLoop() {
   if (espNowLinkHasPeer() && s_peerConnHandle == kNoHandle && s_client == nullptr && now >= nextConnectAttempt) {
     NimBLEAddress peerAddr(espNowLinkGetLastPeerSnapshot().bleMac, BLE_ADDR_PUBLIC);
     s_client = NimBLEDevice::createClient(peerAddr);
+    // Without this, a client object that disconnects or fails to connect is never
+    // actually freed - NimBLEDevice::deleteClient() only runs automatically when the
+    // client is configured to self-delete. Every retry was leaking a client into the
+    // fixed-size (CONFIG_BT_NIMBLE_MAX_CONNECTIONS) internal client table, which is
+    // almost certainly why one board would work once and then go completely dead:
+    // after a few retries there were no client slots left at all ("Already connected to
+    // device" is NimBLE finding a stale leaked entry for that address).
+    s_client->setSelfDelete(true, true);
     s_client->setClientCallbacks(&s_clientCB, false);
     s_client->setConnectionParams(BLE_CONN_INTERVAL_MIN, BLE_CONN_INTERVAL_MAX, 0, BLE_CONN_SUPERVISION_TIMEOUT);
     // Async - a blocking connect() here freezes the shared main loop() (ESP-NOW TX, BLE
