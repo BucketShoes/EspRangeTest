@@ -1,6 +1,5 @@
 #include "ble_link.h"
 #include "identity.h"
-#include "espnow_link.h"
 #include "config.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -17,12 +16,14 @@ static RollingLink s_rxFromPeer;
 static RollingLink s_rxFromPhone;
 
 static NimBLEClient* s_client = nullptr;
+static NimBLEAddress s_peerAddr;  // computed once at init - see bleLinkInit()
 
 static uint16_t s_peerConnHandle = kNoHandle;
 static uint16_t s_phoneConnHandle = kNoHandle;
-// Set only by HelloCharCB below (a direct handshake, not an address guess) - the peer
-// board writes its boardId to our hello characteristic right after connecting, so we
-// never have to infer identity from a scan result that may not have arrived yet.
+// Set directly by RangeServerCB::onConnect() by comparing the connecting device's
+// address against s_peerAddr - both are known at boot (hardcoded MACs, see config.h),
+// so this is instant and unambiguous. No handshake, no scanning, no dependency on
+// ESP-NOW having exchanged anything yet.
 static uint16_t s_serverPeerHandle = kNoHandle;
 
 static void requestCodedPhy(uint16_t connHandle, bool viaClient) {
@@ -34,16 +35,16 @@ static void requestCodedPhy(uint16_t connHandle, bool viaClient) {
 }
 
 // ---- Peripheral role: phone connects here, and the peer board connects here too (both
-// boards always dial each other now - see bleLinkLoop()). Peer-vs-phone identity is
-// established by HelloCharCB's write handler, not decided here. ----
+// boards always dial each other if neither has an incoming connection yet - see
+// bleLinkLoop()). ----
 class RangeServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, NimBLEConnInfo& info) override {
     uint16_t h = info.getConnHandle();
     requestCodedPhy(h, false);
-    // Request the longest allowed supervision timeout so the link survives a fade at
-    // the edge of range instead of tearing down and forcing a full reconnect. The
-    // central (phone or peer) can decline; this is a request, not a guarantee.
     server->updateConnParams(h, BLE_CONN_INTERVAL_MIN, BLE_CONN_INTERVAL_MAX, 0, BLE_CONN_SUPERVISION_TIMEOUT);
+    if (info.getAddress() == s_peerAddr) {
+      s_serverPeerHandle = h;
+    }
     // Legacy advertising stops once a connection is accepted - restart it (while under
     // the connection limit) so this board stays reachable for a second connection
     // (peer + phone at once).
@@ -58,26 +59,12 @@ class RangeServerCB : public NimBLEServerCallbacks {
 };
 static RangeServerCB s_serverCB;
 
-// ---- Central role: both boards run this now (see bleLinkLoop()). ----
+// ---- Central role: whichever board doesn't yet have any incoming connection dials the
+// other (see bleLinkLoop()). ----
 class RangeClientCB : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient* client) override {
     s_peerConnHandle = client->getConnHandle();
     requestCodedPhy(s_peerConnHandle, true);
-    // Identify ourselves to the peer's peripheral side so it can positively recognize
-    // this connection as "the peer" rather than guessing from a scan result.
-    //
-    // getService()/getCharacteristic() only search whatever's already been discovered -
-    // they never trigger discovery themselves. Without an explicit getServices(true)
-    // first, getService() here always returned nullptr and this whole block silently
-    // no-op'd, which is the actual reason the peer-vs-phone classification was never
-    // working on either side.
-    client->getServices(true);
-    NimBLERemoteService* svc = client->getService(BLE_SVC_UUID);
-    NimBLERemoteCharacteristic* hello = svc ? svc->getCharacteristic(BLE_CHAR_HELLO_UUID) : nullptr;
-    if (hello) {
-      uint32_t myId = identityBoardId();
-      hello->writeValue((const uint8_t*)&myId, sizeof(myId), true);
-    }
   }
 
   void onDisconnect(NimBLEClient* client, int reason) override {
@@ -91,23 +78,19 @@ class RangeClientCB : public NimBLEClientCallbacks {
 };
 static RangeClientCB s_clientCB;
 
-// ---- Hello characteristic (peripheral side): the connecting central writes its
-// boardId here immediately after connecting; if it matches the peer we already know
-// about via ESP-NOW, that connection handle is positively the peer, not the phone. ----
-class HelloCharCB : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
-    if (c->getLength() < sizeof(uint32_t)) return;
-    uint32_t senderId = c->getValue<uint32_t>();
-    if (espNowLinkHasPeer() && senderId == espNowLinkGetLastPeerSnapshot().boardId) {
-      s_serverPeerHandle = info.getConnHandle();
-    }
-  }
-};
-static HelloCharCB s_helloCB;
-
 void bleLinkInit() {
   NimBLEDevice::init(identityDeviceName());
   NimBLEDevice::setPower(BLE_TX_POWER_DBM);
+
+  // Hardcoded identity: figure out which of the two known boards we are, and therefore
+  // which one the peer is, by comparing our own MAC against both constants. Only two
+  // boards exist for this project, so there's no reason to discover this at runtime.
+  const uint8_t macA[6] = BOARD_MAC_3EFE;
+  const uint8_t macB[6] = BOARD_MAC_63CA;
+  NimBLEAddress addrA(macA, BLE_ADDR_PUBLIC);
+  NimBLEAddress addrB(macB, BLE_ADDR_PUBLIC);
+  NimBLEAddress myAddr(identityMac(), BLE_ADDR_PUBLIC);
+  s_peerAddr = (myAddr == addrA) ? addrB : addrA;
 
   g_server = NimBLEDevice::createServer();
   g_server->setCallbacks(&s_serverCB);
@@ -118,14 +101,12 @@ void bleLinkInit() {
   g_charPeer = svc->createCharacteristic(BLE_CHAR_PEER_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic* charInfo = svc->createCharacteristic(BLE_CHAR_INFO_UUID, NIMBLE_PROPERTY::READ);
   charInfo->setValue(identityDeviceName());
-  NimBLECharacteristic* charHello = svc->createCharacteristic(BLE_CHAR_HELLO_UUID, NIMBLE_PROPERTY::WRITE);
-  charHello->setCallbacks(&s_helloCB);
   svc->start();
 
-  // Primary advertisement (31-byte budget) carries just the name, which is what both
-  // the peer-discovery scan filter and Chrome's requestDevice() namePrefix match on.
-  // The service UUID goes in the scan response instead (separate 31-byte budget) -
-  // trying to fit both in the primary packet overflows it and silently drops the UUID.
+  // Primary advertisement (31-byte budget) carries just the name, which is what
+  // Chrome's requestDevice() namePrefix matches on. The service UUID goes in the scan
+  // response instead (separate 31-byte budget) - trying to fit both in the primary
+  // packet overflows it and silently drops the UUID.
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->setName(identityDeviceName());
   // Per-boot random jitter so two otherwise-identical boards don't run perfectly
@@ -155,11 +136,12 @@ static void pollHandle(uint16_t handle, RollingLink& link, bool isClientHandle) 
 
 void bleLinkLoop() {
   static uint32_t lastRssiPoll = 0;
+  static uint32_t lastAdvCheck = 0;
   static uint32_t nextConnectAttempt = 0;
   uint32_t now = millis();
 
-  // Any currently-connected server-side handle that isn't the hello-verified peer is,
-  // by elimination, the phone.
+  // Any currently-connected server-side handle that isn't the peer (by hardcoded
+  // address match) is, by elimination, the phone.
   uint16_t serverPhoneHandle = kNoHandle;
   if (g_server) {
     for (uint16_t h : g_server->getPeerDevices()) {
@@ -180,21 +162,25 @@ void bleLinkLoop() {
     pollHandle(s_phoneConnHandle, s_rxFromPhone, false);
   }
 
-  // Both boards always try to dial the peer - no elected "central" board. Two redundant
-  // peer-to-peer links (we-initiated + they-initiated) can coexist fine; whichever one
-  // we dialed ourselves takes priority for reporting (see the s_client check above).
-  // This used to be gated on a boardId tie-break so only one side ever dialed out, which
-  // concentrated all the central-role work on whichever board had the lower boardId -
-  // that board then had a harder time also servicing its own peripheral role (accepting
-  // the phone), which is why one specific board was consistently the flaky one to
-  // connect a phone to. Splitting the work evenly fixes that asymmetry.
-  //
-  // The peer's identity (boardId) and its exact connectable BLE address (bleMac) both
-  // come from ESP-NOW - no BLE scanning at all for inter-board discovery, so we can
-  // never end up dialing some other nearby BLE device by mistake.
-  if (espNowLinkHasPeer() && s_peerConnHandle == kNoHandle && s_client == nullptr && now >= nextConnectAttempt) {
-    NimBLEAddress peerAddr(espNowLinkGetLastPeerSnapshot().bleMac, BLE_ADDR_PUBLIC);
-    s_client = NimBLEDevice::createClient(peerAddr);
+  // Defensive: keep re-asserting advertising rather than trusting it to still be
+  // running. NimBLE-Arduino has changed its behavior across versions for whether
+  // legacy advertising needs to be explicitly restarted in various situations - rather
+  // than depend on any particular version, just check periodically and restart if not.
+  if (now - lastAdvCheck >= 2000) {
+    lastAdvCheck = now;
+    if (g_server && g_server->getConnectedCount() < CONFIG_BT_NIMBLE_MAX_CONNECTIONS && !NimBLEDevice::getAdvertising()->isAdvertising()) {
+      NimBLEDevice::startAdvertising();
+    }
+  }
+
+  // Only dial out if we don't already have any incoming connection at all. Whichever
+  // board doesn't yet have anything connected to it (peer or phone) does the work of
+  // finding the other; a board that already has an incoming connection just waits.
+  // Both addresses are hardcoded (see config.h) - no scanning, no runtime discovery, no
+  // handshake, so this can happen immediately and doesn't depend on ESP-NOW at all.
+  bool haveAnyIncoming = g_server && g_server->getConnectedCount() > 0;
+  if (!haveAnyIncoming && s_peerConnHandle == kNoHandle && s_client == nullptr && now >= nextConnectAttempt) {
+    s_client = NimBLEDevice::createClient(s_peerAddr);
     // Without this, a client object that disconnects or fails to connect is never
     // actually freed - NimBLEDevice::deleteClient() only runs automatically when the
     // client is configured to self-delete. Every retry was leaking a client into the
@@ -207,8 +193,7 @@ void bleLinkLoop() {
     s_client->setConnectionParams(BLE_CONN_INTERVAL_MIN, BLE_CONN_INTERVAL_MAX, 0, BLE_CONN_SUPERVISION_TIMEOUT);
     // Async - a blocking connect() here freezes the shared main loop() (ESP-NOW TX, BLE
     // peripheral servicing, HTTP server, everything) for as long as the connection
-    // attempt takes, which can be many seconds or longer if it doesn't succeed cleanly.
-    // Completion arrives via onConnect()/onConnectFail() instead.
+    // attempt takes. Completion arrives via onConnect()/onConnectFail() instead.
     s_client->connect(true, true, true);
     // Cooldown (with jitter) before the next attempt, whether this one succeeds or not -
     // keeps a peer that's out of range from being hammered with reconnect attempts, and

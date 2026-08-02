@@ -10,7 +10,19 @@
 #define BLE_CHAR_OWN_UUID  "9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: this board's BoardSnapshot
 #define BLE_CHAR_PEER_UUID "9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: peer's BoardSnapshot (relayed via ESP-NOW)
 #define BLE_CHAR_INFO_UUID "9c7a0004-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // read: board id/name string
-#define BLE_CHAR_HELLO_UUID "9c7a0005-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // write: sender's boardId, used by the peripheral side to positively identify the peer board vs. the phone
+
+// Hardcoded identity for both boards - only two of these exist for this project, so
+// there's no reason to discover the peer's BLE address at runtime (via scanning, or via
+// an ESP-NOW-relayed handshake, both of which were real sources of flakiness). Each
+// board compares its own MAC (identityMac()) against these two constants at boot to
+// figure out which one it is and, by elimination, which one the peer is - then any
+// incoming connection can be positively identified as "the peer" the instant it
+// connects, just by comparing its address, no handshake or timing dependency at all.
+// Get each board's exact MAC from its own boot log line (main.cpp prints it).
+#define BOARD_MAC_3EFE { 0x58, 0xE6, 0xC5, 0xDF, 0x3E, 0xFE }
+#define BOARD_MAC_63CA { 0x20, 0x6E, 0xF1, 0x12, 0x63, 0xCA }
+
+
 
 #define BLE_SNAPSHOT_PERIOD_MS 500  // 2Hz
 #define BLE_RSSI_POLL_MS       150
@@ -27,11 +39,14 @@
 #define BLE_CONN_INTERVAL_MIN 24  // 24 * 1.25ms = 30ms
 #define BLE_CONN_INTERVAL_MAX 40  // 40 * 1.25ms = 50ms
 // Supervision timeout, in 10ms units - how long a connection tolerates zero successful
-// packet exchange before the controller gives up on it. Set to the BLE spec max (32s):
-// the connection is established over legacy PHY then upgraded to Coded S=8, so if it's
-// going to survive a dip at the edge of range, it needs to hold on through the fade
-// rather than time out and force re-establishing from scratch.
-#define BLE_CONN_SUPERVISION_TIMEOUT 3200  // 3200 * 10ms = 32s
+// packet exchange before the controller gives up on it. Was set to the BLE spec max
+// (32s) to survive a fade at the edge of range, but that meant a board that got power-
+// cycled (routine during bench testing) left a zombie connection on the other end for
+// up to 32s, blocking reconnection the whole time. 4s is still a real improvement on
+// typical defaults (a couple seconds) without creating that problem. Worth revisiting
+// once the connection logic itself is proven solid, specifically for the long-range
+// field test where riding out a longer fade matters more than fast bench-test recovery.
+#define BLE_CONN_SUPERVISION_TIMEOUT 400  // 400 * 10ms = 4s
 
 // Both boards always try to dial the peer (no elected "central" board) - a cooldown
 // with jitter between attempts keeps a peer that's out of range from being hammered

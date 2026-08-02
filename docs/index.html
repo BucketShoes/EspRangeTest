@@ -9,7 +9,7 @@
   --bg:#111318; --panel:#1b1e26; --line:#2a2e3a; --text:#e8eaf0; --muted:#8b91a3;
   --accent:#5b9dff; --good:#39d98a; --warn:#e8b339; --bad:#f2545b;
   --s-espnow:#5b9dff; --s-blepeer-own:#39d98a; --s-blepeer-peer:#9dd6b0;
-  --s-blephone-own:#e8b339; --s-blephone-adv:#f2b8bb;
+  --s-blephone-own:#e8b339;
 }
 @media (prefers-color-scheme: light){
   :root{ --bg:#f4f5f8; --panel:#ffffff; --line:#d8dbe3; --text:#1a1c22; --muted:#5a6070; }
@@ -160,7 +160,6 @@ document.getElementById('btnConnect').onclick = async () => {
     document.getElementById('boardPanel').style.display = '';
     document.getElementById('btnDisconnect').disabled = false;
     setStatus('connected to ' + device.name);
-    tryWatchAdvertisements();
   } catch (err) {
     setStatus('connect failed: ' + err.message);
   }
@@ -222,22 +221,6 @@ function renderTables() {
     linkRow('ESP-NOW (from us)', lastPeer && lastPeer.espnow, espnowModeName) +
     linkRow('BLE (from us)', lastPeer && lastPeer.blePeer) +
     linkRow('BLE (from phone, peer board)', lastPeer && lastPeer.blePhone);
-}
-
-// ---- watchAdvertisements: phone's own view of the board's signal, if supported ----
-function tryWatchAdvertisements() {
-  if (typeof device.watchAdvertisements !== 'function') {
-    delete SERIES.watch_adv;
-    return;
-  }
-  SERIES.watch_adv = { label: 'BLE adv (phone hears board)', color: getCss('--s-blephone-adv'), on: true, get: () => null };
-  device.addEventListener('advertisementreceived', e => {
-    if (typeof e.rssi !== 'number') return;
-    const pos = lastFix ? { lat: lastFix.lat, lon: lastFix.lon } : { lat: null, lon: null };
-    samples.push({ t: Date.now(), key: 'watch_adv', rssi: e.rssi, rssiMin: e.rssi, rssiMax: e.rssi, pdr: null, mode: 0, lat: pos.lat, lon: pos.lon });
-    renderTimeline();
-  });
-  device.watchAdvertisements().catch(() => { delete SERIES.watch_adv; });
 }
 
 // ---- GPS ----

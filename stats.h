@@ -21,8 +21,6 @@ struct __attribute__((packed)) BoardSnapshot {
   LinkStat blePhone;  // this board's RX from phone over BLE (only meaningful if phoneConnected)
   uint8_t phoneConnected;
   int8_t txPowerDbm;
-  uint8_t bleMac[6];  // this board's public BLE address - lets the peer dial us directly over
-                       // BLE without ever scanning (ESP-NOW hands the address over instead)
 };
 
 struct __attribute__((packed)) EspNowPacket {

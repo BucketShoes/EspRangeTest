@@ -27,7 +27,9 @@ void setup() {
   delay(200);  // let USB CDC settle; debug-only, never load-bearing for results
 
   identityInit();
-  Serial.printf("\n=== %s (id=%08X) ===\n", identityDeviceName(), identityBoardId());
+  const uint8_t* mac = identityMac();
+  Serial.printf("\n=== %s (id=%08X) mac=%02X:%02X:%02X:%02X:%02X:%02X ===\n", identityDeviceName(), identityBoardId(), mac[0],
+                mac[1], mac[2], mac[3], mac[4], mac[5]);
 
   WiFi.mode(WIFI_AP_STA);
   // Fixed channel shared by both boards so the LR-mode STA interface and the softAP
@@ -61,7 +63,6 @@ void loop() {
   own.blePhone = bleLinkGetPhoneStat();
   own.phoneConnected = bleLinkPhoneConnected() ? 1 : 0;
   own.txPowerDbm = BLE_TX_POWER_DBM;
-  memcpy(own.bleMac, identityMac(), 6);
 
   BoardSnapshot peerRelay = espNowLinkGetLastPeerSnapshot();
 
