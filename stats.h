@@ -31,9 +31,14 @@ struct __attribute__((packed)) EspNowPacket {
 };
 
 // Accumulates rx samples over a rolling window; snapshot() reads out a LinkStat and
-// resets the window (call once per reporting period, e.g. every second).
+// resets the rssi/rxCount window (call once per reporting period, e.g. every second).
 class RollingLink {
  public:
+  // expectedIntervalMs: the link's known send interval (e.g. ESPNOW_TX_PERIOD_MS), used
+  // to compute how many packets a completed window *should* have seen. 0 (default)
+  // means this link has no PDR concept - pdrPercent always reads n/a (this is what BLE
+  // links use, since RSSI there comes from connection polling, not a sequenced stream).
+  explicit RollingLink(uint32_t expectedIntervalMs = 0) : m_expectedIntervalMs(expectedIntervalMs) {}
   void onRx(int8_t rssi, uint8_t mode);
   void onRxSeq(int8_t rssi, uint8_t mode, uint32_t seq);  // for links with a sender sequence number (loss detection)
   LinkStat snapshot();
@@ -45,18 +50,32 @@ class RollingLink {
   int8_t m_rssiMax = -128;
   uint8_t m_mode = 0;
 
-  // PDR accumulates continuously rather than resetting to empty on a timer - a hard
-  // reset created a window where "haven't received anything in the new window yet" (a
-  // few hundred ms of totally normal silence between packets) was indistinguishable
-  // from "no data" and reported as n/a, even seconds into an otherwise-healthy link.
-  // Instead, expected/received counts just get halved periodically ("decayed") so old
-  // history fades out without ever creating a from-scratch gap - once the first packet
-  // has ever arrived, pdrPercent is always a real 0-100 number; n/a only ever means
-  // "nothing has arrived from this link yet, ever."
+  // PDR history: this went through several wrong iterations - noted here so nobody
+  // (including future-me) mistakes the current shape for a real requirement.
+  //   v1 (original): reset every ~500ms reporting tick. Coarse (basically 0/50/100%
+  //     given ~2 packets/tick) but this was the actual best version - simple, no
+  //     surprises, good enough.
+  //   v2: separate longer reset window (~5s) decoupled from the rssi/rxCount tick.
+  //     Introduced a bug where a freshly-reset window with nothing received *yet*
+  //     reported n/a instead of 0%. Still usable overall despite the bug, but the hard
+  //     reset itself - not the n/a bug - is the part that made it worse than v1: it
+  //     injects visible jumps in the number that are just an artifact of when the reset
+  //     happened, unrelated to the actual signal. That's real noise, not a feature.
+  //   v3 (wrong "fix"): tried decaying/halving the accumulated counts instead of
+  //     resetting. This was worse still - smoothing directly costs responsiveness,
+  //     which matters for quickly A/B-ing two hand positions.
+  //   v4 (current, also wrong): "fixed" the v2 n/a bug by keeping a hard reset but
+  //     computing "expected" from elapsed wall-clock time instead of received-packet
+  //     gaps. This does make a fully-empty window read as a real 0% instead of n/a, but
+  //     it's still a HARD RESET, which is exactly the part identified above as the
+  //     actual problem with v2. Do not read this as "hard reset is desired" - it isn't.
+  //   What's actually wanted: a genuinely rolling window (continuously slides forward,
+  //   no discrete reset boundary at all) rather than a periodically-resetting one - so
+  //   old data ages out smoothly by naturally falling outside the window as time moves
+  //   on, without ever producing a visible jump that has nothing to do with the signal.
+  //   Not yet implemented - flag before changing this again.
+  uint32_t m_expectedIntervalMs;
   bool m_haveSeq = false;
-  uint32_t m_pdrLastSeq = 0;
-  uint32_t m_pdrExpectedTotal = 0;
-  uint32_t m_pdrReceivedTotal = 0;
-  uint8_t m_snapshotsSincePdrDecay = 0;
-  static const uint8_t kPdrDecayEveryNSnapshots = 10;
+  uint32_t m_pdrWindowStartMs = 0;
+  uint32_t m_pdrRxCount = 0;
 };

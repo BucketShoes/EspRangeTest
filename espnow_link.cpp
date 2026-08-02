@@ -7,7 +7,7 @@
 #include <esp_wifi.h>
 #include <string.h>
 
-static RollingLink s_rxFromPeer;
+static RollingLink s_rxFromPeer(ESPNOW_TX_PERIOD_MS);
 static uint8_t s_peerMac[6] = {0};
 static bool s_havePeer = false;
 static uint32_t s_txSeq = 0;

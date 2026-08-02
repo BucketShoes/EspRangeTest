@@ -1,4 +1,6 @@
 #include "stats.h"
+#include "config.h"
+#include <Arduino.h>
 
 void RollingLink::onRx(int8_t rssi, uint8_t mode) {
   m_rxCount++;
@@ -12,17 +14,10 @@ void RollingLink::onRxSeq(int8_t rssi, uint8_t mode, uint32_t seq) {
   onRx(rssi, mode);
   if (!m_haveSeq) {
     m_haveSeq = true;
-    m_pdrExpectedTotal = 1;
-    m_pdrReceivedTotal = 1;
-  } else {
-    // Gap since the immediately previous packet: 1 = none missed, >1 = some missed.
-    // A non-positive gap (reorder/duplicate) can't tell us anything about loss, so
-    // just count this packet as expected-and-received rather than corrupting the ratio.
-    uint32_t gap = (seq > m_pdrLastSeq) ? (seq - m_pdrLastSeq) : 1;
-    m_pdrExpectedTotal += gap;
-    m_pdrReceivedTotal += 1;
+    m_pdrWindowStartMs = millis();
   }
-  m_pdrLastSeq = seq;
+  m_pdrRxCount++;
+  (void)seq;  // loss is inferred from elapsed time vs the known send interval, not seq gaps
 }
 
 LinkStat RollingLink::snapshot() {
@@ -40,11 +35,16 @@ LinkStat RollingLink::snapshot() {
   }
   s.mode = m_mode;
 
-  if (m_haveSeq) {
-    uint32_t pct = (m_pdrReceivedTotal * 100UL) / m_pdrExpectedTotal;
+  if (m_expectedIntervalMs > 0 && m_haveSeq) {
+    uint32_t elapsed = millis() - m_pdrWindowStartMs;
+    uint32_t expected = elapsed / m_expectedIntervalMs;
+    if (expected < 1) expected = 1;
+    uint32_t received = m_pdrRxCount;
+    if (received > expected) expected = received;  // guard against clock jitter
+    uint32_t pct = (received * 100UL) / expected;
     s.pdrPercent = (uint8_t)(pct > 100 ? 100 : pct);
   } else {
-    s.pdrPercent = 0xFF;  // nothing has ever arrived from this link
+    s.pdrPercent = 0xFF;  // nothing has ever arrived from this link, ever
   }
 
   m_rxCount = 0;
@@ -52,16 +52,12 @@ LinkStat RollingLink::snapshot() {
   m_rssiMin = 127;
   m_rssiMax = -128;
 
-  // Decay (halve) the accumulated totals periodically so old history fades out and the
-  // ratio stays responsive to current conditions - without ever fully clearing back to
-  // "nothing yet", which is what caused the misleading n/a mid-session.
-  m_snapshotsSincePdrDecay++;
-  if (m_snapshotsSincePdrDecay >= kPdrDecayEveryNSnapshots) {
-    m_snapshotsSincePdrDecay = 0;
-    if (m_haveSeq) {
-      m_pdrExpectedTotal = (m_pdrExpectedTotal + 1) / 2;
-      m_pdrReceivedTotal = (m_pdrReceivedTotal + 1) / 2;
-    }
+  // Periodic hard reset - see the PDR history note in stats.h before touching this.
+  // This reset boundary is the known-wrong part: it produces a visible jump in the
+  // reported number that's purely an artifact of reset timing, not the actual signal.
+  if (m_haveSeq && (millis() - m_pdrWindowStartMs) >= PDR_WINDOW_MS) {
+    m_pdrWindowStartMs = millis();
+    m_pdrRxCount = 0;
   }
 
   return s;

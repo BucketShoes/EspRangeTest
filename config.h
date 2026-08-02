@@ -54,6 +54,7 @@
 #define ESPNOW_MAGIC       0x54524553UL  // "SERT" tag, used to ignore stray packets
 #define ESPNOW_TX_PERIOD_MS 250
 #define ESPNOW_CHANNEL      1            // fixed channel shared by softAP + STA on both boards
+#define PDR_WINDOW_MS       6000         // PDR reset period (see stats.h - RollingLink - for why this reset is known-wrong and pending a rolling-window rewrite)
 
 // ---- HTTP / softAP ----
 #define HTTP_AP_PASSWORD ""  // open AP - keep field setup simple
