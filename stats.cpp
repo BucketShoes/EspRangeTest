@@ -52,9 +52,8 @@ LinkStat RollingLink::snapshot() {
   m_rssiMin = 127;
   m_rssiMax = -128;
 
-  // Periodic hard reset - see the PDR history note in stats.h before touching this.
-  // This reset boundary is the known-wrong part: it produces a visible jump in the
-  // reported number that's purely an artifact of reset timing, not the actual signal.
+  // Periodic reset - see the PDR history note in stats.h. Produces a step change in the
+  // reported number at the reset instant, independent of the underlying signal.
   if (m_haveSeq && (millis() - m_pdrWindowStartMs) >= PDR_WINDOW_MS) {
     m_pdrWindowStartMs = millis();
     m_pdrRxCount = 0;

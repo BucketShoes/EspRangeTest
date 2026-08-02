@@ -50,30 +50,22 @@ class RollingLink {
   int8_t m_rssiMax = -128;
   uint8_t m_mode = 0;
 
-  // PDR history: this went through several wrong iterations - noted here so nobody
-  // (including future-me) mistakes the current shape for a real requirement.
-  //   v1 (original): reset every ~500ms reporting tick. Coarse (basically 0/50/100%
-  //     given ~2 packets/tick) but this was the actual best version - simple, no
-  //     surprises, good enough.
-  //   v2: separate longer reset window (~5s) decoupled from the rssi/rxCount tick.
-  //     Introduced a bug where a freshly-reset window with nothing received *yet*
-  //     reported n/a instead of 0%. Still usable overall despite the bug, but the hard
-  //     reset itself - not the n/a bug - is the part that made it worse than v1: it
-  //     injects visible jumps in the number that are just an artifact of when the reset
-  //     happened, unrelated to the actual signal. That's real noise, not a feature.
-  //   v3 (wrong "fix"): tried decaying/halving the accumulated counts instead of
-  //     resetting. This was worse still - smoothing directly costs responsiveness,
-  //     which matters for quickly A/B-ing two hand positions.
-  //   v4 (current, also wrong): "fixed" the v2 n/a bug by keeping a hard reset but
-  //     computing "expected" from elapsed wall-clock time instead of received-packet
-  //     gaps. This does make a fully-empty window read as a real 0% instead of n/a, but
-  //     it's still a HARD RESET, which is exactly the part identified above as the
-  //     actual problem with v2. Do not read this as "hard reset is desired" - it isn't.
-  //   What's actually wanted: a genuinely rolling window (continuously slides forward,
-  //   no discrete reset boundary at all) rather than a periodically-resetting one - so
-  //   old data ages out smoothly by naturally falling outside the window as time moves
-  //   on, without ever producing a visible jump that has nothing to do with the signal.
-  //   Not yet implemented - flag before changing this again.
+  // PDR mechanism history, kept factual (no ranking of versions) so this doesn't get
+  // misread as settled requirements:
+  //   v1: reset every ~500ms reporting tick.
+  //   v2: separate ~5s reset window, decoupled from the rssi/rxCount tick. A window
+  //     that had received nothing yet since its reset reported n/a rather than 0%.
+  //   v3: replaced the periodic reset with decaying (halving) the accumulated counts
+  //     on the same cadence, instead of zeroing them.
+  //   v4 (current): kept the periodic reset from v2, but computes "expected" from
+  //     elapsed wall-clock time rather than gaps between received packets, so a window
+  //     with zero arrivals computes a real 0% instead of n/a.
+  // Requested and not yet implemented: a continuously rolling window with no discrete
+  // reset boundary (as opposed to v2/v4's periodic reset, or v3's decay). Two properties
+  // worth naming precisely: a periodic hard reset (v2, v4) produces a step change in the
+  // reported number at the reset instant that does not correspond to any change in the
+  // underlying signal; decaying/smoothing (v3) reduces how quickly a real change in the
+  // signal shows up in the reported number.
   uint32_t m_expectedIntervalMs;
   bool m_haveSeq = false;
   uint32_t m_pdrWindowStartMs = 0;
