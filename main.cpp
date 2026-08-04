@@ -32,6 +32,14 @@ void setup() {
                 mac[1], mac[2], mac[3], mac[4], mac[5]);
 
   WiFi.mode(WIFI_AP_STA);
+  // Wi-Fi config is flash-backed (WIFI_STORAGE_FLASH) by default - every esp_wifi_set_*
+  // call below (notably espNowLinkInit()'s LR-only STA protocol) would otherwise get
+  // written into the nvs partition and survive every future reflash of ANY firmware that
+  // doesn't happen to override it - confirmed the hard way: a totally unrelated sketch
+  // flashed afterward inherited a dead softAP from this, and only a full chip erase (not
+  // just reflashing something else) cleared it. RAM-only storage makes every boot's Wi-Fi
+  // state come purely from this code, nothing hidden surviving in flash.
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
   // Fixed channel shared by both boards so the LR-mode STA interface and the softAP
   // land on the same channel (required for AP+STA concurrent operation anyway).
   bool apOk = WiFi.softAP(identityDeviceName(), HTTP_AP_PASSWORD, ESPNOW_CHANNEL);
