@@ -46,6 +46,7 @@ input[type=text]{background:var(--bg);color:var(--text);border:1px solid var(--l
   <div class="panel row">
     <button id="btnConnect">Connect to board</button>
     <button id="btnDisconnect" class="secondary" disabled>Disconnect</button>
+    <button id="btnRadioMode" class="secondary" disabled>Mode: -</button>
     <span id="connStatus" class="status">not connected</span>
   </div>
 
@@ -99,6 +100,7 @@ const SVC_UUID  = '9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const CH_OWN    = '9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const CH_PEER   = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const CH_INFO   = '9c7a0004-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const CH_MODE   = '9c7a0005-1b2c-4a7e-9a1e-5f6b2c3d4e5f';  // write 1 byte: 0 = LR, 1 = WiFi/FTM (see config.h)
 
 function parseLinkStat(dv, off) {
   return {
@@ -125,8 +127,9 @@ function bleModeName(m) { return { 0: '-', 1: '1M', 2: '2M', 3: 'Coded' }[m] || 
 function idHex(id) { return id ? id.toString(16).toUpperCase().padStart(8, '0') : '-'; }
 
 // ---- State ----
-let device = null, server = null, charOwn = null, charPeer = null;
+let device = null, server = null, charOwn = null, charPeer = null, charMode = null;
 let lastOwn = null, lastPeer = null;
+let radioMode = 0;  // 0 = LR, 1 = WiFi/FTM - mirrors the board's BLE_CHAR_MODE_UUID
 
 const samples = []; // {t, source, link, rssi, pdr, mode, lat, lon}
 const marks = [];   // {t, label, lat, lon}
@@ -161,6 +164,11 @@ document.getElementById('btnConnect').onclick = async () => {
     await charPeer.startNotifications();
     charPeer.addEventListener('characteristicvaluechanged', e => onSnapshot('peer', e.target.value));
 
+    charMode = await svc.getCharacteristic(CH_MODE);
+    radioMode = (await charMode.readValue()).getUint8(0);
+    updateModeButton();
+    document.getElementById('btnRadioMode').disabled = false;
+
     document.getElementById('thisBoardName').textContent = device.name || 'board';
     document.getElementById('boardPanel').style.display = '';
     document.getElementById('btnDisconnect').disabled = false;
@@ -170,8 +178,30 @@ document.getElementById('btnConnect').onclick = async () => {
   }
 };
 document.getElementById('btnDisconnect').onclick = () => { if (device && device.gatt.connected) device.gatt.disconnect(); };
-function onDisconnected() { setStatus('disconnected'); document.getElementById('btnDisconnect').disabled = true; }
+function onDisconnected() {
+  setStatus('disconnected');
+  document.getElementById('btnDisconnect').disabled = true;
+  document.getElementById('btnRadioMode').disabled = true;
+  document.getElementById('btnRadioMode').textContent = 'Mode: -';
+  charMode = null;
+}
 function setStatus(s) { document.getElementById('connStatus').textContent = s; }
+
+// ---- Radio mode toggle (LR ESP-NOW/BLE test vs WiFi/FTM test - see config.h) ----
+function updateModeButton() {
+  document.getElementById('btnRadioMode').textContent = 'Mode: ' + (radioMode === 0 ? 'LR (ESP-NOW/BLE)' : 'WiFi/FTM (11B)');
+}
+document.getElementById('btnRadioMode').onclick = async () => {
+  if (!charMode) return;
+  const next = radioMode === 0 ? 1 : 0;
+  try {
+    await charMode.writeValueWithResponse(new Uint8Array([next]));
+    radioMode = next;
+    updateModeButton();
+  } catch (err) {
+    setStatus('mode switch failed: ' + err.message);
+  }
+};
 
 const everActive = {}; // key -> bool: has this series ever delivered data? (avoids flagging a link as "missing" before it's ever connected)
 
