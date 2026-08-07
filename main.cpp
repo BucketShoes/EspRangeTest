@@ -15,6 +15,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <nvs_flash.h>
 #include "config.h"
 #include "identity.h"
 #include "stats.h"
@@ -31,20 +32,36 @@ void setup() {
   Serial.printf("\n=== %s (id=%08X) mac=%02X:%02X:%02X:%02X:%02X:%02X ===\n", identityDeviceName(), identityBoardId(), mac[0],
                 mac[1], mac[2], mac[3], mac[4], mac[5]);
 
+  // Wi-Fi config is flash-backed (WIFI_STORAGE_FLASH) by default and persists in the nvs
+  // partition across reflashes of ANY firmware that doesn't override it - confirmed the
+  // hard way: a totally unrelated sketch flashed afterward inherited a dead softAP from
+  // this, and only a full chip erase (not just reflashing something else) cleared it.
+  // esp_wifi_set_storage(WIFI_STORAGE_RAM) below stops *new* writes, but WiFi.mode() (the
+  // next line) already triggers esp_wifi_init(), which can itself commit an initial NVS
+  // write before that call runs - so on its own it wasn't reliably undoing whatever the
+  // previous boot left behind. Erase outright instead: this project stores nothing else
+  // in NVS, so every boot now starts from the exact same known-clean state, independent
+  // of anything left over from a prior flash.
+  nvs_flash_erase();
+  nvs_flash_init();
+
   WiFi.mode(WIFI_AP_STA);
-  // Wi-Fi config is flash-backed (WIFI_STORAGE_FLASH) by default - every esp_wifi_set_*
-  // call below (notably espNowLinkInit()'s LR-only STA protocol) would otherwise get
-  // written into the nvs partition and survive every future reflash of ANY firmware that
-  // doesn't happen to override it - confirmed the hard way: a totally unrelated sketch
-  // flashed afterward inherited a dead softAP from this, and only a full chip erase (not
-  // just reflashing something else) cleared it. RAM-only storage makes every boot's Wi-Fi
-  // state come purely from this code, nothing hidden surviving in flash.
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   // Fixed channel shared by both boards so the LR-mode STA interface and the softAP
   // land on the same channel (required for AP+STA concurrent operation anyway).
   bool apOk = WiFi.softAP(identityDeviceName(), HTTP_AP_PASSWORD, ESPNOW_CHANNEL);
   Serial.printf("softAP() = %s, IP = %s, mode = %d\n", apOk ? "true" : "false", WiFi.softAPIP().toString().c_str(), WiFi.getMode());
   esp_wifi_set_max_tx_power(WIFI_TX_POWER_DBM_QUARTER);
+
+  // Answer FTM (802.11mc) range requests on this AP - lets a phone (Android WiFi RTT) or
+  // another board running the esp-idf ftm example range against this board directly.
+  // esp_wifi_get_config() first so this only adds the ftm_responder flag on top of
+  // whatever WiFi.softAP() just set (SSID/password/channel), rather than clobbering it.
+  wifi_config_t apConf{};
+  esp_wifi_get_config(WIFI_IF_AP, &apConf);
+  apConf.ap.ftm_responder = true;
+  esp_err_t ftmRc = esp_wifi_set_config(WIFI_IF_AP, &apConf);
+  Serial.printf("FTM responder enable = %d\n", (int)ftmRc);
 
   espNowLinkInit();
   bleLinkInit();

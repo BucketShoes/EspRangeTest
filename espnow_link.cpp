@@ -61,8 +61,17 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
 }
 
 void espNowLinkInit() {
-//  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR );
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B );
+  // LR-only (WIFI_PROTOCOL_LR alone) makes the STA interface incompatible with the
+  // concurrently-running softAP - confirmed on this hardware: phone couldn't see the AP
+  // with LR-only, could with 11B-only. Per Espressif's ESP32-C6 Wi-Fi guide compatibility
+  // table, a STA whose protocol set includes LR *without being LR-only* stays compatible
+  // with a plain (non-LR) AP - so keep the interface's allowed-rate set mixed and let
+  // esp_now_set_peer_rate_config() below force the actual per-peer LR rate, rather than
+  // restricting the whole interface to LR.
+
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+  //esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
+  
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
   addPeerIfNeeded(kBroadcast);
