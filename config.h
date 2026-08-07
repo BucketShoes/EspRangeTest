@@ -44,8 +44,15 @@
 #define BLE_ADV_INTERVAL_JITTER 32  // 32 * 0.625ms = 20ms
 
 // Connection interval, in 1.25ms units (different HCI convention from advertising).
-#define BLE_CONN_INTERVAL_MIN 24  // 24 * 1.25ms = 30ms
-#define BLE_CONN_INTERVAL_MAX 40  // 40 * 1.25ms = 50ms
+// Slowed for the same shared-radio reason as BLE_ADV_INTERVAL above, but not as far -
+// this governs ongoing traffic for the whole life of a connection (a bigger, more
+// persistent airtime cost than advertising, which stops once connected), but BLE_RSSI_POLL_MS
+// (150ms) and BLE_SNAPSHOT_PERIOD_MS (500ms, the live relay's actual cadence) both get
+// capped at whatever this is - pushing it past those would bottleneck the data this rig
+// exists to collect. ~3x slower than the previous 30-50ms, not the ~20x used for
+// advertising.
+#define BLE_CONN_INTERVAL_MIN 80   // 80 * 1.25ms = 100ms
+#define BLE_CONN_INTERVAL_MAX 120  // 120 * 1.25ms = 150ms
 // Supervision timeout, in 10ms units - how long a connection tolerates zero successful
 // packet exchange before the controller gives up on it. Needs to be long enough to ride
 // out a real fade at the edge of range during a field walk without forcing a full
