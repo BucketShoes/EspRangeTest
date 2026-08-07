@@ -93,11 +93,11 @@ void setup() {
   // land on the same channel (required for AP+STA concurrent operation anyway).
   bool apOk = WiFi.softAP(identityDeviceName(), HTTP_AP_PASSWORD, ESPNOW_CHANNEL);
   Serial.printf("softAP() = %s, IP = %s, mode = %d\n", apOk ? "true" : "false", WiFi.softAPIP().toString().c_str(), WiFi.getMode());
+  applyRadioMode(0);  // boot into LR mode by default - before espNowLinkInit(), see its comment
 
   espNowLinkInit();
   bleLinkInit();
   webServerLinkInit();
-  applyRadioMode(0);  // boot into LR mode by default
 
   Serial.println("Init complete. AP SSID = BLE name = " + String(identityDeviceName()));
 }

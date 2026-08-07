@@ -70,8 +70,11 @@ void espNowLinkInit() {
   // Wi-Fi guide, which documents a mixed (non-LR-only) STA protocol set as staying
   // compatible with a plain AP. Confirmed the hard way across several combinations; LR
   // mode and phone-visible-AP mode are mutually exclusive on this chip/core version, so
-  // they're switched between rather than run mixed.
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR );
+  // they're switched between rather than run mixed. Call this after applyRadioMode() has
+  // set the initial protocol, not before - addPeerIfNeeded(kBroadcast) below forces an
+  // LR rate config on the broadcast peer, which only succeeds if the interface is
+  // already LR-capable at that moment, and addPeerIfNeeded() never retries once a peer
+  // exists.
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
   addPeerIfNeeded(kBroadcast);
