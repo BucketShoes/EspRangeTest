@@ -71,6 +71,7 @@ void espNowLinkInit() {
   // compatible with a plain AP. Confirmed the hard way across several combinations; LR
   // mode and phone-visible-AP mode are mutually exclusive on this chip/core version, so
   // they're switched between rather than run mixed.
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR );
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
   addPeerIfNeeded(kBroadcast);
