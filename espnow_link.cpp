@@ -69,8 +69,8 @@ void espNowLinkInit() {
   // esp_now_set_peer_rate_config() below force the actual per-peer LR rate, rather than
   // restricting the whole interface to LR.
 
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
-  //esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
+  //esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
   
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
