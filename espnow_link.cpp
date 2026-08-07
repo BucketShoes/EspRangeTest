@@ -61,7 +61,8 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
 }
 
 void espNowLinkInit() {
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR );
+//  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR );
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B );
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
   addPeerIfNeeded(kBroadcast);
