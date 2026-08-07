@@ -26,6 +26,17 @@ static uint16_t s_phoneConnHandle = kNoHandle;
 // ESP-NOW having exchanged anything yet.
 static uint16_t s_serverPeerHandle = kNoHandle;
 
+static uint8_t s_radioMode = 0;  // 0 = LR, 1 = WiFi/FTM - see BLE_CHAR_MODE_UUID in config.h
+
+class RadioModeCB : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (c->getValue().length() < 1) return;
+    uint8_t requested = c->getValue()[0];
+    if (requested <= 1) s_radioMode = requested;
+  }
+};
+static RadioModeCB s_radioModeCB;
+
 static void requestCodedPhy(uint16_t connHandle, bool viaClient) {
   if (viaClient && s_client) {
     s_client->updatePhy(BLE_HCI_LE_PHY_CODED_PREF_MASK, BLE_HCI_LE_PHY_CODED_PREF_MASK, BLE_HCI_LE_PHY_CODED_S8_PREF);
@@ -101,6 +112,9 @@ void bleLinkInit() {
   g_charPeer = svc->createCharacteristic(BLE_CHAR_PEER_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic* charInfo = svc->createCharacteristic(BLE_CHAR_INFO_UUID, NIMBLE_PROPERTY::READ);
   charInfo->setValue(identityDeviceName());
+  NimBLECharacteristic* charMode = svc->createCharacteristic(BLE_CHAR_MODE_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  charMode->setValue(&s_radioMode, 1);
+  charMode->setCallbacks(&s_radioModeCB);
   svc->start();
 
   // Primary advertisement (31-byte budget) carries just the name, which is what
@@ -212,6 +226,10 @@ LinkStat bleLinkGetPhoneStat() {
 
 bool bleLinkPhoneConnected() {
   return s_phoneConnHandle != kNoHandle;
+}
+
+uint8_t bleLinkGetRadioMode() {
+  return s_radioMode;
 }
 
 void bleLinkPublish(const BoardSnapshot& ownSnap, const BoardSnapshot& peerRelaySnap) {

@@ -60,24 +60,28 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
   }
 }
 
-void espNowLinkInit() {
-  // LR-only (WIFI_PROTOCOL_LR alone) makes the STA interface incompatible with the
-  // concurrently-running softAP - confirmed on this hardware: phone couldn't see the AP
-  // with LR-only, could with 11B-only. Per Espressif's ESP32-C6 Wi-Fi guide compatibility
-  // table, a STA whose protocol set includes LR *without being LR-only* stays compatible
-  // with a plain (non-LR) AP - so keep the interface's allowed-rate set mixed and let
-  // esp_now_set_peer_rate_config() below force the actual per-peer LR rate, rather than
-  // restricting the whole interface to LR.
+static bool s_active = true;
 
-  //esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B);
-  
+void espNowLinkInit() {
+  // STA protocol (LR vs 11B) is set centrally by main.cpp's applyRadioMode() - both
+  // because it needs to be switchable at runtime (see BLE_CHAR_MODE_UUID), and because on
+  // this hardware, in practice, *any* LR bit in the STA protocol set makes the
+  // concurrently-running softAP invisible to a phone - contrary to Espressif's ESP32-C6
+  // Wi-Fi guide, which documents a mixed (non-LR-only) STA protocol set as staying
+  // compatible with a plain AP. Confirmed the hard way across several combinations; LR
+  // mode and phone-visible-AP mode are mutually exclusive on this chip/core version, so
+  // they're switched between rather than run mixed.
   esp_now_init();
   esp_now_register_recv_cb(onRecv);
   addPeerIfNeeded(kBroadcast);
 }
 
+void espNowLinkSetActive(bool active) {
+  s_active = active;
+}
+
 void espNowLinkLoop() {
+  if (!s_active) return;
   static uint32_t lastTx = 0;
   uint32_t now = millis();
   if (now - lastTx < ESPNOW_TX_PERIOD_MS) return;

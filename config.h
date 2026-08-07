@@ -10,6 +10,10 @@
 #define BLE_CHAR_OWN_UUID  "9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: this board's BoardSnapshot
 #define BLE_CHAR_PEER_UUID "9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // notify: peer's BoardSnapshot (relayed via ESP-NOW)
 #define BLE_CHAR_INFO_UUID "9c7a0004-1b2c-4a7e-9a1e-5f6b2c3d4e5f"  // read: board id/name string
+// write (1 byte): 0 = LR mode (ESP-NOW LR + BLE Coded test, default at boot), 1 = WiFi/FTM
+// mode (STA protocol forced to 11B only, ESP-NOW TX paused, AP answers FTM requests) -
+// readable from the phone's page even when WiFi itself is misbehaving, since it's BLE.
+#define BLE_CHAR_MODE_UUID "9c7a0005-1b2c-4a7e-9a1e-5f6b2c3d4e5f"
 
 // Hardcoded identity for both boards - only two of these exist for this project, so
 // there's no reason to discover the peer's BLE address at runtime (via scanning, or via
@@ -31,9 +35,13 @@
 // ("use stack default"), which is ambiguous - set explicitly instead. A few units of
 // per-boot random jitter get added on top (see ble_link.cpp) so two otherwise-identical
 // boards don't run perfectly-synchronized advertising timing.
-#define BLE_ADV_INTERVAL_MIN 32  // 32 * 0.625ms = 20ms
-#define BLE_ADV_INTERVAL_MAX 48  // 48 * 0.625ms = 30ms
-#define BLE_ADV_INTERVAL_JITTER 8
+// Slowed from the usual 20-30ms "fast" connectable interval - this radio also has to
+// carry ESP-NOW (LR or 11B, depending on mode) and, in WiFi/FTM mode, FTM's own
+// time-critical burst exchange; frequent BLE advertising is airtime this project can
+// currently spare less of than a typical BLE-only device.
+#define BLE_ADV_INTERVAL_MIN 800  // 800 * 0.625ms = 500ms
+#define BLE_ADV_INTERVAL_MAX 960  // 960 * 0.625ms = 600ms
+#define BLE_ADV_INTERVAL_JITTER 32  // 32 * 0.625ms = 20ms
 
 // Connection interval, in 1.25ms units (different HCI convention from advertising).
 #define BLE_CONN_INTERVAL_MIN 24  // 24 * 1.25ms = 30ms

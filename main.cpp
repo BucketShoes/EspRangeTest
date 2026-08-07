@@ -23,6 +23,48 @@
 #include "ble_link.h"
 #include "webserver_link.h"
 
+// Answer FTM (802.11mc) range requests on the AP - lets a phone (Android WiFi RTT) or
+// another board running the esp-idf ftm example range against this board directly.
+// esp_wifi_get_config() first so this only adds the ftm_responder flag on top of whatever
+// WiFi.softAP() already set (SSID/password/channel), rather than clobbering it. Called
+// again after every applyRadioMode() switch (not just once at boot) since it's cheap and
+// removes any doubt about whether AP config actually survives an esp_wifi_stop()/start().
+static void applyApFtmResponder() {
+  wifi_config_t apConf{};
+  esp_wifi_get_config(WIFI_IF_AP, &apConf);
+  apConf.ap.ftm_responder = true;
+  esp_err_t ftmRc = esp_wifi_set_config(WIFI_IF_AP, &apConf);
+  Serial.printf("FTM responder enable = %d\n", (int)ftmRc);
+}
+
+// 0 = LR mode (ESP-NOW LR + BLE Coded test, default at boot): STA protocol restricted to
+//     LR only, ESP-NOW TX active. Trades away phone-AP-visibility/FTM - on this hardware,
+//     in practice, any LR bit in the STA protocol set makes the concurrently-running
+//     softAP invisible to a phone (see espnow_link.cpp), so LR mode and WiFi/FTM mode are
+//     mutually exclusive rather than run together.
+// 1 = WiFi/FTM mode: STA protocol forced to 11B only (long-range-capable but still a real
+//     802.11 PHY, unlike LR), ESP-NOW TX paused to give FTM's time-critical burst exchange
+//     a clearer shot at the shared radio, AP answers FTM requests.
+// A full esp_wifi_stop()/esp_wifi_start() cycle is used to change protocol rather than
+// just calling esp_wifi_set_protocol() live - protocol changes aren't reliably picked up
+// without it.
+static uint8_t s_appliedRadioMode = 0xFF;  // sentinel - forces the first apply at boot
+
+static void applyRadioMode(uint8_t mode) {
+  if (mode == s_appliedRadioMode) return;
+  bool lrMode = (mode == 0);
+  Serial.printf("Switching radio mode -> %s\n", lrMode ? "LR (espnow+ble)" : "WiFi/FTM (11b)");
+
+  espNowLinkSetActive(lrMode);
+  esp_wifi_stop();
+  esp_wifi_set_protocol(WIFI_IF_STA, lrMode ? WIFI_PROTOCOL_LR : WIFI_PROTOCOL_11B);
+  esp_wifi_start();
+  esp_wifi_set_max_tx_power(WIFI_TX_POWER_DBM_QUARTER);
+  applyApFtmResponder();
+
+  s_appliedRadioMode = mode;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);  // let USB CDC settle; debug-only, never load-bearing for results
@@ -51,26 +93,17 @@ void setup() {
   // land on the same channel (required for AP+STA concurrent operation anyway).
   bool apOk = WiFi.softAP(identityDeviceName(), HTTP_AP_PASSWORD, ESPNOW_CHANNEL);
   Serial.printf("softAP() = %s, IP = %s, mode = %d\n", apOk ? "true" : "false", WiFi.softAPIP().toString().c_str(), WiFi.getMode());
-  esp_wifi_set_max_tx_power(WIFI_TX_POWER_DBM_QUARTER);
-
-  // Answer FTM (802.11mc) range requests on this AP - lets a phone (Android WiFi RTT) or
-  // another board running the esp-idf ftm example range against this board directly.
-  // esp_wifi_get_config() first so this only adds the ftm_responder flag on top of
-  // whatever WiFi.softAP() just set (SSID/password/channel), rather than clobbering it.
-  wifi_config_t apConf{};
-  esp_wifi_get_config(WIFI_IF_AP, &apConf);
-  apConf.ap.ftm_responder = true;
-  esp_err_t ftmRc = esp_wifi_set_config(WIFI_IF_AP, &apConf);
-  Serial.printf("FTM responder enable = %d\n", (int)ftmRc);
 
   espNowLinkInit();
   bleLinkInit();
   webServerLinkInit();
+  applyRadioMode(0);  // boot into LR mode by default
 
   Serial.println("Init complete. AP SSID = BLE name = " + String(identityDeviceName()));
 }
 
 void loop() {
+  applyRadioMode(bleLinkGetRadioMode());
   espNowLinkLoop();
   bleLinkLoop();
   webServerLinkLoop();
