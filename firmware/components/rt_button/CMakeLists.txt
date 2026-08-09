@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/rt_button_sm.c"
+        "src/rt_button.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        driver
+        esp_timer
+)

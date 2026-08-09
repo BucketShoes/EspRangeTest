@@ -1,0 +1,18 @@
+# ESP32-C6: the primary target. Both devkits in use are C6 - a DevKitC-1 (WROOM-1, 8MB)
+# and a DevKitM-1 (MINI-1, 4MB) - with different antenna designs, which is itself one of
+# the things being measured.
+
+# NimBLE rather than Bluedroid: smaller, and multi-instance extended advertising is well
+# supported, which the coded-PHY advert channel depends on.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# Extended advertising is what carries coded PHY. A legacy 1M advert still runs alongside
+# it on a separate instance, purely so Chrome can discover the board - Chrome's scanner is
+# legacy-only and cannot see the coded one.
+CONFIG_BT_NIMBLE_EXT_ADV=y
+CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=2
+
+# Several peers plus the browser, which consumes a peripheral slot on every board it
+# connects to - hence the connection manager's slot rotation.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
