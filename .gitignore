@@ -1,7 +1,11 @@
 # ESP-IDF
 build/
-sdkconfig
-sdkconfig.old
+# Generated config: idf.py writes sdkconfig, PlatformIO writes sdkconfig.<env> per
+# environment. Keep the checked-in defaults, ignore everything generated from them.
+/sdkconfig
+/sdkconfig.*
+!/sdkconfig.defaults
+!/sdkconfig.defaults.*
 managed_components/
 dependencies.lock
 

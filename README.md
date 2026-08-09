@@ -64,21 +64,28 @@ read as loss, not as an absence of data — on a range walk that silence is the 
 | M5 | Map, GPS, pick up / put down, history |
 | M6 | Wi-Fi channels, FTM, LR mode, and the HTTP/WS transport for BLE-off testing |
 
-## Building
+## Building and flashing
 
-ESP-IDF, one build per target — C3 and S3 have no 802.15.4 radio, so channels are
-compile-time gated and the boot log reports what this build actually has.
+ESP-IDF (`framework = espidf`), driven through PlatformIO. PlatformIO downloads its own
+toolchain, so no separate ESP-IDF install is needed.
 
 ```sh
-cd firmware
-idf.py set-target esp32c6
-idf.py build flash monitor
+pio run -e devkitc -t upload -t monitor    # DevKitC-1 (WROOM-1, 8MB)
+pio run -e devkitm -t upload -t monitor    # DevKitM-1 (MINI-1, 4MB)
 ```
 
-PlatformIO can be used for upload, but note that official `platform-espressif32` does not
-support the C6 at all and PlatformIO is not merging community support for it — that path
-needs the [pioarduino](https://github.com/pioarduino/platform-espressif32) fork. `idf.py`
-is the guaranteed path.
+Both boards have first-class environments because the antenna difference between them is
+itself one of the things being measured. With both plugged in, name the port explicitly
+rather than trusting autodetect — `--upload-port COM23`.
+
+The widely-repeated "PlatformIO doesn't support the ESP32-C6" is about the **Arduino**
+framework. Both devkits have official board definitions listing `espidf` as supported, so
+the official platform is used. If that ever breaks, `platformio.ini` carries a commented
+[pioarduino](https://github.com/pioarduino/platform-espressif32) fallback.
+
+Plain ESP-IDF works too, against the same tree — `idf.py set-target esp32c6 && idf.py build
+flash monitor`. C3 and S3 build as well; they have no 802.15.4 radio, so that channel is
+compile-time gated and the boot log reports what the build actually has.
 
 `CONFIG_RT_SIM_PEER` (on by default) fabricates a peer that fades in and out, so the whole
 observation path can be exercised on one board with nothing else on the bench. Every report
@@ -90,7 +97,7 @@ All the logic worth testing is pure C with no ESP-IDF dependencies, so it runs w
 hardware:
 
 ```sh
-cd firmware/components/rt_core/test_host
+cd components/rt_core/test_host
 cmake -S . -B build-host && cmake --build build-host
 ctest --test-dir build-host --output-on-failure
 ```

@@ -1,0 +1,42 @@
+# Project defaults, applied by both idf.py and PlatformIO.
+#
+# Deliberately a single file rather than a base plus sdkconfig.defaults.<target>: PlatformIO
+# does not reliably pick up target-specific defaults, and a setting that silently fails to
+# apply is far more expensive to debug than a little redundancy. Everything here is valid on
+# C6, C3 and S3 - the only genuine per-target difference is the 802.15.4 radio, and that is
+# gated in code via SOC_IEEE802154_SUPPORTED, not by configuration.
+
+# Serial output goes over the devkit's native USB, so a report is visible with nothing
+# attached but the one cable used for flashing.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The report is the M0 deliverable, so it must not be filtered out by the default log level.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# No filesystem and no OTA: there is deliberately no flash logging (flash writes stall the
+# system, which would be its own contention source), so a single large app partition is the
+# right shape. Fits the 4MB MINI-1 and the 8MB WROOM-1 identically.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# Long-running walks: a watchdog trip mid-test would lose the run.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Keeps the floating point printf formatter out of the image - rt_report deliberately
+# formats its one fractional value by hand.
+CONFIG_NEWLIB_NANO_FORMAT=y
+
+# ---- BLE (used from M1 onward; set here so the radio config is settled before it matters)
+# NimBLE rather than Bluedroid: smaller, and multi-instance extended advertising is well
+# supported, which the coded-PHY advert channel depends on.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# Extended advertising is what carries coded PHY. A legacy 1M advert runs alongside it on a
+# separate instance, purely so Chrome can discover the board - Chrome's scanner is
+# legacy-only and cannot see the coded one.
+CONFIG_BT_NIMBLE_EXT_ADV=y
+CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=2
+
+# Several peers plus the browser, which consumes a peripheral slot on every board it
+# connects to - hence the connection manager's slot rotation.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
