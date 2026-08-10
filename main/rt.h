@@ -60,11 +60,14 @@ typedef struct __attribute__((packed)) {
 uint8_t  rt_node_id(void);
 uint32_t rt_ms(void);
 
-// Which radios are currently allowed to transmit. 0 = all of them; otherwise only
-// channel (solo-1), so one radio can be tested without the others competing for the antenna.
-extern volatile int g_solo;
+// Low-contention mode: which channel gets the antenna mostly to itself. 0 = all of them
+// (normal operation); otherwise only channel (g_lc-1) transmits, and everything else that
+// might touch the radio on its own schedule - the BLE coded-PHY scanner, the phone-UI
+// advert/connection cadence - backs off too. The point is a clean per-radio baseline, not
+// just "this channel stops sending packets while everyone else keeps using the antenna."
+extern volatile int g_lc;
 bool rt_tx_enabled(int chan);
-void rt_set_solo(int solo);
+void rt_set_lc(int lc);
 
 // Fill in a packet ready to send on this channel, advancing that channel's sequence number.
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
@@ -84,7 +87,7 @@ void rt_report(void);
 // Current state as short CSV text lines, for the web UI. Text rather than a binary format
 // on purpose: it is the same information the serial report shows, it is readable in a BLE
 // debugging app, and it needs no decoder on the browser side.
-//   S,<node>,<uptime_s>,<solo>
+//   S,<node>,<uptime_s>,<lc>
 //   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
 #define RT_LINE_MAX 72
 int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);

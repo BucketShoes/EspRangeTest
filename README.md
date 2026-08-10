@@ -7,7 +7,7 @@ Every radio broadcasts a small numbered packet on a timer and listens the rest o
 Every 2 seconds the results go out over serial:
 
 ```
-== node C5  up 42s  solo=off ==
+== node C5  up 42s  lc=off ==
   tx: espnow=168 ble_adv=84 154=168
   C6 espnow   rssi  -71 (avg  -68, -78..-59)  pdr  96% now /  98% all  rx 164 miss 3   251ms ago
   C6 ble_adv  rssi  -84 (avg  -81, -91..-70)  pdr  75% now /  82% all  rx  69 miss 15  502ms ago
@@ -40,10 +40,18 @@ reports "coded" without saying which. Measured range is the answer here, not a s
 ## GPIO9
 
 All three radios share one antenna and arbitrate for it, so running them together costs
-something. The BOOT button isolates them:
+something. The BOOT button switches low-contention mode, which isolates one channel so it
+gets a clean run at the antenna:
 
-- **tap** — cycle solo mode: all → espnow only → ble only → 154 only → all
+- **tap** — cycle: all → espnow only → ble only → 154 only → all
 - **hold** — back to all radios
+
+Low contention does more than stop the other two channels' own packets: it also stops the
+BLE coded-PHY scanner (a 100% duty-cycle receiver — the one continuous, always-on source of
+contention this board creates on its own) and slows the phone-UI advert and connection
+interval right down, trading a laggy link for airtime. Expect low-contention testing of
+anything other than `ble_adv` to be a bench-test affair with serial output, not a live walk
+with the phone connected.
 
 Switching resets the counters, since sequence numbers restart.
 
@@ -86,8 +94,8 @@ have no 802.15.4 radio, so that channel is skipped and the boot log says so.
 
 `docs/index.html` — connect over Web Bluetooth and watch the same numbers on a phone while
 you walk. Each board advertises as `ESPRT-xx`; tap **Connect a board** twice to watch both
-at once. The solo buttons switch radio isolation remotely, and it reconnects by itself when
-a board comes back into range.
+at once. The low-contention buttons switch radio isolation remotely, and it reconnects by
+itself when a board comes back into range.
 
 Web Bluetooth needs a secure context, so a `file://` page will not work:
 

@@ -4,8 +4,8 @@
 // time. Every couple of seconds the results table goes out over serial: RSSI and packet
 // loss per peer, per radio. Flash two boards, walk away with one, watch the numbers.
 //
-// GPIO9 (the BOOT button) cycles "solo" mode, so a single radio can be tested with the
-// others silent - the three share one antenna and arbitrate for it, so running them
+// GPIO9 (the BOOT button) cycles low-contention mode, so a single radio can be tested with
+// the others silent - the three share one antenna and arbitrate for it, so running them
 // together costs something. How much is one of the things worth measuring.
 
 #include <stdio.h>
@@ -48,8 +48,8 @@ static void wifi_start(void)
 }
 #endif
 
-// Tap cycles which radio is solo, long press returns to all-on. Polled, because a button
-// needs debouncing anyway and this keeps it off the interrupt path.
+// Tap cycles which radio is in low contention, long press returns to all-on. Polled,
+// because a button needs debouncing anyway and this keeps it off the interrupt path.
 static void button_task(void *pv)
 {
     (void)pv;
@@ -74,11 +74,11 @@ static void button_task(void *pv)
             t_down = rt_ms();
         } else if (now_down && down && !fired && (rt_ms() - t_down) > LONG_MS) {
             fired = true;
-            rt_set_solo(0);
+            rt_set_lc(0);
         } else if (!now_down && down) {
             down = false;
             if (!fired) {
-                rt_set_solo((g_solo + 1) % (CH_COUNT + 1));
+                rt_set_lc((g_lc + 1) % (CH_COUNT + 1));
             }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -129,7 +129,7 @@ void app_main(void)
 
     xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
 
-    ESP_LOGI(TAG, "running. GPIO9: tap = solo next radio, hold = all radios");
+    ESP_LOGI(TAG, "running. GPIO9: tap = next radio low-contention, hold = all radios");
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(REPORT_MS));

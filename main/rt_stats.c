@@ -10,7 +10,7 @@
 
 const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
-volatile int g_solo = 0;
+volatile int g_lc = 0;
 
 typedef struct {
     bool     seen;
@@ -52,15 +52,15 @@ uint8_t rt_node_id(void)
 
 bool rt_tx_enabled(int chan)
 {
-    return g_solo == 0 || g_solo == chan + 1;
+    return g_lc == 0 || g_lc == chan + 1;
 }
 
-void rt_set_solo(int solo)
+void rt_set_lc(int lc)
 {
-    if (solo < 0 || solo > CH_COUNT) {
+    if (lc < 0 || lc > CH_COUNT) {
         return;
     }
-    g_solo = solo;
+    g_lc = lc;
     // Sequence numbers restart, so wipe what we have rather than let the restart read as a
     // huge run of losses.
     memset(s_peers, 0, sizeof(s_peers));
@@ -68,8 +68,8 @@ void rt_set_solo(int solo)
     memset(s_tx_count, 0, sizeof(s_tx_count));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
 
-    printf("\n>>> solo = %s\n",
-           solo == 0 ? "off (all radios)" : rt_chan_name[solo - 1]);
+    printf("\n>>> low contention = %s\n",
+           lc == 0 ? "off (all radios)" : rt_chan_name[lc - 1]);
 }
 
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
@@ -155,7 +155,7 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
 
     if (n < max) {
         snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d", rt_node_id(),
-                 (unsigned long)(now / 1000), g_solo);
+                 (unsigned long)(now / 1000), g_lc);
     }
 
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
@@ -187,9 +187,9 @@ void rt_report(void)
 {
     const uint32_t now = rt_ms();
 
-    printf("\n== node %02X  up %lus  solo=%s ==\n", rt_node_id(),
+    printf("\n== node %02X  up %lus  lc=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000),
-           g_solo == 0 ? "off" : rt_chan_name[g_solo - 1]);
+           g_lc == 0 ? "off" : rt_chan_name[g_lc - 1]);
     printf("  tx: ");
     for (int c = 0; c < CH_COUNT; c++) {
         printf("%s=%lu%s", rt_chan_name[c], (unsigned long)s_tx_count[c],

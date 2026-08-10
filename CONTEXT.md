@@ -15,6 +15,14 @@ It is a throwaway instrument, not a product. It should be testable in the real w
 as possible — flash two boards, walk away with one, read numbers. No test suites, no
 frameworks, no abstraction that does not pay for itself immediately.
 
+**The only metric that matters is nonzero at max range** — a barely-there signal that still
+gets a packet through beats a strong one that doesn't reach as far. Throughput, data rate,
+and link speed are not goals here and never have been; nothing in this project should be
+read as caring about them, including on channels (BLE coded, 802.15.4) whose own design
+trades rate for range. This applies uniformly across every link kind measured, including
+future ones like FTM — the question is always "did anything arrive," never "how much" or
+"how fast."
+
 ### The central question: BLE coded PHY S=8
 
 The working hypothesis is that BLE coded S=8 wins. It has a trap:
@@ -49,12 +57,17 @@ similar distance, it is not.
   scale to more peers than can be connected at once.
 
 **Radio isolation**
-- Low-contention mode means "turn off everything but X" (or X plus a UI channel).
+- Low-contention mode means "turn off everything but X" (or X plus a UI channel) — and
+  "everything" means anything that touches the radio, not just the other two channels' own
+  measurement packets. (This drifted in an earlier pass: the code called it "solo mode" and
+  for a while only gated the three TX loops, leaving BLE's continuous scanner and the phone
+  UI running unchanged underneath. Fixed — see Coexistence below. If you see "solo" anywhere,
+  it's stale, not a second concept.)
 - **Operator-commanded only. No scheduler, no automatic cycling.** A mode stays until
   changed. The workflow is: command a switch, run a test, command another.
 - Most useful modes are "just X plus phone BLE" — first establish whether BLE-on hurts X at
   all, then do the real testing with BLE on.
-- GPIO9 (BOOT button): tap cycles solo mode, long press returns to all-on.
+- GPIO9 (BOOT button): tap cycles low-contention mode, long press returns to all-on.
 
 **802.15.4**
 - Raw frames only. **No Thread, no Zigbee.** Both ride the identical PHY (2.4 GHz O-QPSK,

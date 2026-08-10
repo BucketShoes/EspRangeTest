@@ -18,8 +18,23 @@
 
 static const char *TAG = "ui";
 
-#define UI_INSTANCE 1
-#define UI_ITVL     0x00A0  // 0.625ms units -> 100ms
+#define UI_INSTANCE  1
+#define UI_ITVL_FAST 0x00A0  // 0.625ms units -> 100ms - normal operation, phone walking a live test
+#define UI_ITVL_SLOW 0x0640  // -> 1000ms - low contention on some other channel: this link just
+                              // needs to still work, not be snappy
+
+// Connection parameters requested once a phone connects. Peripheral-preferred, so the phone
+// may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
+// responsive; "slow" trades that for airtime back to whichever channel is under test - a
+// laggy link and a slow initial connection are fine, this is a bench-test mode.
+#define CONN_ITVL_FAST_MIN 0x0018  // 30ms
+#define CONN_ITVL_FAST_MAX 0x0028  // 50ms
+#define CONN_ITVL_SLOW_MIN 0x0140  // 400ms
+#define CONN_ITVL_SLOW_MAX 0x0190  // 500ms
+#define CONN_LATENCY_SLOW  4       // plus up to 4 skipped events - up to ~2.5s of quiet when idle
+// Supervision timeout must clear (1 + latency) * itvl_max * 2 or the link drops on its own.
+#define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
+#define CONN_TIMEOUT_SLOW 800  // -> 8s, generous given the slow interval and added latency
 
 // 9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f and friends.
 #define UUID_BASE(b1)                                                              \
@@ -28,13 +43,50 @@ static const char *TAG = "ui";
 
 static const ble_uuid128_t UUID_SVC = UUID_BASE(0x01);
 static const ble_uuid128_t UUID_TX  = UUID_BASE(0x02);  // notify: one CSV line per packet
-static const ble_uuid128_t UUID_CMD = UUID_BASE(0x03);  // write: 1 byte, solo mode
+static const ble_uuid128_t UUID_CMD = UUID_BASE(0x03);  // write: 1 byte, low-contention channel
 
 static uint16_t s_tx_handle;
 static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static bool     s_subscribed;
 static uint8_t  s_own_addr_type;
 static char     s_name[16];
+static int      s_last_lc = -1;  // forces the first apply_lc_ble_params() to actually run
+
+static int start_adv(void);
+
+// Ask the current connection (if any) for slower or faster parameters. Peripheral-preferred
+// only - the central can decline - but it is what we ask for.
+static void apply_conn_params(bool slow)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
+        return;
+    }
+    struct ble_gap_upd_params p = { 0 };
+    p.itvl_min = slow ? CONN_ITVL_SLOW_MIN : CONN_ITVL_FAST_MIN;
+    p.itvl_max = slow ? CONN_ITVL_SLOW_MAX : CONN_ITVL_FAST_MAX;
+    p.latency  = slow ? CONN_LATENCY_SLOW : 0;
+    p.supervision_timeout = slow ? CONN_TIMEOUT_SLOW : CONN_TIMEOUT_FAST;
+    const int rc = ble_gap_update_params(s_conn, &p);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "update_params rc=%d", rc);
+    }
+}
+
+// Called whenever g_lc changes. Low contention on some other channel means this link only
+// needs to keep working, not be responsive - see the UI_ITVL_SLOW / CONN_*_SLOW comments.
+static void apply_lc_ble_params(void)
+{
+    const bool slow = g_lc != 0;
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
+        // Only touch the advertising instance while nothing is connected on it - restarting
+        // it while connected would open a second, unwanted connection slot rather than
+        // change anything about the link already up.
+        ble_gap_ext_adv_stop(UI_INSTANCE);
+        start_adv();
+    } else {
+        apply_conn_params(slow);
+    }
+}
 
 static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
                      struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -46,7 +98,7 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
     if (ble_hs_mbuf_to_flat(ctxt->om, &b, sizeof(b), &len) != 0 || len < 1) {
         return BLE_ATT_ERR_UNLIKELY;
     }
-    rt_set_solo(b);
+    rt_set_lc(b);
     return 0;
 }
 
@@ -81,8 +133,6 @@ static const struct ble_gatt_svc_def s_svcs[] = {
     { 0 },
 };
 
-static int start_adv(void);
-
 static int gap_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -99,6 +149,7 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
                                                        BLE_GAP_LE_PHY_CODED_MASK,
                                                        BLE_GAP_LE_PHY_CODED_S8);
             ESP_LOGI(TAG, "requested coded S=8 on the connection, rc=%d", rc);
+            apply_conn_params(g_lc != 0);
         } else {
             start_adv();
         }
@@ -146,8 +197,8 @@ static int start_adv(void)
     p.own_addr_type = s_own_addr_type;
     p.primary_phy   = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
-    p.itvl_min      = UI_ITVL;
-    p.itvl_max      = UI_ITVL;
+    p.itvl_min      = g_lc != 0 ? UI_ITVL_SLOW : UI_ITVL_FAST;
+    p.itvl_max      = p.itvl_min;
     p.tx_power      = 9;
     p.sid           = 1;
 
@@ -227,6 +278,15 @@ void rt_ui_on_sync(uint8_t own_addr_type)
 // gives a partial update rather than nothing at all.
 void rt_ui_notify(void)
 {
+    // Polled here rather than driven from rt_set_lc() directly: this runs on the ui task,
+    // not whatever task/ISR context a low-contention change was requested from (button task,
+    // or the NimBLE host task via cmd_write). Every REPORT_MS is plenty responsive for a
+    // deliberate, operator-commanded mode switch.
+    if (g_lc != s_last_lc) {
+        s_last_lc = g_lc;
+        apply_lc_ble_params();
+    }
+
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
         return;
     }

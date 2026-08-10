@@ -32,6 +32,7 @@ static const char *TAG = "ble";
 
 static uint8_t s_own_addr_type;
 static bool    s_ready;
+static bool    s_scanning;
 
 // Advertising payload: one manufacturer-specific AD structure wrapping rt_pkt_t.
 static int set_adv_data(void)
@@ -147,8 +148,23 @@ static void start_scan(void)
     if (rc != 0) {
         ESP_LOGE(TAG, "ext_disc rc=%d", rc);
     } else {
+        s_scanning = true;
         ESP_LOGI(TAG, "scanning coded PHY");
     }
+}
+
+// The scan window equals the interval above, so this is a 100% duty-cycle receiver - the
+// single biggest, and only continuous, source of radio contention this board creates on its
+// own. It only earns its keep while ble_adv is actually the channel being measured; low
+// contention on anything else stops it so that channel gets a clean run at the antenna.
+static void stop_scan(void)
+{
+    if (!s_scanning) {
+        return;
+    }
+    ble_gap_disc_cancel();
+    s_scanning = false;
+    ESP_LOGI(TAG, "coded PHY scan stopped (low contention on another channel)");
 }
 
 // Refresh the advert so each one carries a new sequence number. Data cannot be swapped while
@@ -166,8 +182,12 @@ static void adv_task(void *pv)
             if (set_adv_data() == 0) {
                 ble_gap_ext_adv_start(ADV_INSTANCE, 0, 0);
             }
+            if (!s_scanning) {
+                start_scan();
+            }
         } else {
             ble_gap_ext_adv_stop(ADV_INSTANCE);
+            stop_scan();
         }
     }
 }
