@@ -21,6 +21,16 @@ static void on_rx(const esp_now_recv_info_t *info, const uint8_t *data, int len)
     rt_rx(data, len, CH_ESPNOW, info->rx_ctrl->rssi, 0);
 }
 
+// esp_now_send() returning ESP_OK only means the driver queued the frame, not that it went
+// out - the actual air result lands here, asynchronously.
+static void on_send(const uint8_t *mac_addr, esp_now_send_status_t status)
+{
+    (void)mac_addr;
+    if (status != ESP_NOW_SEND_SUCCESS) {
+        rt_tx_failed(CH_ESPNOW);
+    }
+}
+
 static void tx_task(void *pv)
 {
     (void)pv;
@@ -28,7 +38,12 @@ static void tx_task(void *pv)
         if (rt_tx_enabled(CH_ESPNOW)) {
             rt_pkt_t p;
             rt_fill(&p, CH_ESPNOW, 20);
-            esp_now_send(BCAST, (const uint8_t *)&p, sizeof(p));
+            // A non-OK return here means the driver would not even queue it - the common
+            // case is ESP_ERR_ESPNOW_NO_MEM under heavy contention. A queued send that fails
+            // in the air is reported later, in on_send().
+            if (esp_now_send(BCAST, (const uint8_t *)&p, sizeof(p)) != ESP_OK) {
+                rt_tx_failed(CH_ESPNOW);
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(TX_PERIOD_MS));
     }
@@ -38,6 +53,7 @@ void rt_espnow_start(void)
 {
     RT_TRY(TAG, esp_now_init());
     RT_TRY(TAG, esp_now_register_recv_cb(on_rx));
+    RT_TRY(TAG, esp_now_register_send_cb(on_send));
 
     esp_now_peer_info_t peer = { 0 };
     memcpy(peer.peer_addr, BCAST, 6);

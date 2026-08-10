@@ -117,6 +117,16 @@ time. 802.15.4 normal RX is assigned the *lowest* priority, so Wi-Fi and BLE ste
 whenever they want. Assume coex mostly works and BLE can stay on, but expect 802.15.4 to
 suffer most when everything runs together — quantifying that is what solo mode is for.
 
+Measured, not just expected: with ESP-NOW and BLE both running, **every single 802.15.4
+transmit is rejected**, immediately, from the very first packet - `esp_ieee802154_transmit_failed`
+fires with `ESP_IEEE802154_TX_ERR_COEXIST` at 100%, not intermittently. This was invisible
+until now because that callback runs in ISR context (`ieee802154_isr` calls it directly) and
+the original code discarded the error silently - the same "swallowed failure looks identical
+to a genuinely untested channel" trap as everywhere else in this project. In `all` mode,
+802.15.4 is not "disadvantaged", it is **completely absent** - the only way to get any
+802.15.4 reading at all right now is solo mode. Whether that is acceptable or means 802.15.4
+needs a coex priority hint is a call for the owner, not something to fix silently.
+
 **FTM.** Errata WIFI-9686 says the C6 cannot be an FTM initiator (T3 unreadable). The owner
 reports it working on this hardware, which is v0.2 silicon. Treat initiator support as
 present but verify per board.

@@ -69,6 +69,12 @@ void rt_set_solo(int solo);
 // Fill in a packet ready to send on this channel, advancing that channel's sequence number.
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
 
+// Count a send that the radio itself rejected or failed to get on air - distinct from the
+// packet just not arriving, which is what the whole rig measures. Without this, a channel
+// stuck at 100% loss looks identical whether it is genuinely not being heard or never left
+// the antenna in the first place.
+void rt_tx_failed(int chan);
+
 // Record a reception. Ignores anything that is not ours.
 void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi);
 

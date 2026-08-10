@@ -32,6 +32,7 @@ static struct {
 
 static uint32_t s_tx_seq[CH_COUNT];
 static uint32_t s_tx_count[CH_COUNT];
+static uint32_t s_tx_fail[CH_COUNT];
 static uint8_t  s_node_id;
 
 uint32_t rt_ms(void)
@@ -65,6 +66,7 @@ void rt_set_solo(int solo)
     memset(s_peers, 0, sizeof(s_peers));
     memset(s_tx_seq, 0, sizeof(s_tx_seq));
     memset(s_tx_count, 0, sizeof(s_tx_count));
+    memset(s_tx_fail, 0, sizeof(s_tx_fail));
 
     printf("\n>>> solo = %s\n",
            solo == 0 ? "off (all radios)" : rt_chan_name[solo - 1]);
@@ -77,6 +79,13 @@ void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
     p->txdbm = txdbm;
     p->seq   = s_tx_seq[chan]++;
     s_tx_count[chan]++;
+}
+
+void rt_tx_failed(int chan)
+{
+    if (chan >= 0 && chan < CH_COUNT) {
+        s_tx_fail[chan]++;
+    }
 }
 
 void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
@@ -183,8 +192,12 @@ void rt_report(void)
            g_solo == 0 ? "off" : rt_chan_name[g_solo - 1]);
     printf("  tx: ");
     for (int c = 0; c < CH_COUNT; c++) {
-        printf("%s=%lu%s ", rt_chan_name[c], (unsigned long)s_tx_count[c],
+        printf("%s=%lu%s", rt_chan_name[c], (unsigned long)s_tx_count[c],
                rt_tx_enabled(c) ? "" : "(off)");
+        if (s_tx_fail[c]) {
+            printf("(%lu failed)", (unsigned long)s_tx_fail[c]);
+        }
+        printf(" ");
     }
     printf("\n");
 

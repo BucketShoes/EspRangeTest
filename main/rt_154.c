@@ -32,10 +32,34 @@ static const char *TAG = "154";
 
 static uint8_t s_seq;
 
+static const char *tx_err_name(esp_ieee802154_tx_error_t e)
+{
+    switch (e) {
+    case ESP_IEEE802154_TX_ERR_NONE:        return "none";
+    case ESP_IEEE802154_TX_ERR_CCA_BUSY:    return "cca_busy";   // channel found busy
+    case ESP_IEEE802154_TX_ERR_ABORT:       return "abort";
+    case ESP_IEEE802154_TX_ERR_NO_ACK:      return "no_ack";     // frames here never request one
+    case ESP_IEEE802154_TX_ERR_INVALID_ACK: return "invalid_ack";
+    case ESP_IEEE802154_TX_ERR_COEXIST:     return "coexist";    // Wi-Fi/BLE arbiter refused the slot
+    case ESP_IEEE802154_TX_ERR_SECURITY:    return "security";
+    default:                                return "?";
+    }
+}
+
+// esp_ieee802154_transmit_failed() runs in ISR context (called straight out of
+// ieee802154_isr), where ESP_LOGW's underlying vfprintf takes a newlib lock and aborts. So
+// the ISR only records the reason; tx_task, an ordinary task, notices the change and logs it.
+static volatile esp_ieee802154_tx_error_t s_last_tx_err = ESP_IEEE802154_TX_ERR_NONE;
+static volatile bool                      s_tx_err_pending;
+
 static void tx_task(void *pv)
 {
     (void)pv;
     for (;;) {
+        if (s_tx_err_pending) {
+            s_tx_err_pending = false;
+            ESP_LOGW(TAG, "transmit failed: %s", tx_err_name(s_last_tx_err));
+        }
         if (rt_tx_enabled(CH_154)) {
             uint8_t frame[1 + HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN];
             uint8_t *f = &frame[1];
@@ -82,7 +106,12 @@ void esp_ieee802154_transmit_done(const uint8_t *frame, const uint8_t *ack,
 
 void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
 {
-    (void)frame; (void)error;
+    (void)frame;
+    if (error != s_last_tx_err) {
+        s_last_tx_err    = error;
+        s_tx_err_pending = true;
+    }
+    rt_tx_failed(CH_154);
 }
 
 void rt_154_start(void)
