@@ -11,6 +11,9 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+// Must be included explicitly: an undefined macro evaluates to 0 in #if, so without this
+// the whole radio would silently compile itself out on a chip that has one.
+#include "soc/soc_caps.h"
 
 #include "rt.h"
 
@@ -77,9 +80,9 @@ void esp_ieee802154_transmit_done(const uint8_t *frame, const uint8_t *ack,
     (void)frame; (void)ack; (void)ack_info;
 }
 
-void esp_ieee802154_transmit_failed(esp_ieee802154_tx_error_t error)
+void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
 {
-    (void)error;
+    (void)frame; (void)error;
 }
 
 void rt_154_start(void)

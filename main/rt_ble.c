@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "nimble/hci_common.h"  // BLE_HCI_LE_PHY_CODED, BLE_HCI_SCAN_FILT_NO_WL
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 
