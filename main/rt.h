@@ -6,6 +6,21 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "esp_err.h"
+#include "esp_log.h"
+
+// Log a failing init call instead of aborting on it. ESP_ERROR_CHECK turns any one bad
+// return into a panic-and-reboot, which on a board with three radios means a boot loop that
+// tells you nothing about which radio was unhappy. A range tester with two working radios is
+// still useful; a rebooting one is not.
+#define RT_TRY(tag, call)                                                        \
+    do {                                                                         \
+        const esp_err_t _e = (call);                                             \
+        if (_e != ESP_OK) {                                                      \
+            ESP_LOGE(tag, "%s -> %s", #call, esp_err_to_name(_e));               \
+        }                                                                        \
+    } while (0)
+
 enum {
     CH_ESPNOW = 0,
     CH_BLE_ADV,   // extended advertising, coded PHY, S=8 requested

@@ -31,19 +31,19 @@ static const char *TAG = "rt";
 
 static void wifi_start(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    RT_TRY(TAG, esp_netif_init());
+    RT_TRY(TAG, esp_event_loop_create_default());
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    RT_TRY(TAG, esp_wifi_init(&cfg));
+    RT_TRY(TAG, esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    RT_TRY(TAG, esp_wifi_set_mode(WIFI_MODE_STA));
+    RT_TRY(TAG, esp_wifi_start());
 
     // Both boards must sit on the same channel for ESP-NOW; nothing here associates to an
     // AP, so pinning it is enough.
-    ESP_ERROR_CHECK(esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
-    esp_wifi_set_max_tx_power(78);  // 0.25dBm units, ~19.5dBm
+    RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
+    RT_TRY(TAG, esp_wifi_set_max_tx_power(78));  // 0.25dBm units, ~19.5dBm
 }
 
 // Tap cycles which radio is solo, long press returns to all-on. Polled, because a button
@@ -87,23 +87,35 @@ void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_flash_erase();
         err = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(err);
+    if (err != ESP_OK) {
+        // Nothing here stores anything - Wi-Fi config is kept in RAM - so a bad NVS
+        // partition is worth a complaint, not a boot loop.
+        ESP_LOGW(TAG, "nvs_flash_init -> %s (continuing)", esp_err_to_name(err));
+    }
 
     esp_chip_info_t info;
     esp_chip_info(&info);
     ESP_LOGI(TAG, "%s rev v%d.%d, node %02X", CONFIG_IDF_TARGET,
              info.revision / 100, info.revision % 100, rt_node_id());
 
+    // Brought up one at a time with a line before each, so if anything does take the board
+    // down the last line printed names the culprit.
+    ESP_LOGI(TAG, "init: wifi");
     wifi_start();
+    ESP_LOGI(TAG, "init: espnow");
     rt_espnow_start();
+    ESP_LOGI(TAG, "init: ble");
     rt_ble_start();
+#if SOC_IEEE802154_SUPPORTED
+    ESP_LOGI(TAG, "init: 802.15.4");
     rt_154_start();
-#if !SOC_IEEE802154_SUPPORTED
+#else
     ESP_LOGW(TAG, "no 802.15.4 radio on this target - that channel is disabled");
 #endif
+    ESP_LOGI(TAG, "init: done");
 
     xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
 

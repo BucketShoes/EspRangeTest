@@ -6,9 +6,16 @@
 # C6, C3 and S3 - the only genuine per-target difference is the 802.15.4 radio, and that is
 # gated in code via SOC_IEEE802154_SUPPORTED, not by configuration.
 
-# Serial output goes over the devkit's native USB, so a report is visible with nothing
-# attached but the one cable used for flashing.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# Console on the UART bridge - the port you flash through and the one the ROM bootloader
+# already prints to. Getting this wrong sends the app log and any panic backtrace out the
+# *other* USB socket, which looks exactly like a silent reboot loop.
+# The native USB port stays available as a secondary console, so either cable works.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# Hold at the panic instead of rebooting. A backtrace you can read beats a board that
+# resets before you finish scrolling.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
 
 # The report is the M0 deliverable, so it must not be filtered out by the default log level.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

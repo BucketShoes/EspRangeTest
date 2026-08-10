@@ -87,13 +87,13 @@ void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_erro
 
 void rt_154_start(void)
 {
-    ESP_ERROR_CHECK(esp_ieee802154_enable());
-    ESP_ERROR_CHECK(esp_ieee802154_set_channel(CHANNEL));
-    ESP_ERROR_CHECK(esp_ieee802154_set_panid(PANID));
-    ESP_ERROR_CHECK(esp_ieee802154_set_short_address(rt_node_id()));
-    ESP_ERROR_CHECK(esp_ieee802154_set_promiscuous(true));   // hear everything, filter in rt_rx
-    ESP_ERROR_CHECK(esp_ieee802154_set_rx_when_idle(true));
-    ESP_ERROR_CHECK(esp_ieee802154_receive());
+    RT_TRY(TAG, esp_ieee802154_enable());
+    RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
+    RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
+    RT_TRY(TAG, esp_ieee802154_set_short_address(rt_node_id()));
+    RT_TRY(TAG, esp_ieee802154_set_promiscuous(true));  // hear everything, filter in rt_rx
+    RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(true));
+    RT_TRY(TAG, esp_ieee802154_receive());
 
     xTaskCreate(tx_task, "154_tx", 3072, NULL, 4, NULL);
     ESP_LOGI(TAG, "channel %d, tx every %dms", CHANNEL, TX_PERIOD_MS);

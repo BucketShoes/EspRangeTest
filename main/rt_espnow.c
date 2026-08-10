@@ -36,15 +36,15 @@ static void tx_task(void *pv)
 
 void rt_espnow_start(void)
 {
-    ESP_ERROR_CHECK(esp_now_init());
-    ESP_ERROR_CHECK(esp_now_register_recv_cb(on_rx));
+    RT_TRY(TAG, esp_now_init());
+    RT_TRY(TAG, esp_now_register_recv_cb(on_rx));
 
     esp_now_peer_info_t peer = { 0 };
     memcpy(peer.peer_addr, BCAST, 6);
     peer.channel = 0;  // whatever channel the interface is already on
     peer.ifidx   = WIFI_IF_STA;
     peer.encrypt = false;
-    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+    RT_TRY(TAG, esp_now_add_peer(&peer));
 
     xTaskCreate(tx_task, "espnow_tx", 3072, NULL, 4, NULL);
     ESP_LOGI(TAG, "broadcasting every %dms", TX_PERIOD_MS);

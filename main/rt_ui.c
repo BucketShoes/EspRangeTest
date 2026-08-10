@@ -190,8 +190,19 @@ void rt_ui_init(void)
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
-    ESP_ERROR_CHECK(ble_gatts_count_cfg(s_svcs));
-    ESP_ERROR_CHECK(ble_gatts_add_svcs(s_svcs));
+
+    // NimBLE return codes, not esp_err_t - and a GATT registration failure should disable
+    // the phone UI, not take the whole rig down with it.
+    int rc = ble_gatts_count_cfg(s_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "gatts_count_cfg rc=%d - phone UI disabled", rc);
+        return;
+    }
+    rc = ble_gatts_add_svcs(s_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "gatts_add_svcs rc=%d - phone UI disabled", rc);
+        return;
+    }
     ble_svc_gap_device_name_set(s_name);
 }
 

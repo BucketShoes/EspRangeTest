@@ -195,7 +195,13 @@ static void host_task(void *pv)
 
 void rt_ble_start(void)
 {
-    ESP_ERROR_CHECK(nimble_port_init());
+    const esp_err_t err = nimble_port_init();
+    if (err != ESP_OK) {
+        // Losing BLE costs the coded-PHY channel and the phone UI, but ESP-NOW and 802.15.4
+        // can still produce a useful walk, so this must not be fatal.
+        ESP_LOGE(TAG, "nimble_port_init -> %s; BLE disabled", esp_err_to_name(err));
+        return;
+    }
     rt_ui_init();  // GATT services must be registered before the host starts
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(host_task);
