@@ -1,108 +1,65 @@
 # EspRangeTest
 
-An instrument for answering one question: **which of the ESP32-C6's radios and PHYs gets a
-nonzero amount of data through at the greatest distance?**
+A throwaway range tester for the ESP32-C6. Flash two boards, walk away with one, watch how
+far each radio still gets packets through.
 
-The working hypothesis is BLE coded PHY at S=8, but S=8 has a trap. It is only reliably
-negotiated *after* a connection is established, and connections can only be established
-while close. If you walk out, lose the connection, and coded adverts don't actually go out
-at S=8, the loss is permanent and BLE coded is not the answer. So the pivotal experiment is
-whether **coded adverts alone carry data at S=8 range, with no connection**. Everything
-else here is supporting apparatus.
+Every radio broadcasts a small numbered packet on a timer and listens the rest of the time.
+Every 2 seconds the results go out over serial:
 
-## Shape of the system
+```
+== node C5  up 42s  solo=off ==
+  tx: espnow=168 ble_adv=84 154=168
+  C6 espnow   rssi  -71 (avg  -68, -78..-59)  pdr  96% now /  98% all  rx 164 miss 3   251ms ago
+  C6 ble_adv  rssi  -84 (avg  -81, -91..-70)  pdr  75% now /  82% all  rx  69 miss 15  502ms ago
+  C6 154      rssi  -88 (avg  -85, -95..-77)  pdr  61% now /  70% all  rx 118 miss 74  253ms ago lqi 96
+```
 
-The boards are dumb. Each reports only what it directly hears, keyed on **(peer, channel)**,
-keeping the last 20 receptions per pair in RAM. There is no mesh, no relaying, no scheduler,
-and no persistent logging — flash writes stall the system, which would be its own
-contention source, and a log is useless without knowing where you were anyway. Position,
-history and export live in the browser next to the GPS fix.
+`pdr now` is the current 2-second window, `pdr all` is since boot. Loss is counted from gaps
+in the sequence numbers.
 
-A *channel* here means a link kind, not an RF channel:
-
-    ble_adv_coded  ble_conn  espnow  espnow_lr
-    wifi_beacon    wifi_lr_beacon    ieee802154   ftm
-
-BLE legacy advertising exists solely so Chrome can discover a board. It is never a range
-measurement and has no channel slot.
-
-### Modes
-
-Radio isolation is operator-commanded — there is no scheduler and no automatic cycling. A
-mode is locked in until you change it from the UI or the button. `normal` is everything on;
-every other mode is "just X", with a keep-UI-BLE flag (default on) that leaves the phone
-link up at slowed intervals. The intended method is to first find out whether BLE-on hurts
-X at all, then do the real testing with BLE on.
-
-**GPIO9**: tap advances to the next mode, long press returns to `normal`. The long press is
-the only way back on a board whose mode has taken the UI link off the air — which is also
-why `rt_mode` auto-reverts to `normal` after 10 minutes without UI contact.
-
-## Status: M0 — observable skeleton
-
-No radios yet. What exists is the spine: the observation table, the mode/radio truth table,
-the GPIO9 button, and a serial dump of the peer × channel table.
-
-    === node 0x42 | mode=just_ble epoch=1 ui_ble=on | up 4s ===
-    peer chan             last   mean   miss stale     age  rx  phy
-    0x11 ble_adv_coded    -73  -72.8      0     4   2450ms   8  ble_coded_s8
-    0x11 espnow           -69  -68.8      0     9   2450ms   8  wifi_11b
-    0x11 ieee802154       -96  -95.8     14     9   2450ms   8  154_oqpsk
-
-`miss` counts sequence numbers absent *between* the receptions held in the window; `stale`
-is how many are presumed missed since the last one arrived, from its age. Silence has to
-read as loss, not as an absence of data — on a range walk that silence is the whole point.
-
-### Remaining milestones
+## Radios
 
 | | |
 |---|---|
-| M1 | BLE GATT transport, CBOR protocol, SPA with multi-peer connect, coded adverts end to end |
-| M2 | **The S=8 experiment** — the project's central question |
-| M3 | ESP-NOW + 802.15.4 |
-| M4 | Connection manager (slot rotation — connection slots are scarce) |
-| M5 | Map, GPS, pick up / put down, history |
-| M6 | Wi-Fi channels, FTM, LR mode, and the HTTP/WS transport for BLE-off testing |
+| **ESP-NOW** | broadcast, no pairing, no ack — every 250ms |
+| **BLE** | extended advertising on the **coded PHY**, and a coded-PHY scanner — every 500ms |
+| **802.15.4** | raw frames, channel 26 — every 250ms |
 
-## Building and flashing
+Raw 802.15.4 rather than Thread or Zigbee on purpose: both of those ride this exact PHY
+(2.4GHz O-QPSK, 250kbps), so the range is identical. The stacks only add addressing and
+routing, plus a join procedure that can fail at the far end for reasons that have nothing
+to do with radio range.
 
-ESP-IDF (`framework = espidf`), driven through PlatformIO. PlatformIO downloads its own
-toolchain, so no separate ESP-IDF install is needed.
+**On BLE coded:** S=8 is the long-range hypothesis, but it's only reliably negotiated after
+a connection, and connections can only be made close up. If you walk out, lose it, and
+adverts aren't really going out at S=8, that loss is permanent. So this tests adverts alone,
+with no connection. Note that the C6 is Bluetooth 5.3 and the feature that would let a
+receiver read back S=2 vs S=8 (Advertising Coding Selection) is 5.4 — so the controller
+reports "coded" without saying which. Measured range is the answer here, not a status field.
+
+## GPIO9
+
+All three radios share one antenna and arbitrate for it, so running them together costs
+something. The BOOT button isolates them:
+
+- **tap** — cycle solo mode: all → espnow only → ble only → 154 only → all
+- **hold** — back to all radios
+
+Switching resets the counters, since sequence numbers restart.
+
+## Build and flash
 
 ```sh
 pio run -e devkitc -t upload -t monitor    # DevKitC-1 (WROOM-1, 8MB)
 pio run -e devkitm -t upload -t monitor    # DevKitM-1 (MINI-1, 4MB)
 ```
 
-Both boards have first-class environments because the antenna difference between them is
-itself one of the things being measured. With both plugged in, name the port explicitly
-rather than trusting autodetect — `--upload-port COM23`.
+With both boards plugged in, name the port: `--upload-port COM23`.
 
-The widely-repeated "PlatformIO doesn't support the ESP32-C6" is about the **Arduino**
-framework. Both devkits have official board definitions listing `espidf` as supported, so
-the official platform is used. If that ever breaks, `platformio.ini` carries a commented
-[pioarduino](https://github.com/pioarduino/platform-espressif32) fallback.
+PlatformIO downloads its own ESP-IDF, so no separate install is needed. `idf.py build flash
+monitor` works against the same tree if you have IDF set up. C3 and S3 also build — they
+have no 802.15.4 radio, so that channel is skipped and the boot log says so.
 
-Plain ESP-IDF works too, against the same tree — `idf.py set-target esp32c6 && idf.py build
-flash monitor`. C3 and S3 build as well; they have no 802.15.4 radio, so that channel is
-compile-time gated and the boot log reports what the build actually has.
+## Not done yet
 
-`CONFIG_RT_SIM_PEER` (on by default) fabricates a peer that fades in and out, so the whole
-observation path can be exercised on one board with nothing else on the bench. Every report
-prints a line saying the data is simulated. Turn it off before collecting anything real.
-
-## Host tests
-
-All the logic worth testing is pure C with no ESP-IDF dependencies, so it runs without
-hardware:
-
-```sh
-cd components/rt_core/test_host
-cmake -S . -B build-host && cmake --build build-host
-ctest --test-dir build-host --output-on-failure
-```
-
-Built with `-Werror -Wconversion -Wshadow`. Covers the wire format, the sliding observation
-window (sequence gaps, 16-bit wraparound, duplicates, epoch resets, staleness, millisecond
-rollover), the mode/radio isolation truth table, report rendering and truncation safety, and
-button debounce and press timing.
+Web UI over Web Bluetooth, Wi-Fi beacons, LR mode, and FTM ranging.

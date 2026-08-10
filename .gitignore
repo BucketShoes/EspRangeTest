@@ -12,9 +12,6 @@ dependencies.lock
 # PlatformIO
 .pio/
 
-# host test builds
-build-host/
-
 # web
 node_modules/
 dist/
