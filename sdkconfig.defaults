@@ -40,3 +40,7 @@ CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=2
 # Several peers plus the browser, which consumes a peripheral slot on every board it
 # connects to - hence the connection manager's slot rotation.
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
+
+# A results line is up to ~66 bytes and each one goes out as a single notification. The
+# default 23-byte ATT MTU would truncate them, so ask for a large one up front.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247

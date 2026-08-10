@@ -1,0 +1,226 @@
+// The phone-facing side: a connectable legacy advert and a tiny GATT service that streams
+// the results table as text.
+//
+// Legacy advertising, on 1M, deliberately: Chrome's scanner cannot see extended or coded
+// adverts at all, so the coded beacon in rt_ble.c is invisible to a browser. That beacon is
+// the thing being measured; this is just the window onto it, and the two run as separate
+// advertising instances.
+
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_log.h"
+#include "host/ble_hs.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
+
+#include "rt.h"
+
+static const char *TAG = "ui";
+
+#define UI_INSTANCE 1
+#define UI_ITVL     0x00A0  // 0.625ms units -> 100ms
+
+// 9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f and friends.
+#define UUID_BASE(b1)                                                              \
+    BLE_UUID128_INIT(0x5f, 0x4e, 0x3d, 0x2c, 0x6b, 0x5f, 0x1e, 0x9a,               \
+                     0x7e, 0x4a, 0x2c, 0x1b, (b1), 0x00, 0x7a, 0x9c)
+
+static const ble_uuid128_t UUID_SVC = UUID_BASE(0x01);
+static const ble_uuid128_t UUID_TX  = UUID_BASE(0x02);  // notify: one CSV line per packet
+static const ble_uuid128_t UUID_CMD = UUID_BASE(0x03);  // write: 1 byte, solo mode
+
+static uint16_t s_tx_handle;
+static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
+static bool     s_subscribed;
+static uint8_t  s_own_addr_type;
+static char     s_name[16];
+
+static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
+                     struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)conn_handle; (void)attr_handle; (void)arg;
+
+    uint8_t b = 0;
+    uint16_t len = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, &b, sizeof(b), &len) != 0 || len < 1) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    rt_set_solo(b);
+    return 0;
+}
+
+static const struct ble_gatt_svc_def s_svcs[] = {
+    {
+        .type            = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid            = &UUID_SVC.u,
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid       = &UUID_TX.u,
+                .access_cb  = NULL,
+                .flags      = BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &s_tx_handle,
+            },
+            {
+                .uuid      = &UUID_CMD.u,
+                .access_cb = cmd_write,
+                .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+            },
+            { 0 },
+        },
+    },
+    { 0 },
+};
+
+static int start_adv(void);
+
+static int gap_cb(struct ble_gap_event *event, void *arg)
+{
+    (void)arg;
+
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            s_conn = event->connect.conn_handle;
+            ESP_LOGI(TAG, "phone connected");
+            // Ask for coded PHY. If the phone declines, the link simply stays on 1M - this
+            // must never be allowed to cost us the UI connection, so the result is logged
+            // and otherwise ignored.
+            const int rc = ble_gap_set_prefered_le_phy(s_conn, BLE_GAP_LE_PHY_CODED_MASK,
+                                                       BLE_GAP_LE_PHY_CODED_MASK,
+                                                       BLE_GAP_LE_PHY_CODED_S8);
+            ESP_LOGI(TAG, "requested coded S=8 on the connection, rc=%d", rc);
+        } else {
+            start_adv();
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "phone disconnected (reason %d)", event->disconnect.reason);
+        s_conn       = BLE_HS_CONN_HANDLE_NONE;
+        s_subscribed = false;
+        start_adv();
+        return 0;
+
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        if (event->subscribe.attr_handle == s_tx_handle) {
+            s_subscribed = event->subscribe.cur_notify;
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        // 1 = 1M, 2 = 2M, 3 = coded. Which coding (S=2 or S=8) is not reported: that needs
+        // Bluetooth 5.4 Advertising Coding Selection and the C6 is 5.3.
+        ESP_LOGI(TAG, "connection PHY now tx=%d rx=%d",
+                 event->phy_updated.tx_phy, event->phy_updated.rx_phy);
+        return 0;
+
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        start_adv();
+        return 0;
+
+    case BLE_GAP_EVENT_MTU:
+        ESP_LOGI(TAG, "MTU %d", event->mtu.value);
+        return 0;
+
+    default:
+        return 0;
+    }
+}
+
+static int start_adv(void)
+{
+    struct ble_gap_ext_adv_params p = { 0 };
+    p.connectable   = 1;
+    p.scannable     = 1;
+    p.legacy_pdu    = 1;
+    p.own_addr_type = s_own_addr_type;
+    p.primary_phy   = BLE_HCI_LE_PHY_1M;
+    p.secondary_phy = BLE_HCI_LE_PHY_1M;
+    p.itvl_min      = UI_ITVL;
+    p.itvl_max      = UI_ITVL;
+    p.tx_power      = 9;
+    p.sid           = 1;
+
+    int8_t pwr = 0;
+    int rc = ble_gap_ext_adv_configure(UI_INSTANCE, &p, &pwr, gap_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ui adv configure rc=%d", rc);
+        return rc;
+    }
+
+    // Flags + complete local name. The 128-bit service UUID will not fit alongside the name
+    // in a 31-byte legacy advert, so the browser filters on the name prefix instead and
+    // names the service in optionalServices.
+    const size_t nlen = strlen(s_name);
+    uint8_t ad[3 + 2 + sizeof(s_name)];
+    size_t  n = 0;
+    ad[n++] = 2;
+    ad[n++] = 0x01;  // flags
+    ad[n++] = 0x06;  // LE General Discoverable, BR/EDR not supported
+    ad[n++] = (uint8_t)(nlen + 1);
+    ad[n++] = 0x09;  // complete local name
+    memcpy(&ad[n], s_name, nlen);
+    n += nlen;
+
+    struct os_mbuf *buf = os_msys_get_pkthdr(n, 0);
+    if (buf == NULL) {
+        return BLE_HS_ENOMEM;
+    }
+    if (os_mbuf_append(buf, ad, n) != 0) {
+        os_mbuf_free_chain(buf);
+        return BLE_HS_ENOMEM;
+    }
+    rc = ble_gap_ext_adv_set_data(UI_INSTANCE, buf);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ui adv set_data rc=%d", rc);
+        return rc;
+    }
+
+    rc = ble_gap_ext_adv_start(UI_INSTANCE, 0, 0);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ui adv start rc=%d", rc);
+    }
+    return rc;
+}
+
+void rt_ui_init(void)
+{
+    snprintf(s_name, sizeof(s_name), "ESPRT-%02X", rt_node_id());
+
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+    ESP_ERROR_CHECK(ble_gatts_count_cfg(s_svcs));
+    ESP_ERROR_CHECK(ble_gatts_add_svcs(s_svcs));
+    ble_svc_gap_device_name_set(s_name);
+}
+
+void rt_ui_on_sync(uint8_t own_addr_type)
+{
+    s_own_addr_type = own_addr_type;
+    if (start_adv() == 0) {
+        ESP_LOGI(TAG, "advertising as %s (legacy 1M, so Chrome can see it)", s_name);
+    }
+}
+
+// One notification per line. Each line is complete and independent, so a marginal link
+// gives a partial update rather than nothing at all.
+void rt_ui_notify(void)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
+        return;
+    }
+
+    static char lines[1 + RT_MAX_PEERS * CH_COUNT][RT_LINE_MAX];
+    const int   n = rt_snapshot_lines(lines, (int)(sizeof(lines) / sizeof(lines[0])));
+
+    for (int i = 0; i < n; i++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(lines[i], strlen(lines[i]));
+        if (om == NULL) {
+            return;  // out of buffers; the next cycle will carry the same state anyway
+        }
+        if (ble_gatts_notify_custom(s_conn, s_tx_handle, om) != 0) {
+            return;
+        }
+    }
+}

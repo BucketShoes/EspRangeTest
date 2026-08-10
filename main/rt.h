@@ -45,6 +45,20 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi);
 // Print the whole table.
 void rt_report(void);
 
+// Current state as short CSV text lines, for the web UI. Text rather than a binary format
+// on purpose: it is the same information the serial report shows, it is readable in a BLE
+// debugging app, and it needs no decoder on the browser side.
+//   S,<node>,<uptime_s>,<solo>
+//   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
+#define RT_LINE_MAX 72
+int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);
+
 void rt_espnow_start(void);
 void rt_ble_start(void);
 void rt_154_start(void);
+
+// Connectable legacy advert + GATT service, so a phone browser can see the numbers.
+// Legacy because Chrome's scanner cannot see extended or coded adverts at all.
+void rt_ui_on_sync(uint8_t own_addr_type);
+void rt_ui_init(void);
+void rt_ui_notify(void);

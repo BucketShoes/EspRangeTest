@@ -112,5 +112,6 @@ void app_main(void)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(REPORT_MS));
         rt_report();
+        rt_ui_notify();
     }
 }

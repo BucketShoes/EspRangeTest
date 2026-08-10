@@ -60,6 +60,24 @@ PlatformIO downloads its own ESP-IDF, so no separate install is needed. `idf.py 
 monitor` works against the same tree if you have IDF set up. C3 and S3 also build — they
 have no 802.15.4 radio, so that channel is skipped and the boot log says so.
 
+## Phone UI
+
+`docs/index.html` — connect over Web Bluetooth and watch the same numbers on a phone while
+you walk. Each board advertises as `ESPRT-xx`; tap **Connect a board** twice to watch both
+at once. The solo buttons switch radio isolation remotely, and it reconnects by itself when
+a board comes back into range.
+
+Web Bluetooth needs a secure context, so a `file://` page will not work:
+
+- **GitHub Pages** — repo Settings → Pages → deploy from branch, folder `/docs`.
+- **Locally** — `python3 -m http.server` in `docs/`, then open `http://localhost:8000`
+  (localhost counts as secure).
+
+Chrome only. Its scanner cannot see extended or coded adverts, which is why the board runs a
+separate plain legacy advert just for the browser — that one is not a measurement, it's the
+window onto the measurements. On connect the board asks to move the phone link to coded S=8
+and logs whether the phone accepted.
+
 ## Not done yet
 
-Web UI over Web Bluetooth, Wi-Fi beacons, LR mode, and FTM ranging.
+Wi-Fi beacons, LR mode, and FTM ranging.

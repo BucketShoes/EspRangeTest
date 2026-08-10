@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>EspRangeTest</title>
+<style>
+  :root{--bg:#12141a;--card:#1c1f28;--line:#2c313d;--fg:#e8eaf0;--dim:#8b93a7;
+        --ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--acc:#60a5fa}
+  *{box-sizing:border-box}
+  body{margin:0;padding:12px;background:var(--bg);color:var(--fg);
+       font:15px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif}
+  h1{font-size:17px;margin:0 0 10px}
+  button{background:var(--card);color:var(--fg);border:1px solid var(--line);
+         border-radius:9px;padding:11px 14px;font-size:15px;cursor:pointer}
+  button:active{background:#262b36}
+  button.pri{background:var(--acc);color:#06121f;border-color:var(--acc);font-weight:600}
+  button.on{background:var(--acc);color:#06121f;border-color:var(--acc)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .dev{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:12px;margin-bottom:12px}
+  .dev h2{font-size:15px;margin:0 0 4px;display:flex;justify-content:space-between;
+          align-items:center;gap:8px}
+  .meta{color:var(--dim);font-size:12px;margin-bottom:10px}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);
+     text-align:right;padding:4px 5px;font-weight:600}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:6px 5px;text-align:right;border-top:1px solid var(--line);font-size:14px}
+  .ch{font-weight:600}
+  .big{font-size:17px;font-weight:700}
+  .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.dim{color:var(--dim)}
+  .stale{opacity:.4}
+  #err{color:var(--bad);font-size:13px;min-height:18px;margin-bottom:8px}
+  .hint{color:var(--dim);font-size:13px;line-height:1.5}
+  code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+
+<h1>EspRangeTest</h1>
+<div class="row">
+  <button class="pri" id="add">Connect a board</button>
+  <button id="wake" title="Keep the screen on while walking">Keep awake</button>
+</div>
+<div id="err"></div>
+<div id="devs"></div>
+
+<div class="hint" id="hint">
+  Flash two boards, leave one behind, and walk away with the other plus this page.<br><br>
+  Connect to either board — each one reports what <em>it</em> can hear, so the numbers are
+  for the link between them. Tap <b>Connect a board</b> again to add the second one.<br><br>
+  Needs Chrome on Android or desktop. Web Bluetooth won't work from a
+  <code>file://</code> page — use the GitHub Pages URL, or <code>python3 -m http.server</code>
+  and open <code>http://localhost:8000</code>.
+</div>
+
+<script>
+const SVC = '9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const TX  = '9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const CMD = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
+const SOLO = ['all', 'espnow', 'ble_adv', '154'];
+
+const devs = new Map();   // name -> {name, node, uptime, solo, cmd, rows:Map, seen}
+const $err = document.getElementById('err');
+const $devs = document.getElementById('devs');
+
+const fail = m => { $err.textContent = m; };
+
+document.getElementById('add').onclick = async () => {
+  $err.textContent = '';
+  if (!navigator.bluetooth) {
+    return fail('No Web Bluetooth here. Chrome on Android or desktop, over https:// or localhost.');
+  }
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'ESPRT-' }],
+      optionalServices: [SVC],
+    });
+    await connect(dev);
+  } catch (e) {
+    if (e.name !== 'NotFoundError') fail(e.message);   // NotFoundError = user cancelled
+  }
+};
+
+async function connect(dev) {
+  const gatt = await dev.gatt.connect();
+  const svc  = await gatt.getPrimaryService(SVC);
+  const tx   = await svc.getCharacteristic(TX);
+  let cmd = null;
+  try { cmd = await svc.getCharacteristic(CMD); } catch (e) { /* older firmware */ }
+
+  const d = devs.get(dev.name) || { rows: new Map() };
+  Object.assign(d, { name: dev.name, cmd, live: true, seen: Date.now() });
+  devs.set(dev.name, d);
+
+  tx.addEventListener('characteristicvaluechanged', ev => {
+    onLine(d, new TextDecoder().decode(ev.target.value));
+  });
+  await tx.startNotifications();
+
+  dev.addEventListener('gattserverdisconnected', () => {
+    d.live = false;
+    render();
+    // The board is very likely just out of range rather than gone, which on a range walk
+    // is the normal case - so keep retrying instead of making the operator re-pair.
+    const retry = () => dev.gatt.connected
+      ? null
+      : connect(dev).catch(() => setTimeout(retry, 2000));
+    setTimeout(retry, 2000);
+  });
+
+  document.getElementById('hint').style.display = 'none';
+  render();
+}
+
+function onLine(d, line) {
+  const f = line.trim().split(',');
+  d.seen = Date.now();
+
+  if (f[0] === 'S') {
+    d.node = f[1]; d.uptime = +f[2]; d.solo = +f[3];
+  } else if (f[0] === 'R') {
+    // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
+    d.rows.set(f[1] + '/' + f[2], {
+      peer: f[1], ch: f[2], rssi: +f[3], avg: +f[4], min: +f[5], max: +f[6],
+      pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
+    });
+  }
+  render();
+}
+
+async function setSolo(d, v) {
+  if (!d.cmd) return;
+  try { await d.cmd.writeValue(new Uint8Array([v])); } catch (e) { fail(e.message); }
+}
+
+const pdrClass = p => p < 0 ? 'dim' : p >= 90 ? 'ok' : p >= 50 ? 'warn' : 'bad';
+const rssiClass = r => r >= -70 ? 'ok' : r >= -90 ? 'warn' : 'bad';
+const pdrTxt = p => p < 0 ? '–' : p + '%';
+
+function render() {
+  $devs.innerHTML = '';
+  for (const d of devs.values()) {
+    const el = document.createElement('div');
+    el.className = 'dev';
+
+    const solo = document.createElement('div');
+    solo.className = 'row';
+    SOLO.forEach((label, i) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      if (d.solo === i) b.className = 'on';
+      b.onclick = () => setSolo(d, i);
+      solo.appendChild(b);
+    });
+
+    const rows = [...d.rows.values()].sort(
+      (a, b) => (a.peer + a.ch).localeCompare(b.peer + b.ch));
+
+    el.innerHTML =
+      `<h2><span>${d.name || '?'}</span>` +
+      `<span class="${d.live ? 'ok' : 'bad'}" style="font-size:12px">` +
+      `${d.live ? 'connected' : 'reconnecting…'}</span></h2>` +
+      `<div class="meta">up ${d.uptime ?? '?'}s · isolating: ` +
+      `<b>${SOLO[d.solo ?? 0]}</b></div>`;
+    el.appendChild(solo);
+
+    if (!rows.length) {
+      const p = document.createElement('div');
+      p.className = 'hint';
+      p.textContent = 'Nothing heard yet. Is the other board powered up?';
+      el.appendChild(p);
+    } else {
+      const t = document.createElement('table');
+      t.innerHTML = '<tr><th>peer / radio</th><th>rssi</th><th>avg</th>' +
+                    '<th>pdr</th><th>all</th><th>miss</th></tr>';
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        // Grey out a row that has gone quiet - on a walk, silence is the result.
+        if (r.age > 5000) tr.className = 'stale';
+        tr.innerHTML =
+          `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
+          `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
+          `<td class="dim">${r.avg}</td>` +
+          `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
+          `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
+          `<td class="dim">${r.miss}</td>`;
+        t.appendChild(tr);
+      }
+      el.appendChild(t);
+    }
+    $devs.appendChild(el);
+  }
+}
+
+// A phone that sleeps mid-walk stops rendering and drops the link.
+let lock = null;
+document.getElementById('wake').onclick = async function () {
+  try {
+    if (lock) { await lock.release(); lock = null; this.classList.remove('on'); }
+    else { lock = await navigator.wakeLock.request('screen'); this.classList.add('on'); }
+  } catch (e) { fail('Screen wake lock unavailable: ' + e.message); }
+};
+
+setInterval(render, 1000);   // keep ages and stale styling moving between packets
+</script>
+</body>
+</html>

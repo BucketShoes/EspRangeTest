@@ -139,6 +139,41 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
     l->last_ms = rt_ms();
 }
 
+int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
+{
+    const uint32_t now = rt_ms();
+    int            n   = 0;
+
+    if (n < max) {
+        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d", rt_node_id(),
+                 (unsigned long)(now / 1000), g_solo);
+    }
+
+    for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
+        if (!s_peers[i].used) {
+            continue;
+        }
+        for (int c = 0; c < CH_COUNT && n < max; c++) {
+            rt_link *l = &s_peers[i].ch[c];
+            if (!l->seen) {
+                continue;
+            }
+            const uint32_t wtot = l->wrx + l->wmissed;
+            const int      wpdr = wtot ? (int)((l->wrx * 100) / wtot) : -1;
+            const uint32_t tot  = l->rx + l->missed;
+            const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
+            const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
+
+            snprintf(out[n++], RT_LINE_MAX, "R,%02X,%s,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu",
+                     s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
+                     l->rssi_min, l->rssi_max, wpdr, tpdr,
+                     (unsigned long)l->rx, (unsigned long)l->missed,
+                     (unsigned long)(now - l->last_ms));
+        }
+    }
+    return n;
+}
+
 void rt_report(void)
 {
     const uint32_t now = rt_ms();

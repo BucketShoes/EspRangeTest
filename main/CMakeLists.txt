@@ -13,6 +13,7 @@ idf_component_register(
         "rt_espnow.c"
         "rt_ble.c"
         "rt_154.c"
+        "rt_ui.c"
     INCLUDE_DIRS
         "."
     REQUIRES
