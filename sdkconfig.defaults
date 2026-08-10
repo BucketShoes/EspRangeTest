@@ -40,9 +40,12 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 #
 # 4MB on both boards even though the WROOM-1 has 8MB: partitions.csv only needs 3.06MB, and
 # one identical layout across both boards is worth more here than the unused headroom.
+#
+# Only the flash size is pinned. The MMU page size is left to ESP-IDF to derive from it -
+# bootloader and app read the same sdkconfig, so they derive the same value and agree. An
+# explicit page size here would be one more knob to get wrong, which is how we got here.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
-CONFIG_MMU_PAGE_SIZE_64KB=y
 
 # Long-running walks: a watchdog trip mid-test would lose the run.
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

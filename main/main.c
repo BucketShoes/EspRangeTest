@@ -29,6 +29,7 @@ static const char *TAG = "rt";
 #define LONG_MS     800
 #define WIFI_CHAN   1
 
+#if RT_STAGE >= 1
 static void wifi_start(void)
 {
     RT_TRY(TAG, esp_netif_init());
@@ -45,6 +46,7 @@ static void wifi_start(void)
     RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
     RT_TRY(TAG, esp_wifi_set_max_tx_power(78));  // 0.25dBm units, ~19.5dBm
 }
+#endif
 
 // Tap cycles which radio is solo, long press returns to all-on. Polled, because a button
 // needs debouncing anyway and this keeps it off the interrupt path.
@@ -101,19 +103,27 @@ void app_main(void)
     ESP_LOGI(TAG, "%s rev v%d.%d, node %02X", CONFIG_IDF_TARGET,
              info.revision / 100, info.revision % 100, rt_node_id());
 
+    ESP_LOGI(TAG, "stage %d (raise RT_STAGE in platformio.ini to add radios)", RT_STAGE);
+
     // Brought up one at a time with a line before each, so if anything does take the board
     // down the last line printed names the culprit.
+#if RT_STAGE >= 1
     ESP_LOGI(TAG, "init: wifi");
     wifi_start();
     ESP_LOGI(TAG, "init: espnow");
     rt_espnow_start();
+#endif
+#if RT_STAGE >= 2
     ESP_LOGI(TAG, "init: ble");
     rt_ble_start();
+#endif
+#if RT_STAGE >= 3
 #if SOC_IEEE802154_SUPPORTED
     ESP_LOGI(TAG, "init: 802.15.4");
     rt_154_start();
 #else
     ESP_LOGW(TAG, "no 802.15.4 radio on this target - that channel is disabled");
+#endif
 #endif
     ESP_LOGI(TAG, "init: done");
 
@@ -123,7 +133,15 @@ void app_main(void)
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(REPORT_MS));
+#if RT_STAGE == 0
+        // No radios to report on yet - just prove the board is alive and stays alive.
+        ESP_LOGI(TAG, "alive %lus (stage 0, no radios)",
+                 (unsigned long)(rt_ms() / 1000));
+#else
         rt_report();
+#endif
+#if RT_STAGE >= 4
         rt_ui_notify();
+#endif
     }
 }

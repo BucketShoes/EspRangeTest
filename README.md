@@ -47,6 +47,28 @@ something. The BOOT button isolates them:
 
 Switching resets the counters, since sequence numbers restart.
 
+## If it won't boot: the bring-up ladder
+
+`build_flags = -DRT_STAGE=n` in `platformio.ini` controls how much starts up:
+
+| stage | brings up |
+|---|---|
+| 0 | heartbeat only — proves toolchain, partition table, flash config, console |
+| 1 | + Wi-Fi and ESP-NOW |
+| 2 | + BLE coded beacon and scanner |
+| 3 | + 802.15.4 |
+| 4 | + phone UI over BLE GATT (the finished thing) |
+
+Start at 0 and raise it one step at a time, flashing after each. A board that dies at a known
+stage names the layer that broke it. **If even stage 0 fails, the problem is build
+configuration, not radio code** — every failure on this project so far has been in that
+layer: console routed to the wrong USB socket, an app partition smaller than the image, and a
+flash/MMU page size mismatch between what PlatformIO set and what ESP-IDF derived.
+
+After changing anything in `sdkconfig.defaults` or `partitions.csv`, run
+`pio run -e devkitm -t fullclean` first — the bootloader is built from the same config, and a
+stale bootloader with a fresh app is its own class of failure.
+
 ## Build and flash
 
 ```sh

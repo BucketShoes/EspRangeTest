@@ -9,6 +9,21 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
+// Bring-up ladder. Set with -DRT_STAGE=n in platformio.ini. Raise it one step at a time,
+// flashing after each, so a board that will not boot names the layer that broke it instead
+// of leaving the whole thing suspect.
+//
+//   0  heartbeat only - proves toolchain, partition table, flash config, console
+//   1  + wi-fi and esp-now
+//   2  + ble coded beacon and scanner
+//   3  + 802.15.4
+//   4  + phone UI over BLE GATT        <- the finished thing
+//
+// Defaults to 0: a board that boots is worth more than one that does everything.
+#ifndef RT_STAGE
+#define RT_STAGE 0
+#endif
+
 // Log a failing init call instead of aborting on it. ESP_ERROR_CHECK turns any one bad
 // return into a panic-and-reboot, which on a board with three radios means a boot loop that
 // tells you nothing about which radio was unhappy. A range tester with two working radios is

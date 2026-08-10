@@ -183,7 +183,9 @@ static void on_sync(void)
         s_ready = true;
     }
     start_scan();
+#if RT_STAGE >= 4
     rt_ui_on_sync(s_own_addr_type);
+#endif
 }
 
 static void host_task(void *pv)
@@ -202,7 +204,9 @@ void rt_ble_start(void)
         ESP_LOGE(TAG, "nimble_port_init -> %s; BLE disabled", esp_err_to_name(err));
         return;
     }
+#if RT_STAGE >= 4
     rt_ui_init();  // GATT services must be registered before the host starts
+#endif
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(host_task);
     xTaskCreate(adv_task, "ble_adv", 4096, NULL, 4, NULL);
