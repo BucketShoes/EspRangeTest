@@ -50,6 +50,15 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+// Notify-only: nothing to read or write here, but NimBLE's sanity check rejects a NULL
+// access_cb outright regardless of which flags are set, so this has to exist.
+static int tx_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                        struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)conn_handle; (void)attr_handle; (void)ctxt; (void)arg;
+    return BLE_ATT_ERR_READ_NOT_PERMITTED;
+}
+
 static const struct ble_gatt_svc_def s_svcs[] = {
     {
         .type            = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -57,7 +66,7 @@ static const struct ble_gatt_svc_def s_svcs[] = {
         .characteristics = (struct ble_gatt_chr_def[]){
             {
                 .uuid       = &UUID_TX.u,
-                .access_cb  = NULL,
+                .access_cb  = tx_access_cb,
                 .flags      = BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &s_tx_handle,
             },

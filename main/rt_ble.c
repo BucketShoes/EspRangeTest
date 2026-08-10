@@ -197,6 +197,12 @@ static void host_task(void *pv)
 
 void rt_ble_start(void)
 {
+    // The adv_task below stops and restarts the coded-PHY instance every 500ms so each
+    // advert carries a fresh sequence number - that restart is how loss gets measured, not a
+    // bug. NimBLE logs each stop/start at INFO, which drowns the report in the same noise;
+    // silence just that tag.
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+
     const esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
         // Losing BLE costs the coded-PHY channel and the phone UI, but ESP-NOW and 802.15.4
