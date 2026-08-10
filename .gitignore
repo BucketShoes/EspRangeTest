@@ -11,6 +11,9 @@ dependencies.lock
 
 # PlatformIO
 .pio/
+# Machine-local PlatformIO overrides (COM ports etc) - never committed, so they survive
+# pulls rather than fighting with the tracked platformio.ini.
+*.local.ini
 
 # web
 node_modules/
