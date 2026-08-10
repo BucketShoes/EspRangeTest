@@ -1,0 +1,15 @@
+# Explicit partition table, referenced by BOTH platformio.ini and sdkconfig.defaults.
+#
+# Do not drop this in favour of a CONFIG_PARTITION_TABLE_* preset: PlatformIO sets the
+# partition table from the board manifest and ignores those options, so the two build
+# systems silently disagreed and produced a 1MB app partition for a 1.15MB image. The
+# failure showed up only at boot, as a reset loop.
+#
+# 3MB app, no OTA slot - nothing here self-updates, and the same layout fits both the 4MB
+# MINI-1 and the 8MB WROOM-1. Wi-Fi, BLE and 802.15.4 in one image is around 1.2MB, so this
+# leaves plenty of headroom.
+#
+# Name,     Type, SubType,  Offset,   Size
+nvs,        data, nvs,      0x9000,   0x6000
+phy_init,   data, phy,      0xf000,   0x1000
+factory,    app,  factory,  0x10000,  0x300000
