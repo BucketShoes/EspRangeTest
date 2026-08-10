@@ -25,6 +25,25 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
+# Flash size and MMU page size, pinned explicitly.
+#
+# On the C6 the flash MMU page size is CONFIGURABLE and ESP-IDF derives it from the flash
+# size unless told otherwise. The bootloader then checks the app image header against its own
+# page size and refuses to run it on a mismatch:
+#
+#   E cpu_start: Invalid app image header
+#
+# PlatformIO sets flash size from the board manifest while sdkconfig derives the page size
+# separately, so the two can disagree - the same dual-source-of-truth trap as the partition
+# table. Pinning both here, and matching board_build.flash_size in platformio.ini, removes
+# the derivation entirely.
+#
+# 4MB on both boards even though the WROOM-1 has 8MB: partitions.csv only needs 3.06MB, and
+# one identical layout across both boards is worth more here than the unused headroom.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_MMU_PAGE_SIZE_64KB=y
+
 # Long-running walks: a watchdog trip mid-test would lose the run.
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 
