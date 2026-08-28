@@ -52,24 +52,51 @@ uint8_t rt_node_id(void)
 
 bool rt_tx_enabled(int chan)
 {
-    return g_lc == 0 || g_lc == chan + 1;
+    if (g_lc == 0) {
+        return true;
+    }
+    if (g_lc == LC_WIFI_UI) {
+        return chan == CH_ESPNOW;
+    }
+    return g_lc == chan + 1;
 }
 
-void rt_set_lc(int lc)
+// LC_WIFI_UI isn't "channel (lc-1)" like the others, so callers that want to name the current
+// mode (the report header, the >>> line) go through this instead of indexing rt_chan_name
+// directly - that indexing is only valid for lc in 1..CH_COUNT.
+static const char *lc_name(int lc)
 {
-    if (lc < 0 || lc > CH_COUNT) {
-        return;
+    if (lc == 0) {
+        return "off (all radios)";
     }
-    g_lc = lc;
+    if (lc == LC_WIFI_UI) {
+        return "wifi+phone (BLE off, LR forced off)";
+    }
+    return rt_chan_name[lc - 1];
+}
+
+void rt_stats_reset(void)
+{
     // Sequence numbers restart, so wipe what we have rather than let the restart read as a
     // huge run of losses.
     memset(s_peers, 0, sizeof(s_peers));
     memset(s_tx_seq, 0, sizeof(s_tx_seq));
     memset(s_tx_count, 0, sizeof(s_tx_count));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
+}
 
-    printf("\n>>> low contention = %s\n",
-           lc == 0 ? "off (all radios)" : rt_chan_name[lc - 1]);
+void rt_set_lc(int lc)
+{
+    if (lc < 0 || lc >= LC_COUNT) {
+        return;
+    }
+    g_lc = lc;
+    rt_stats_reset();
+    // Set g_lc first: rt_apply_lc_radios() and everything it reaches decide what to do by
+    // reading g_lc, not the argument.
+    rt_apply_lc_radios(lc);
+
+    printf("\n>>> low contention = %s\n", lc_name(lc));
 }
 
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
@@ -154,8 +181,8 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     int            n   = 0;
 
     if (n < max) {
-        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d", rt_node_id(),
-                 (unsigned long)(now / 1000), g_lc);
+        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d", rt_node_id(),
+                 (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0);
     }
 
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
@@ -187,9 +214,12 @@ void rt_report(void)
 {
     const uint32_t now = rt_ms();
 
-    printf("\n== node %02X  up %lus  lc=%s ==\n", rt_node_id(),
-           (unsigned long)(now / 1000),
-           g_lc == 0 ? "off" : rt_chan_name[g_lc - 1]);
+    // wifi= is the Wi-Fi *driver*, not the ESP-NOW tx gate on the line below. The two are
+    // separate on purpose: a mode that mutes ESP-NOW while leaving the driver up is the exact
+    // failure this rig kept measuring, so the report has to be able to show that state.
+    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s ==\n", rt_node_id(),
+           (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
+           rt_wifi_active() ? "on" : "off");
     printf("  tx: ");
     for (int c = 0; c < CH_COUNT; c++) {
         printf("%s=%lu%s", rt_chan_name[c], (unsigned long)s_tx_count[c],

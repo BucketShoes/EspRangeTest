@@ -202,7 +202,14 @@ static void on_sync(void)
     if (start_adv() == 0) {
         s_ready = true;
     }
-    start_scan();
+    // Same gate adv_task applies, applied here too rather than left for its first tick: the
+    // scanner is the one continuous claim on the antenna this board makes, and half a second
+    // of it is half a second of a channel under test not getting what the mode promised. In
+    // practice the board always boots at lc=0, so this only matters if that ever stops
+    // being true - which is exactly the kind of assumption that put 802.15.4 at 100% loss.
+    if (rt_tx_enabled(CH_BLE_ADV)) {
+        start_scan();
+    }
 #if RT_STAGE >= 4
     rt_ui_on_sync(s_own_addr_type);
 #endif

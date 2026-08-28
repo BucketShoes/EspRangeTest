@@ -59,9 +59,12 @@
 const SVC = '9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const TX  = '9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const CMD = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
-const SOLO = ['all', 'espnow', 'ble_adv', '154'];
+// Index must match the LC_* values in main/rt.h - 'wifi' is LC_WIFI_UI, the mode where BLE
+// (including this connection) goes fully silent, so its own row disappears from the phone
+// once selected. That is expected, not a dropped link.
+const LC = ['all', 'espnow', 'ble_adv', '154', 'wifi'];
 
-const devs = new Map();   // name -> {name, node, uptime, solo, cmd, rows:Map, seen}
+const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen}
 const $err = document.getElementById('err');
 const $devs = document.getElementById('devs');
 
@@ -91,7 +94,7 @@ async function connect(dev) {
   try { cmd = await svc.getCharacteristic(CMD); } catch (e) { /* older firmware */ }
 
   const d = devs.get(dev.name) || { rows: new Map() };
-  Object.assign(d, { name: dev.name, cmd, live: true, seen: Date.now() });
+  Object.assign(d, { name: dev.name, dev, cmd, live: true, userDisconnected: false, seen: Date.now() });
   devs.set(dev.name, d);
 
   tx.addEventListener('characteristicvaluechanged', ev => {
@@ -102,9 +105,10 @@ async function connect(dev) {
   dev.addEventListener('gattserverdisconnected', () => {
     d.live = false;
     render();
-    // The board is very likely just out of range rather than gone, which on a range walk
-    // is the normal case - so keep retrying instead of making the operator re-pair.
-    const retry = () => dev.gatt.connected
+    if (d.userDisconnected) return;  // deliberate - do not fight the operator
+    // Otherwise the board is very likely just out of range rather than gone, which on a
+    // range walk is the normal case - so keep retrying instead of making the operator re-pair.
+    const retry = () => dev.gatt.connected || d.userDisconnected
       ? null
       : connect(dev).catch(() => setTimeout(retry, 2000));
     setTimeout(retry, 2000);
@@ -114,12 +118,17 @@ async function connect(dev) {
   render();
 }
 
+function disconnect(dev, d) {
+  d.userDisconnected = true;
+  if (dev.gatt.connected) dev.gatt.disconnect();
+}
+
 function onLine(d, line) {
   const f = line.trim().split(',');
   d.seen = Date.now();
 
   if (f[0] === 'S') {
-    d.node = f[1]; d.uptime = +f[2]; d.solo = +f[3];
+    d.node = f[1]; d.uptime = +f[2]; d.lc = +f[3]; d.lr = +f[4];
   } else if (f[0] === 'R') {
     // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
     d.rows.set(f[1] + '/' + f[2], {
@@ -130,7 +139,7 @@ function onLine(d, line) {
   render();
 }
 
-async function setSolo(d, v) {
+async function setLc(d, v) {
   if (!d.cmd) return;
   try { await d.cmd.writeValue(new Uint8Array([v])); } catch (e) { fail(e.message); }
 }
@@ -145,15 +154,19 @@ function render() {
     const el = document.createElement('div');
     el.className = 'dev';
 
-    const solo = document.createElement('div');
-    solo.className = 'row';
-    SOLO.forEach((label, i) => {
+    const modes = document.createElement('div');
+    modes.className = 'row';
+    LC.forEach((label, i) => {
       const b = document.createElement('button');
       b.textContent = label;
-      if (d.solo === i) b.className = 'on';
-      b.onclick = () => setSolo(d, i);
-      solo.appendChild(b);
+      if (d.lc === i) b.className = 'on';
+      b.onclick = () => setLc(d, i);
+      modes.appendChild(b);
     });
+    const disc = document.createElement('button');
+    disc.textContent = 'Disconnect';
+    disc.onclick = () => disconnect(d.dev, d);
+    modes.appendChild(disc);
 
     const rows = [...d.rows.values()].sort(
       (a, b) => (a.peer + a.ch).localeCompare(b.peer + b.ch));
@@ -162,9 +175,9 @@ function render() {
       `<h2><span>${d.name || '?'}</span>` +
       `<span class="${d.live ? 'ok' : 'bad'}" style="font-size:12px">` +
       `${d.live ? 'connected' : 'reconnecting…'}</span></h2>` +
-      `<div class="meta">up ${d.uptime ?? '?'}s · isolating: ` +
-      `<b>${SOLO[d.solo ?? 0]}</b></div>`;
-    el.appendChild(solo);
+      `<div class="meta">up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
+      `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b></div>`;
+    el.appendChild(modes);
 
     if (!rows.length) {
       const p = document.createElement('div');

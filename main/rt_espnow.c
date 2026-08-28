@@ -16,6 +16,11 @@ static const char *TAG = "espnow";
 
 static const uint8_t BCAST[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
+// Set once esp_now_init() has run. Low-contention modes stop and restart the Wi-Fi driver,
+// and main.c's wifi_apply() calls rt_espnow_resume() on every start - including the very
+// first one, which happens before this file has been initialised at all.
+static bool s_inited;
+
 static void on_rx(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
     rt_rx(data, len, CH_ESPNOW, info->rx_ctrl->rssi, 0);
@@ -49,18 +54,35 @@ static void tx_task(void *pv)
     }
 }
 
-void rt_espnow_start(void)
+// Called after every esp_wifi_start(), so the peer table is known-good rather than assumed to
+// have survived the stop. It does survive - the peer list belongs to the ESP-NOW module, which
+// esp_wifi_stop() does not touch - so the usual outcome here is ESP_ERR_ESPNOW_EXIST, which is
+// success by another name. Re-adding costs two lines; finding out the hard way, mid-walk, that
+// an assumption about somebody else's driver was wrong costs a test run.
+void rt_espnow_resume(void)
 {
-    RT_TRY(TAG, esp_now_init());
-    RT_TRY(TAG, esp_now_register_recv_cb(on_rx));
-    RT_TRY(TAG, esp_now_register_send_cb(on_send));
-
+    if (!s_inited) {
+        return;
+    }
     esp_now_peer_info_t peer = { 0 };
     memcpy(peer.peer_addr, BCAST, 6);
     peer.channel = 0;  // whatever channel the interface is already on
     peer.ifidx   = WIFI_IF_STA;
     peer.encrypt = false;
-    RT_TRY(TAG, esp_now_add_peer(&peer));
+
+    const esp_err_t err = esp_now_add_peer(&peer);
+    if (err != ESP_OK && err != ESP_ERR_ESPNOW_EXIST) {
+        ESP_LOGE(TAG, "esp_now_add_peer -> %s", esp_err_to_name(err));
+    }
+}
+
+void rt_espnow_start(void)
+{
+    RT_TRY(TAG, esp_now_init());
+    RT_TRY(TAG, esp_now_register_recv_cb(on_rx));
+    RT_TRY(TAG, esp_now_register_send_cb(on_send));
+    s_inited = true;
+    rt_espnow_resume();
 
     xTaskCreate(tx_task, "espnow_tx", 3072, NULL, 4, NULL);
     ESP_LOGI(TAG, "broadcasting every %dms", TX_PERIOD_MS);

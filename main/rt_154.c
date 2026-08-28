@@ -32,6 +32,55 @@ static const char *TAG = "154";
 
 static uint8_t s_seq;
 
+// Coexistence priority.
+//
+// ESP-IDF ships 802.15.4 pinned to the bottom of the arbiter: esp_ieee802154_util.c defaults
+// s_coex_config.txrx to IEEE802154_LOW, the lowest of four tiers, so any Wi-Fi or BLE request
+// wins the antenna over it deterministically rather than probabilistically. That is why the
+// symptom was ESP_IEEE802154_TX_ERR_COEXIST on *every* frame from the very first one, not a
+// degraded packet delivery ratio - the radio is not disadvantaged, it is shut out.
+//
+// Stopping the other radios (main.c's wifi_apply(), rt_ble.c's scanner gate) is the real fix
+// and this is the belt to that braces: whatever is still up - the phone-UI link, which has to
+// stay reachable - should not be able to shut 802.15.4 out again. HIGH while 802.15.4 is the
+// channel under test, where by definition nothing else on this board has a claim worth
+// honouring; MIDDLE otherwise, which puts it level with the ack tier the driver already uses
+// for itself instead of below everything.
+//
+// Note what this does *not* mean: the "all radios" numbers are still contended numbers, just
+// contended rather than pre-decided. A run where every 802.15.4 frame is rejected measures
+// the arbiter, not the range.
+static void apply_coex_pti(int lc)
+{
+#if !CONFIG_IEEE802154_TEST && (CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_EXTERNAL_COEX_ENABLE)
+    const bool solo = (lc == CH_154 + 1);
+    const esp_ieee802154_coex_config_t cfg = {
+        .idle    = IEEE802154_IDLE,
+        .txrx    = solo ? IEEE802154_HIGH : IEEE802154_MIDDLE,
+        .txrx_at = solo ? IEEE802154_HIGH : IEEE802154_MIDDLE,
+    };
+    esp_ieee802154_set_coex_config(cfg);
+
+    // Only on an actual change: every mode switch lands here, and four of the five modes want
+    // the same setting, so logging unconditionally would put a "154:" line under button taps
+    // that changed nothing about this radio - including at stages below 3, where it does not
+    // even exist yet.
+    static int s_logged = -1;
+    if (s_logged != solo) {
+        s_logged = solo;
+        ESP_LOGI(TAG, "coex priority %s",
+                 solo ? "high (154 is the channel under test)" : "middle");
+    }
+#else
+    (void)lc;
+#endif
+}
+
+void rt_154_set_lc(int lc)
+{
+    apply_coex_pti(lc);
+}
+
 static const char *tx_err_name(esp_ieee802154_tx_error_t e)
 {
     switch (e) {
@@ -117,6 +166,7 @@ void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_erro
 void rt_154_start(void)
 {
     RT_TRY(TAG, esp_ieee802154_enable());
+    apply_coex_pti(g_lc);  // before the first transmit, not after the first rejection
     RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
     RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
     RT_TRY(TAG, esp_ieee802154_set_short_address(rt_node_id()));
@@ -131,5 +181,6 @@ void rt_154_start(void)
 #else  // no 802.15.4 radio on this target (C3, S3)
 
 void rt_154_start(void) {}
+void rt_154_set_lc(int lc) { (void)lc; }
 
 #endif

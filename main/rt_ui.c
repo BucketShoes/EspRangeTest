@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "nimble/ble.h"  // BLE_ERR_REM_USER_CONN_TERM
 #include "host/ble_hs.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
@@ -35,6 +36,14 @@ static const char *TAG = "ui";
 // Supervision timeout must clear (1 + latency) * itvl_max * 2 or the link drops on its own.
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
 #define CONN_TIMEOUT_SLOW 800  // -> 8s, generous given the slow interval and added latency
+
+// One report is up to 1 + RT_MAX_PEERS * CH_COUNT = 19 notifications, and every one of them is
+// a packet on the shared antenna. Sending that burst every REPORT_MS is fine when nothing is
+// being isolated; while some other channel is under test it is a steady stream of BLE traffic
+// competing with the thing being measured - so skip every other report and let the phone lag.
+// Slowing the connection interval alone would not have helped: the notifications still have to
+// go out, they would just bunch up into fewer, longer connection events.
+#define NOTIFY_SKIP_SLOW 2
 
 // 9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f and friends.
 #define UUID_BASE(b1)                                                              \
@@ -72,10 +81,34 @@ static void apply_conn_params(bool slow)
     }
 }
 
-// Called whenever g_lc changes. Low contention on some other channel means this link only
-// needs to keep working, not be responsive - see the UI_ITVL_SLOW / CONN_*_SLOW comments.
+static bool s_ui_suspended;
+
+// Called whenever g_lc changes. LC_WIFI_UI is the one mode that wants BLE fully off, not just
+// throttled - a phone has to reach the AP instead, which only works with LR off (see
+// rt_apply_lc_radios in main.c). Everywhere else, low contention on some other channel just
+// means this link only needs to keep working, not be responsive - see the UI_ITVL_SLOW /
+// CONN_*_SLOW comments.
 static void apply_lc_ble_params(void)
 {
+    const bool wifi_ui = (g_lc == LC_WIFI_UI);
+
+    if (wifi_ui) {
+        if (!s_ui_suspended) {
+            s_ui_suspended = true;
+            if (s_conn != BLE_HS_CONN_HANDLE_NONE) {
+                ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+            }
+            ble_gap_ext_adv_stop(UI_INSTANCE);
+            ESP_LOGI(TAG, "phone UI advert stopped (wifi+phone mode - use the AP instead)");
+        }
+        return;
+    }
+
+    if (s_ui_suspended) {
+        s_ui_suspended = false;
+        start_adv();
+    }
+
     const bool slow = g_lc != 0;
     if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
         // Only touch the advertising instance while nothing is connected on it - restarting
@@ -190,6 +223,14 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
 
 static int start_adv(void)
 {
+    if (g_lc == LC_WIFI_UI) {
+        // BLE is fully off in this mode - the phone is expected to reach the board over the
+        // Wi-Fi AP instead. Guarded here, once, rather than at every call site (on_sync,
+        // connect-failed, disconnect, adv-complete, a low-contention change) so none of them
+        // can accidentally re-arm the radio.
+        return 0;
+    }
+
     struct ble_gap_ext_adv_params p = { 0 };
     p.connectable   = 1;
     p.scannable     = 1;
@@ -288,6 +329,13 @@ void rt_ui_notify(void)
     }
 
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
+        return;
+    }
+
+    // Counted rather than timed: rt_ui_notify() is called once per report from one place, so
+    // "every Nth call" is exactly "every N reports" with nothing to keep in sync.
+    static unsigned tick;
+    if (g_lc != 0 && g_lc != LC_WIFI_UI && (tick++ % NOTIFY_SKIP_SLOW) != 0) {
         return;
     }
 
