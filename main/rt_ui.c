@@ -23,19 +23,26 @@ static const char *TAG = "ui";
 #define UI_ITVL_FAST 0x00A0  // 0.625ms units -> 100ms
 #define UI_ITVL_SLOW 0x0640  // -> 1000ms
 
-// Slow is the default, not the exception.
+// Slow in exactly two modes - espnow and 154 - and fast everywhere else.
 //
-// The control channel's job is to keep working and to carry the results out; being snappy is
-// not part of it, and a 100ms advert running underneath every measurement is precisely the
-// kind of unrelated traffic that made "low contention" mean nothing. So the link runs slow in
-// every mode - including lc=0, which is a real measurement (the contended baseline) and has
-// no more claim to a loud UI than any other.
+// Those two are the only ones whose entire point is handing the airtime to a channel that is
+// not BLE, and they are bench-test modes where a laggy phone costs nothing. Slowing this link
+// anywhere else costs something real:
 //
-// The exception is the ble_adv test itself. That test is partly about whether a connection can
-// be established and held at all, and it asks for coded S=8 on the connection - so throttling
-// the UI there would be handicapping the thing under test. In that one mode it goes fast and
-// loud on purpose, and nothing else is transmitting anyway.
-#define UI_IS_BLE_TEST() (g_lc == CH_BLE_ADV + 1)
+//   - lc=0 is the normal walking mode. Boards and phone continually connect and drop as they
+//     move in and out of range, and every reconnect *starts* with seeing an advert - so a 1s
+//     advert interval is a 1s-plus stall on every single one of them. The link being
+//     re-established constantly is the normal case here, not an edge case.
+//   - ble_adv is the BLE test itself, which is partly about whether a connection can be
+//     established and held at all and asks for coded S=8 on it. Throttling the UI there
+//     handicaps the thing under test.
+//   - a slow connection interval means nothing can be sent *at all* until the next connection
+//     event. Slowing it anywhere the results are wanted promptly does not make the reports
+//     cheaper, it makes them late or absent - and a report not seen is a test not run.
+//
+// (This is the UI advert on UI_INSTANCE, the 1M control link. The coded-PHY measurement beacon
+// is ADV_INSTANCE in rt_ble.c and nothing here has ever touched its interval.)
+#define UI_SLOW() (g_lc == CH_ESPNOW + 1 || g_lc == CH_154 + 1)
 
 // Connection parameters requested once a phone connects. Peripheral-preferred, so the phone
 // may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
@@ -119,7 +126,7 @@ static void apply_lc_ble_params(void)
         start_adv();
     }
 
-    const bool slow = !UI_IS_BLE_TEST();
+    const bool slow = UI_SLOW();
     if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
         // Only touch the advertising instance while nothing is connected on it - restarting
         // it while connected would open a second, unwanted connection slot rather than
@@ -141,7 +148,12 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
     if (ble_hs_mbuf_to_flat(ctxt->om, &b, sizeof(b), &len) != 0 || len < 1) {
         return BLE_ATT_ERR_UNLIKELY;
     }
-    rt_set_lc(b);
+
+    if (b == RT_CMD_LR_OFF || b == RT_CMD_LR_ON) {
+        rt_set_lr(b == RT_CMD_LR_ON);
+    } else {
+        rt_set_lc(b);  // ignores anything out of range on its own
+    }
     return 0;
 }
 
@@ -192,7 +204,7 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
                                                        BLE_GAP_LE_PHY_CODED_MASK,
                                                        BLE_GAP_LE_PHY_CODED_S8);
             ESP_LOGI(TAG, "requested coded S=8 on the connection, rc=%d", rc);
-            apply_conn_params(!UI_IS_BLE_TEST());
+            apply_conn_params(UI_SLOW());
         } else {
             start_adv();
         }
@@ -248,7 +260,7 @@ static int start_adv(void)
     p.own_addr_type = s_own_addr_type;
     p.primary_phy   = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
-    p.itvl_min      = UI_IS_BLE_TEST() ? UI_ITVL_FAST : UI_ITVL_SLOW;
+    p.itvl_min      = UI_SLOW() ? UI_ITVL_SLOW : UI_ITVL_FAST;
     p.itvl_max      = p.itvl_min;
     p.tx_power      = 9;
     p.sid           = 1;

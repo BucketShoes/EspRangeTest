@@ -96,6 +96,17 @@ void rt_set_lc(int lc);
 extern volatile bool g_lr;
 void rt_set_lr(bool lr);
 
+// Command bytes accepted on the GATT command characteristic (rt_ui.c). Low values are a
+// low-contention mode; the high-bit values are LR, which used to be a super-long button hold
+// and is not any more - the button is down to two gestures and restore has to be one of them
+// (see HOLD_MS in main.c). Putting LR here is safe precisely because holding the button undoes
+// it: no command can strand the board that the physical control cannot take back.
+//
+// Values outside both ranges are ignored, so an older web UI that only ever sends 0..LC_COUNT-1
+// keeps working unchanged.
+#define RT_CMD_LR_OFF 0x80
+#define RT_CMD_LR_ON  0x81
+
 // Called by rt_set_lc() after every mode change, from whichever context asked for it (button
 // task, or a BLE command write). Defined in main.c because that is the file owning the Wi-Fi
 // driver - rt_stats.c has no business touching a radio directly. It applies everything a mode

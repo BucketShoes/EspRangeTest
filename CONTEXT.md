@@ -79,12 +79,21 @@ similar distance, it is not.
   can be taken away by the modes the button itself selects: `LC_WIFI_UI` turns BLE off, the
   `ble_adv` and `154` modes stop Wi-Fi, LR makes the SoftAP invisible to a phone, and the web
   UI can command any of them. It is fine for the website to break the control channels — the
-  button is what brings them back. So a long press (`LONG_MS`, on release) is a full
-  **restore**: all radios on *and* LR cleared. Clearing LR is part of it, not a bonus; without
-  it a restore leaves the phone still unable to reach the AP.
-- Tap cycles low-contention mode; very long hold (`LR_HOLD_MS`, fires without release) toggles
-  LR. Restore is deliberately the *shorter* of the two holds, so overshooting into the LR
-  toggle is always undoable by a less demanding press than the one that caused it.
+  button is what brings them back. So a hold is a full **restore**: all radios on *and* LR
+  cleared. Clearing LR is part of it, not a bonus; without it a restore leaves the phone still
+  unable to reach the AP.
+- **Two gestures, and never a third.** Tap (= released before `HOLD_MS`; the tap duration is
+  just debounce, not something to hit) cycles low-contention mode. Hold past `HOLD_MS` fires
+  the restore *while still held*, with no upper bound. `HOLD_MS` is a floor, not a window.
+  A third, longer tier is forbidden, because adding one silently converts the middle tier into
+  a bounded window that has to be timed by guesswork — and this has to work blind, in a
+  pocket, by someone who has just lost every other control. Long and short are distinguishable
+  without a clock; "medium" is not.
+- Consequently the LR toggle is **not** on the button any more (it was a 3s super-hold). It is
+  a command-channel byte, `RT_CMD_LR_OFF` / `RT_CMD_LR_ON` (0x80/0x81) written to the GATT
+  command characteristic. Safe there precisely because holding the button undoes it: no
+  command can strand a board that the physical control cannot take back. Values outside
+  `0..LC_COUNT-1` and the two LR bytes are ignored, so an older web UI keeps working.
 
 **802.15.4**
 - Raw frames only. **No Thread, no Zigbee.** Both ride the identical PHY (2.4 GHz O-QPSK,
@@ -187,14 +196,27 @@ not occasionally, unlike everything else on this board (adverts every 500ms, ESP
 applies the same gate rather than arming it unconditionally at boot.
 
 *Pass 2 — the phone UI.* The legacy advert/GATT connection (`rt_ui.c`) is needed for the
-interface/control path regardless of what's under test, so it stays up rather than stopping —
-at a slow advert interval and requesting a slow/long connection interval. **Slow is the
-default, in every mode including `lc=0`**, not a penalty applied only during isolation: the
-control channel's job is to keep working and to carry results out, not to be snappy, and `lc=0`
-is itself a real measurement (the contended baseline) with no more claim to a loud UI than any
-other mode. The one exception is the `ble_adv` test, which goes fast and loud on purpose —
-that test is partly about whether a connection can be established and held at all, and it asks
-for coded S=8 on the connection, so throttling it there would handicap the thing under test.
+interface/control path regardless of what's under test, so it stays up rather than stopping.
+**It runs slow in exactly two modes — `espnow` and `154` — and fast everywhere else.** Those
+two are the only ones whose point is handing airtime to a non-BLE channel, and they are
+bench-test modes where a laggy phone costs nothing.
+
+An intermediate revision made slow the default in *every* mode, including `lc=0`. That was
+wrong, for three separate reasons, all worth keeping written down:
+- `lc=0` is the normal walking mode, where boards and phone **continually connect and drop**
+  as they move in and out of range. Every reconnect starts with seeing an advert, so a 1s
+  advert interval is a 1s-plus stall on each one. Constant re-establishment is the normal case
+  here, not an edge case.
+- `ble_adv` is the BLE test itself — partly about whether a connection can be established and
+  held at all, and it asks for coded S=8 on the connection. Throttling it handicaps the thing
+  under test.
+- A slow connection interval means nothing can be sent *at all* until the next connection
+  event. Slowing it where results are wanted promptly does not make reports cheaper, it makes
+  them late or missing.
+
+Note the two adverts are separate instances and are not affected by each other: `UI_INSTANCE`
+in `rt_ui.c` is the 1M control link, `ADV_INSTANCE` in `rt_ble.c` is the coded-PHY measurement
+beacon. Nothing in the UI cadence work has ever changed the beacon's interval.
 
 **Reporting is never skipped.** An earlier revision of pass 3 dropped every other notification
 burst in low-contention modes to save airtime. That was wrong and is reverted: a run whose
@@ -203,6 +225,24 @@ arrive is the most expensive kind of nothing. Airtime is bought by *slowing* the
 (intervals, advert rate), never by dropping data off it — carrying the results is the
 cadence's job, not an optional extra. Budget: well under 5% duty is the target, ~1% if
 practical, and a ~500ms connection interval is about right for that.
+
+**What a report actually costs, measured from the format strings** (not from the array size,
+which is where an earlier "1.2 kB" claim in conversation came from — `rt_snapshot_lines()`
+only emits rows for peers actually seen, so `RT_MAX_PEERS * CH_COUNT` is capacity, not
+traffic):
+
+| setup | lines | bytes/report | rate at 2s | packets/s |
+|---|---|---|---|---|
+| 2 boards (1 peer × 3 channels + status) | 4 | 169 | 85 B/s | 2.0 |
+| 6 peers (most the array allows) | 19 | 956 | 478 B/s | 9.5 |
+
+Against a practical coded-PHY ceiling of ~5 kB/s that is ~1.7% for the two-board case and
+~10% at six peers. So the format is not currently a problem at two boards, and packing is a
+six-peer concern rather than an everyday one. If it is ever wanted: four lines fit in one
+247-byte ATT notification, which would cut the two-board case from 4 packets to 1 — worth more
+than the byte count on coded PHY, where per-packet cost dominates. It requires `docs/index.html`
+to split incoming notifications on newline, and **the page must be redeployed before firmware
+that packs is flashed**, or the UI silently stops parsing.
 
 *Pass 3 — Wi-Fi was never actually stopped, and the SoftAP made that much worse.* Gating
 `esp_now_send()` does nothing to the antenna: the driver stays up, and since the AP + LR work
@@ -250,10 +290,11 @@ reach a board over Wi-Fi instead of BLE. `LC_WIFI_UI` is a fifth low-contention 
 tap cycles through it) that keeps ESP-NOW/the AP up, forces BLE fully off, and forces LR off
 (the AP is invisible to phones with `WIFI_PROTOCOL_LR` present at all — see LR mode above) -
 `rt_ui.c`'s `start_adv()` now refuses to arm BLE advertising in this state so nothing can
-re-enable it from underneath. LR itself is a separate, independent long-hold toggle
-(`LR_HOLD_MS`), not part of the low-contention cycle, since it needs a full Wi-Fi
-stop/reconfigure/start (see LR mode above) and is meant to be an infrequent, deliberate choice
-rather than something every mode switch touches.
+re-enable it from underneath. LR itself is a separate, independent toggle, not part of the
+low-contention cycle, since it needs a full Wi-Fi stop/reconfigure/start (see LR mode above)
+and is meant to be an infrequent, deliberate choice rather than something every mode switch
+touches. It lives on the command channel (`RT_CMD_LR_OFF` / `RT_CMD_LR_ON`), not the button —
+see the button rules under Radio isolation.
 
 **FTM.** Errata WIFI-9686 says the C6 cannot be an FTM initiator (T3 unreadable). The owner
 reports it working on this hardware, which is v0.2 silicon. Treat initiator support as

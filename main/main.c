@@ -27,9 +27,25 @@ static const char *TAG = "rt";
 
 #define REPORT_MS    2000
 #define BUTTON_GPIO  9
-#define LONG_MS      800     // release inside this window and LR_HOLD_MS: reset to all-on
-#define LR_HOLD_MS   3000    // held past this (no release needed): toggle LR
 #define WIFI_CHAN    1
+
+// The button has exactly two gestures, and no third is allowed to appear.
+//
+// Tap = next mode, hold = restore. That is it. HOLD_MS is not a window you have to release
+// inside - it is a floor, with no ceiling, and the restore fires the moment you cross it while
+// still holding. Anything you keep doing after that changes nothing.
+//
+// The reason is that this has to work blind, with a board in a pocket or at arm's length in
+// the dark, by someone who has just lost every other way to control it. A tap and a hold are
+// distinguishable without a clock. A "medium" hold is not: adding a third, longer tier would
+// silently turn the middle one into a bounded window you have to time by guesswork, which is
+// exactly the property the recovery gesture must not have. So the LR toggle, which used to sit
+// on a 3s super-hold, now lives on the command channel instead (see RT_CMD_LR_* in rt.h) -
+// where getting it wrong is recoverable by, precisely, holding this button.
+//
+// The tap is not a duration anyone has to hit. It is just "released before the hold", which
+// doubles as the debounce.
+#define HOLD_MS 800
 
 // g_lr / rt_set_lr / rt_apply_lc_radios / rt_wifi_active live outside the RT_STAGE>=1 guard
 // below because button_task (and rt_set_lc, which it drives) run at every stage - a board on
@@ -159,8 +175,7 @@ void rt_apply_lc_radios(int lc)
 // just reset the low-contention mode - which means clearing LR too, or the phone still cannot
 // reach the AP after a restore.
 //
-// It is deliberately the shorter of the two holds, so overshooting into the LR toggle is
-// always undoable by a less demanding press than the one that caused it.
+// It is the *only* hold, so there is nothing to overshoot into and nothing to release in time.
 static void restore_control(void)
 {
     ESP_LOGW(TAG, "button restore: all radios on, LR off, control channels back");
@@ -199,9 +214,9 @@ static void wifi_start(void)
 }
 #endif
 
-// Tap cycles low-contention mode. Held past LONG_MS and released: restore every control
-// channel (see restore_control above). Held past LR_HOLD_MS (fires immediately, no release
-// needed): toggle LR. Three tiers off one button, same debounce-by-polling approach as always.
+// Tap (release before HOLD_MS) cycles low-contention mode; hold past HOLD_MS restores every
+// control channel. Two gestures, no windows - see the HOLD_MS comment at the top of the file.
+// Polled rather than interrupt-driven, same as always: a button needs debouncing anyway.
 static void button_task(void *pv)
 {
     (void)pv;
@@ -224,18 +239,15 @@ static void button_task(void *pv)
             down   = true;
             fired  = false;
             t_down = rt_ms();
-        } else if (now_down && down && !fired && (rt_ms() - t_down) > LR_HOLD_MS) {
+        } else if (now_down && down && !fired && (rt_ms() - t_down) > HOLD_MS) {
+            // Fires while the button is still down. Keep holding as long as you like; there is
+            // no release to time and nothing further happens.
             fired = true;
-            rt_set_lr(!g_lr);
+            restore_control();
         } else if (!now_down && down) {
             down = false;
             if (!fired) {
-                const uint32_t held = rt_ms() - t_down;
-                if (held > LONG_MS) {
-                    restore_control();
-                } else {
-                    rt_set_lc((g_lc + 1) % LC_COUNT);
-                }
+                rt_set_lc((g_lc + 1) % LC_COUNT);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -286,9 +298,8 @@ void app_main(void)
 
     xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
 
-    ESP_LOGI(TAG, "running. GPIO9: tap = next low-contention mode, hold (%dms) = RESTORE "
-                  "all radios + LR off, long-hold (%dms) = toggle LR",
-             LONG_MS, LR_HOLD_MS);
+    ESP_LOGI(TAG, "running. GPIO9: tap = next low-contention mode, hold = RESTORE "
+                  "(all radios on, LR off). LR toggles over the control channel, not here.");
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(REPORT_MS));
