@@ -20,8 +20,20 @@
 static const char *TAG = "ui";
 
 #define UI_INSTANCE  1
-#define UI_ITVL_FAST 0x00A0  // 0.625ms units -> 100ms
-#define UI_ITVL_SLOW 0x0640  // -> 1000ms
+
+// Advertising and connection timings are given as ranges, never as a single value, and the
+// ranges are deliberately wide.
+//
+// A controller handed itvl_min == itvl_max has exactly one instant it may use, so every board
+// running this firmware picks the same one and then holds it against everything else that
+// wants the antenna at that moment - which is the whole problem this project is chasing. Given
+// room, the controller can slide its events into gaps instead of colliding with them, and two
+// boards that start out aligned drift apart on their own. Nothing here needs an event to
+// happen at a particular time; it only needs it to happen.
+#define UI_ITVL_FAST_MIN 0x00A0  // 0.625ms units -> 100ms
+#define UI_ITVL_FAST_MAX 0x0140  // -> 200ms
+#define UI_ITVL_SLOW_MIN 0x0500  // -> 800ms
+#define UI_ITVL_SLOW_MAX 0x0A00  // -> 1600ms
 
 // Slow in exactly two modes - espnow and 154 - and fast everywhere else.
 //
@@ -48,14 +60,14 @@ static const char *TAG = "ui";
 // may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
 // responsive; "slow" trades that for airtime back to whichever channel is under test - a
 // laggy link and a slow initial connection are fine, this is a bench-test mode.
-#define CONN_ITVL_FAST_MIN 0x0018  // 30ms
-#define CONN_ITVL_FAST_MAX 0x0028  // 50ms
-#define CONN_ITVL_SLOW_MIN 0x0140  // 400ms
-#define CONN_ITVL_SLOW_MAX 0x0190  // 500ms
+#define CONN_ITVL_FAST_MIN 0x0010  // 20ms
+#define CONN_ITVL_FAST_MAX 0x0050  // 100ms
+#define CONN_ITVL_SLOW_MIN 0x00F0  // 300ms
+#define CONN_ITVL_SLOW_MAX 0x0258  // 750ms
 #define CONN_LATENCY_SLOW  4       // plus up to 4 skipped events - up to ~2.5s of quiet when idle
 // Supervision timeout must clear (1 + latency) * itvl_max * 2 or the link drops on its own.
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
-#define CONN_TIMEOUT_SLOW 800  // -> 8s, generous given the slow interval and added latency
+#define CONN_TIMEOUT_SLOW 1000 // -> 10s. Must clear (1+4)*750ms*2 = 7.5s; 8s left no margin.
 
 // The report is never skipped, in any mode. A run whose numbers were not delivered did not
 // happen, and a low-contention mode whose results never arrive is the most expensive kind of
@@ -260,8 +272,8 @@ static int start_adv(void)
     p.own_addr_type = s_own_addr_type;
     p.primary_phy   = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
-    p.itvl_min      = UI_SLOW() ? UI_ITVL_SLOW : UI_ITVL_FAST;
-    p.itvl_max      = p.itvl_min;
+    p.itvl_min      = UI_SLOW() ? UI_ITVL_SLOW_MIN : UI_ITVL_FAST_MIN;
+    p.itvl_max      = UI_SLOW() ? UI_ITVL_SLOW_MAX : UI_ITVL_FAST_MAX;
     p.tx_power      = 9;
     p.sid           = 1;
 

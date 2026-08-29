@@ -8,8 +8,34 @@ recoverable by reading the source.
 
 ## The point of the project
 
-**Which of the ESP32-C6's radios and PHYs still gets a nonzero amount of data through at the
-greatest distance?**
+**Which ONE other channel goes furthest while a phone BLE connection keeps working alongside
+it?**
+
+That is the target use case, stated by the owner on 2026-08-30 and sharper than the original
+framing ("which radio goes furthest"): a board that is connected, or at least connectable, by
+phone on at least one end, **plus** whatever other channel reaches the furthest. A channel that
+wins only by having the antenna to itself has not answered the question.
+
+The consequence is a reversal of emphasis. **Low-contention modes started as an afterthought
+and are now the main event.** The framing is no longer "get rid of X" but "use X for range,
+keep a minimal BLE control channel, turn everything else off" — which is what the code has
+been converging on anyway. Normal mode (`lc=0`) remains the everything-at-once case and should
+work; the owner's read is that some defaults are still too aggressive for it, not that the
+mode is wrong.
+
+**Why fairness in `lc=0` is structurally hard, and it is not anyone's bug.** The radios do not
+want the antenna in comparable ways:
+- BLE needs *specific* windows and needs them on time; widening a window buys decontention on
+  the RX side at the cost of RX energy.
+- Wi-Fi takes whatever is left, by design. It is built for low latency, has few power-saving
+  modes, and only the station side can decline to receive — an AP must listen continuously for
+  a station that wakes up and talks.
+- 802.15.4 gets the scraps, and its own normal posture is ~100% receive.
+
+So "everything at once" is not a fair fight by default, and it is the reason low-contention
+became the main focus rather than a debugging aid.
+
+Underneath that, the original question still holds:
 
 It is a throwaway instrument, not a product. It should be testable in the real world as early
 as possible — flash two boards, walk away with one, read numbers. No test suites, no
@@ -74,7 +100,21 @@ similar distance, it is not.
 - **Operator-commanded only. No scheduler, no automatic cycling.** A mode stays until
   changed. The workflow is: command a switch, run a test, command another.
 - Most useful modes are "just X plus phone BLE" — first establish whether BLE-on hurts X at
-  all, then do the real testing with BLE on.
+  all, then do the real testing with BLE on. This is now the project's main line, not a
+  diagnostic sideline (see The point of the project).
+- **Timings are given as wide min/max ranges, never a single value.** `itvl_min == itvl_max`
+  hands the controller exactly one instant it may use, so every board picks the same one and
+  then fights everything else for it. Given room, a controller slides its events into gaps
+  instead of colliding, and two boards that start aligned drift apart on their own. Nothing
+  here needs an event at a particular time, only that it happens. Same reasoning drives the
+  +/-5% jitter on every transmit loop (`rt_jitter_ms()`).
+- **Open question — does 802.15.4 need a higher rate, or explicit timing?** If it only ever
+  listens in the scraps between other radios' windows, more attempts may be needed to land one.
+  Mitigating argument from the owner: with two boards each running Wi-Fi and BLE, whenever one
+  is transmitting the other is receiving, so the spare scraps tend to exist on both sides at
+  once. Imperfect, though — Wi-Fi spends a lot of time merely listening, which is exactly why
+  the low-contention modes exist. Unresolved; revisit after the next field test, once 802.15.4
+  has been seen working at all.
 - **GPIO9 (BOOT button) is the recovery path and that is its first duty.** Every other control
   can be taken away by the modes the button itself selects: `LC_WIFI_UI` turns BLE off, the
   `ble_adv` and `154` modes stop Wi-Fi, LR makes the SoftAP invisible to a phone, and the web
@@ -126,7 +166,51 @@ similar distance, it is not.
 
 **Future, explicitly not now**
 - Relaying another board's observations over a single ESP-NOW / 802.15.4 / BLE hop. For now
-  each board reports only its own direct observations.
+  each board reports only its own direct observations. **There is no "A reports what B saw" in
+  this firmware** — if you remember seeing that, it was a different project. The multi-board
+  view comes from the phone connecting to several boards at once, each notifying its own table.
+  That costs each board only its own connection; the phone is the shared resource, not the
+  boards, so connecting to two does not double any single board's airtime.
+
+---
+
+## Field results so far
+
+From the owner's own walks, not from this code. These are the reason 802.15.4 is the focus.
+
+- **BLE (connection-based).** Hard-ish range cap. A connection needs several good packets in a
+  row to establish, and drops once too many are missed — so at high error rates it fails as a
+  *connection* well before the PHY runs out of link budget. Most of the field testing to date
+  has been this.
+- **ESP-NOW in LR mode.** Worse theoretical range than BLE coded, but far better at the metric
+  that actually matters here — "one packet reached application level" at ~99% error rates — and
+  so it achieved **the longest distance measured so far**. This is the clearest evidence yet
+  that connectionless single-shot beats a better PHY that needs a session.
+- **802.15.4.** Hypothesised winner: good sensitivity *and* single-shot, non-connected, so it
+  should combine ESP-NOW-in-LR's resilience with a better PHY. **No success at all yet, bench
+  or field** — which, given the coexistence findings below, is at least partly because it was
+  never getting on the air. This is the main focus of the next field test.
+
+The pattern to hold on to: **a protocol that needs a session loses to one that does not, long
+before the PHY does.** That is why the metric is "did anything arrive," never "how much."
+
+### The three BLE tests that must not be conflated
+
+`ble_adv` low-contention mode is genuinely ambiguous in a way the other modes are not. "X plus
+a BLE control channel, where X = BLE" is not implemented as two independent things — it is one
+BLE stack doing both jobs, and the only literal doubling is the second advertising instance.
+The settings that govern the shared stack dominate how well *both* work. So these are three
+different measurements and must not be read as each other:
+
+1. **Max range esp-BLE ↔ esp-BLE while a minimal phone BLE control channel keeps working.**
+   This is what `ble_adv` mode actually tests.
+2. **Max range to the phone's BLE.** Different: the phone is the far end, not a bystander.
+3. **Max range on some other channel while a minimal BLE control channel keeps working.**
+   This is what the `espnow` and `154` modes test, and it is the project's target use case.
+
+**The phone connection is itself part of what is being measured, not merely a command channel.**
+Its advert is 1M only because that is all Chrome can discover; on connect it renegotiates to
+coded S=8, which Chrome accepts. So the control link is a coded-PHY link under test too.
 
 ---
 
@@ -146,10 +230,23 @@ identity matters in results. A third C6 is arriving; C3 and S3 boards exist as s
 ## Platform findings
 
 **LR mode.** If `WIFI_PROTOCOL_LR` is in the protocol list at init — merely *present*, not
-LR-only — the SoftAP becomes invisible to phones and to non-ESP devices generally. Established
-and re-confirmed by the owner. This is why LR is a control-channel hazard, not just a PHY
-option: Wi-Fi is the fallback control path for when BLE is off, so LR on + BLE off = no way in
-except the button.
+LR-only — the SoftAP becomes invisible to phones and to non-ESP devices generally. Entering or
+leaving LR needs a full Wi-Fi stack reinit either way: it is required both to make the AP
+connectable by a phone again *and* to make LR legal on Wi-Fi or ESP-NOW at all. The mode
+assumes everything using Wi-Fi is an ESP that supports LR.
+
+**LR is not, by itself, a problem here.** Control is normally BLE, and this project is a hunt
+for the best long-range link — ESP-NOW in LR currently holds the distance record (see Field
+results). The one bad combination is **Wi-Fi as the control channel while LR is on**, i.e.
+`LC_WIFI_UI` + LR, where that "everything is an ESP" assumption is false and the board becomes
+genuinely uncontrollable except by the button. That single case is why `rt_apply_lc_radios()`
+forces LR off on entering `LC_WIFI_UI`, and why the button restore clears it. LR being on in
+any other mode is a legitimate test condition, not a fault.
+
+**Wi-Fi and BLE coexist tolerably in practice** — from the owner's testing, turning the BLE
+control channel off is not critical for a Wi-Fi test. The messy part is connection churn
+(connecting and dropping repeatedly), not steady-state coexistence, which is the better reason
+to have a mode that stops BLE outright.
 Entering or leaving LR needs a Wi-Fi reinit, not a live protocol change. Corollary: whenever
 a phone can associate to the AP, ESP-NOW was running non-LR. Other ESPs can still reach an
 LR AP. LR is a PHY affecting both Wi-Fi and ESP-NOW, which share the stack.

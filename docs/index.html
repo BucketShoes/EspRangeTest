@@ -64,6 +64,11 @@ const CMD = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 // once selected. That is expected, not a dropped link.
 const LC = ['all', 'espnow', 'ble_adv', '154', 'wifi'];
 
+// Command bytes the board accepts on the command characteristic. 0..4 are the LC modes above;
+// these two are LR, which used to be a super-long button hold and is not any more - the button
+// is down to tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
+const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
+
 const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen}
 const $err = document.getElementById('err');
 const $devs = document.getElementById('devs');
@@ -139,7 +144,7 @@ function onLine(d, line) {
   render();
 }
 
-async function setLc(d, v) {
+async function cmd(d, v) {
   if (!d.cmd) return;
   try { await d.cmd.writeValue(new Uint8Array([v])); } catch (e) { fail(e.message); }
 }
@@ -160,9 +165,23 @@ function render() {
       const b = document.createElement('button');
       b.textContent = label;
       if (d.lc === i) b.className = 'on';
-      b.onclick = () => setLc(d, i);
+      b.onclick = () => cmd(d, i);
       modes.appendChild(b);
     });
+
+    // LR lives here rather than on the board's button, which is down to two gestures (tap =
+    // next mode, hold = restore) so that the recovery gesture cannot become a timed window.
+    // Turning LR on from here is safe precisely because holding the button turns it off again:
+    // the danger is only ever LR on *while Wi-Fi is the control channel*, and the board forces
+    // it off in the wifi mode anyway.
+    const lr = document.createElement('button');
+    lr.textContent = d.lr ? 'LR on' : 'LR off';
+    if (d.lr) lr.className = 'on';
+    lr.title = 'Long-range PHY for Wi-Fi and ESP-NOW. Non-ESP devices, including this phone, ' +
+               'cannot see the board\u2019s AP while it is on.';
+    lr.onclick = () => cmd(d, d.lr ? CMD_LR_OFF : CMD_LR_ON);
+    modes.appendChild(lr);
+
     const disc = document.createElement('button');
     disc.textContent = 'Disconnect';
     disc.onclick = () => disconnect(d.dev, d);

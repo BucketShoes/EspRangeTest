@@ -28,7 +28,13 @@ static const char *TAG = "ble";
 
 #define ADV_INSTANCE  0
 #define ADV_PERIOD_MS 500
-#define ADV_ITVL      0x0100  // 0.625ms units -> 160ms
+
+// A range, not a point - same reasoning as the UI timings in rt_ui.c. The beacon's measured
+// rate is set by ADV_PERIOD_MS (one new sequence number per refresh), not by this, so letting
+// the controller pick anywhere in the window costs the measurement nothing and gives it
+// somewhere to go when the antenna is busy.
+#define ADV_ITVL_MIN  0x0100  // 0.625ms units -> 160ms
+#define ADV_ITVL_MAX  0x0180  // -> 240ms
 
 static uint8_t s_own_addr_type;
 static bool    s_ready;
@@ -75,8 +81,8 @@ static int start_adv(void)
     params.own_addr_type = s_own_addr_type;
     params.primary_phy   = BLE_HCI_LE_PHY_CODED;
     params.secondary_phy = BLE_HCI_LE_PHY_CODED;
-    params.itvl_min      = ADV_ITVL;
-    params.itvl_max      = ADV_ITVL;
+    params.itvl_min      = ADV_ITVL_MIN;
+    params.itvl_max      = ADV_ITVL_MAX;
     params.tx_power      = 9;
     params.sid           = 0;
 
