@@ -20,9 +20,22 @@
 static const char *TAG = "ui";
 
 #define UI_INSTANCE  1
-#define UI_ITVL_FAST 0x00A0  // 0.625ms units -> 100ms - normal operation, phone walking a live test
-#define UI_ITVL_SLOW 0x0640  // -> 1000ms - low contention on some other channel: this link just
-                              // needs to still work, not be snappy
+#define UI_ITVL_FAST 0x00A0  // 0.625ms units -> 100ms
+#define UI_ITVL_SLOW 0x0640  // -> 1000ms
+
+// Slow is the default, not the exception.
+//
+// The control channel's job is to keep working and to carry the results out; being snappy is
+// not part of it, and a 100ms advert running underneath every measurement is precisely the
+// kind of unrelated traffic that made "low contention" mean nothing. So the link runs slow in
+// every mode - including lc=0, which is a real measurement (the contended baseline) and has
+// no more claim to a loud UI than any other.
+//
+// The exception is the ble_adv test itself. That test is partly about whether a connection can
+// be established and held at all, and it asks for coded S=8 on the connection - so throttling
+// the UI there would be handicapping the thing under test. In that one mode it goes fast and
+// loud on purpose, and nothing else is transmitting anyway.
+#define UI_IS_BLE_TEST() (g_lc == CH_BLE_ADV + 1)
 
 // Connection parameters requested once a phone connects. Peripheral-preferred, so the phone
 // may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
@@ -37,13 +50,10 @@ static const char *TAG = "ui";
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
 #define CONN_TIMEOUT_SLOW 800  // -> 8s, generous given the slow interval and added latency
 
-// One report is up to 1 + RT_MAX_PEERS * CH_COUNT = 19 notifications, and every one of them is
-// a packet on the shared antenna. Sending that burst every REPORT_MS is fine when nothing is
-// being isolated; while some other channel is under test it is a steady stream of BLE traffic
-// competing with the thing being measured - so skip every other report and let the phone lag.
-// Slowing the connection interval alone would not have helped: the notifications still have to
-// go out, they would just bunch up into fewer, longer connection events.
-#define NOTIFY_SKIP_SLOW 2
+// The report is never skipped, in any mode. A run whose numbers were not delivered did not
+// happen, and a low-contention mode whose results never arrive is the most expensive kind of
+// nothing - so airtime is bought by *slowing* this link (interval, advert rate), never by
+// dropping data off it. Carrying the results is the cadence's job, not an optional extra.
 
 // 9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f and friends.
 #define UUID_BASE(b1)                                                              \
@@ -109,7 +119,7 @@ static void apply_lc_ble_params(void)
         start_adv();
     }
 
-    const bool slow = g_lc != 0;
+    const bool slow = !UI_IS_BLE_TEST();
     if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
         // Only touch the advertising instance while nothing is connected on it - restarting
         // it while connected would open a second, unwanted connection slot rather than
@@ -182,7 +192,7 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
                                                        BLE_GAP_LE_PHY_CODED_MASK,
                                                        BLE_GAP_LE_PHY_CODED_S8);
             ESP_LOGI(TAG, "requested coded S=8 on the connection, rc=%d", rc);
-            apply_conn_params(g_lc != 0);
+            apply_conn_params(!UI_IS_BLE_TEST());
         } else {
             start_adv();
         }
@@ -238,7 +248,7 @@ static int start_adv(void)
     p.own_addr_type = s_own_addr_type;
     p.primary_phy   = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
-    p.itvl_min      = g_lc != 0 ? UI_ITVL_SLOW : UI_ITVL_FAST;
+    p.itvl_min      = UI_IS_BLE_TEST() ? UI_ITVL_FAST : UI_ITVL_SLOW;
     p.itvl_max      = p.itvl_min;
     p.tx_power      = 9;
     p.sid           = 1;
@@ -329,13 +339,6 @@ void rt_ui_notify(void)
     }
 
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
-        return;
-    }
-
-    // Counted rather than timed: rt_ui_notify() is called once per report from one place, so
-    // "every Nth call" is exactly "every N reports" with nothing to keep in sync.
-    static unsigned tick;
-    if (g_lc != 0 && g_lc != LC_WIFI_UI && (tick++ % NOTIFY_SKIP_SLOW) != 0) {
         return;
     }
 

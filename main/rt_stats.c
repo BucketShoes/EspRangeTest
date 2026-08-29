@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_mac.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 
 #include "rt.h"
@@ -38,6 +39,15 @@ static uint8_t  s_node_id;
 uint32_t rt_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+uint32_t rt_jitter_ms(uint32_t ms)
+{
+    const uint32_t span = ms / 10;  // +/-5% around ms
+    if (span == 0) {
+        return ms;
+    }
+    return ms - span / 2 + (esp_random() % (span + 1));
 }
 
 uint8_t rt_node_id(void)

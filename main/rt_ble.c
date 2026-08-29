@@ -173,7 +173,7 @@ static void adv_task(void *pv)
 {
     (void)pv;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(ADV_PERIOD_MS));
+        vTaskDelay(pdMS_TO_TICKS(rt_jitter_ms(ADV_PERIOD_MS)));
         if (!s_ready) {
             continue;
         }

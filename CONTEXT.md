@@ -64,9 +64,10 @@ similar distance, it is not.
   gated the three TX loops, leaving BLE's continuous scanner, the phone UI, and then a
   beaconing SoftAP running unchanged underneath. Fixed over three passes — see Coexistence
   below. If you see "solo" anywhere, it's stale, not a second concept.)
-- The one exception is the BLE phone link, which is the control channel and has no separate
-  physical toggle, so it stays up in every mode except `LC_WIFI_UI` — throttled (slow advert,
-  slow connection interval, half-rate notifications) rather than silenced.
+- The one exception is the BLE phone link: it is the control channel, so it stays up in every
+  mode except `LC_WIFI_UI` — throttled (slow advert, slow connection interval) rather than
+  silenced, and still carrying every report. Modes that kill a control channel are allowed
+  precisely because the button restores them.
 - `rt_tx_enabled()` is **not** the definition of a mode; it answers only the narrow question
   the three TX loops ask. `rt_apply_lc_radios()` in `main.c` is the definition. Reading the
   former as the latter is precisely the bug above.
@@ -74,9 +75,16 @@ similar distance, it is not.
   changed. The workflow is: command a switch, run a test, command another.
 - Most useful modes are "just X plus phone BLE" — first establish whether BLE-on hurts X at
   all, then do the real testing with BLE on.
-- GPIO9 (BOOT button): tap cycles low-contention mode, long press returns to all-on, very long
-  hold (`LR_HOLD_MS`) toggles LR. One button, three tiers — there is no separate BLE toggle,
-  which is why the phone link is throttled rather than switched off.
+- **GPIO9 (BOOT button) is the recovery path and that is its first duty.** Every other control
+  can be taken away by the modes the button itself selects: `LC_WIFI_UI` turns BLE off, the
+  `ble_adv` and `154` modes stop Wi-Fi, LR makes the SoftAP invisible to a phone, and the web
+  UI can command any of them. It is fine for the website to break the control channels — the
+  button is what brings them back. So a long press (`LONG_MS`, on release) is a full
+  **restore**: all radios on *and* LR cleared. Clearing LR is part of it, not a bonus; without
+  it a restore leaves the phone still unable to reach the AP.
+- Tap cycles low-contention mode; very long hold (`LR_HOLD_MS`, fires without release) toggles
+  LR. Restore is deliberately the *shorter* of the two holds, so overshooting into the LR
+  toggle is always undoable by a less demanding press than the one that caused it.
 
 **802.15.4**
 - Raw frames only. **No Thread, no Zigbee.** Both ride the identical PHY (2.4 GHz O-QPSK,
@@ -129,7 +137,10 @@ identity matters in results. A third C6 is arriving; C3 and S3 boards exist as s
 ## Platform findings
 
 **LR mode.** If `WIFI_PROTOCOL_LR` is in the protocol list at init — merely *present*, not
-LR-only — the SoftAP becomes invisible to phones. Established by the owner's earlier testing.
+LR-only — the SoftAP becomes invisible to phones and to non-ESP devices generally. Established
+and re-confirmed by the owner. This is why LR is a control-channel hazard, not just a PHY
+option: Wi-Fi is the fallback control path for when BLE is off, so LR on + BLE off = no way in
+except the button.
 Entering or leaving LR needs a Wi-Fi reinit, not a live protocol change. Corollary: whenever
 a phone can associate to the AP, ESP-NOW was running non-LR. Other ESPs can still reach an
 LR AP. LR is a PHY affecting both Wi-Fi and ESP-NOW, which share the stack.
@@ -139,7 +150,12 @@ time (software PTI arbitration, not a physical switch). The installed ESP-IDF
 (`esp_ieee802154_util.c`) hardcodes 802.15.4's own ordinary TX/RX at the *lowest* of four PTI
 tiers (`IEEE802154_LOW`, below `MIDDLE` and `HIGH`) — so any higher-priority WiFi or BLE
 request wins the antenna over it, every time, not probabilistically. The per-scene priority API
-(`esp_ieee802154_set_coex_config()`) **is now used** — see the coex-priority note further down.
+(`esp_ieee802154_set_coex_config()`) exists and is **deliberately not used** — see
+"Priorities stay at the IDF default" below.
+
+Treat Espressif's coexistence duty-cycle figures (the "50% each" numbers) as unverified here.
+The owner's read is that they predate the C6's 802.15.4 radio and probably describe 50% AP /
+50% STA / 50% BLE as separate claims. Nothing in this project should be justified by them.
 
 Measured, not just expected: with ESP-NOW and BLE both running, **every single 802.15.4
 transmit is rejected**, immediately, from the very first packet - `esp_ieee802154_transmit_failed`
@@ -172,12 +188,21 @@ applies the same gate rather than arming it unconditionally at boot.
 
 *Pass 2 — the phone UI.* The legacy advert/GATT connection (`rt_ui.c`) is needed for the
 interface/control path regardless of what's under test, so it stays up rather than stopping —
-but at a slower advert interval and requesting a slower/longer connection interval whenever any
-channel is isolated. Also (added in pass 3) it now sends its notification burst every *other*
-report in those modes: one report is up to 19 notifications, and a slower connection interval
-does not reduce that traffic, it only bunches it into fewer, longer connection events. A laggy
-phone link is fine; low-contention testing of anything other than `ble_adv` is realistically a
-bench-test, serial-output affair, not a live walk with the phone connected.
+at a slow advert interval and requesting a slow/long connection interval. **Slow is the
+default, in every mode including `lc=0`**, not a penalty applied only during isolation: the
+control channel's job is to keep working and to carry results out, not to be snappy, and `lc=0`
+is itself a real measurement (the contended baseline) with no more claim to a loud UI than any
+other mode. The one exception is the `ble_adv` test, which goes fast and loud on purpose —
+that test is partly about whether a connection can be established and held at all, and it asks
+for coded S=8 on the connection, so throttling it there would handicap the thing under test.
+
+**Reporting is never skipped.** An earlier revision of pass 3 dropped every other notification
+burst in low-contention modes to save airtime. That was wrong and is reverted: a run whose
+numbers were not delivered did not happen, and a low-contention mode whose results never
+arrive is the most expensive kind of nothing. Airtime is bought by *slowing* the link
+(intervals, advert rate), never by dropping data off it — carrying the results is the
+cadence's job, not an optional extra. Budget: well under 5% duty is the target, ~1% if
+practical, and a ~500ms connection interval is about right for that.
 
 *Pass 3 — Wi-Fi was never actually stopped, and the SoftAP made that much worse.* Gating
 `esp_now_send()` does nothing to the antenna: the driver stays up, and since the AP + LR work
@@ -198,13 +223,22 @@ The report header now prints `wifi=on/off` — the Wi-Fi **driver**, distinct fr
 `(off)` tx-gate marker on the line below. The failure mode this project keeps hitting is a
 radio quietly still on while the numbers imply otherwise, so that state has to be visible.
 
-**802.15.4's coex priority is now raised explicitly.** `rt_154.c`'s `apply_coex_pti()` calls
-`esp_ieee802154_set_coex_config()`: `IEEE802154_HIGH` while 802.15.4 is the channel under test,
-`IEEE802154_MIDDLE` otherwise, instead of the IDF default `IEEE802154_LOW`. Stopping the other
-radios is the actual fix; this is the belt to those braces, so that what necessarily stays up
-(the phone control link) cannot shut 802.15.4 out again. Note what it does *not* mean: "all
-radios" numbers are still contended, just contended rather than pre-decided — a run where every
-802.15.4 frame is rejected measures the arbiter, not the range.
+**Priorities stay at the IDF default — decided, not overlooked.** Raising 802.15.4's coex tier
+was tried and reverted. The reasoning, from the owner: Wi-Fi and BLE are not greedy, they are
+*scheduled* — a connection event or a beacon has to happen at its moment or the link degrades,
+and 802.15.4's normal duty cycle is 100% receive with occasional transmits, so promoting it
+does not share the antenna more fairly, it hands 802.15.4 everything. Isolation has to come
+from other radios genuinely being off or backed off; changing priorities is "a different way to
+achieve it" and a worse-behaved one — invisible, surfacing only as somebody else's link going
+flaky, with no button that restores it. **Loss of control is game over.** If a mode needs the
+antenna quiet, stop things explicitly or lengthen their intervals; do not re-rank the arbiter.
+
+**Every rejection is now reported, continuously.** The old ISR handler latched only a *change*
+of error type, so a radio being refused four times a second logged one line at boot and then
+went silent — indistinguishable from a one-off hiccup, and useless. `rt_154.c` now counts
+rejections per reason in the ISR (all it may safely do there) and `tx_task` prints totals plus
+the per-window delta every 2s for as long as anything is still failing:
+`W 154: tx rejected: coexist 128(+8)`. Silent only when the radio genuinely is not failing.
 
 Renamed solo → **low contention** throughout (code, docs, UI) to match how it was described in
 planning and avoid two names drifting apart again. `g_solo`/`rt_set_solo` are now

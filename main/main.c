@@ -148,7 +148,24 @@ void rt_apply_lc_radios(int lc)
 #if RT_STAGE >= 1
     wifi_apply();
 #endif
-    rt_154_set_lc(lc);
+}
+
+// The one gesture that must always work.
+//
+// Every other control path can be taken away by the very modes this button selects: LC_WIFI_UI
+// turns BLE off, the ble_adv and 154 modes stop Wi-Fi, LR makes the SoftAP invisible to
+// anything that is not an ESP, and the web UI can command any of them. The button is the only
+// control that cannot be lost, so a long press has to bring back *every* control channel, not
+// just reset the low-contention mode - which means clearing LR too, or the phone still cannot
+// reach the AP after a restore.
+//
+// It is deliberately the shorter of the two holds, so overshooting into the LR toggle is
+// always undoable by a less demanding press than the one that caused it.
+static void restore_control(void)
+{
+    ESP_LOGW(TAG, "button restore: all radios on, LR off, control channels back");
+    rt_set_lr(false);
+    rt_set_lc(0);
 }
 
 #if RT_STAGE >= 1
@@ -182,9 +199,9 @@ static void wifi_start(void)
 }
 #endif
 
-// Tap cycles low-contention mode. Held past LONG_MS and released: reset to all-on - unchanged
-// from before. Held past LR_HOLD_MS (fires immediately, no release needed): toggle LR. Three
-// tiers off one button, same debounce-by-polling approach as always.
+// Tap cycles low-contention mode. Held past LONG_MS and released: restore every control
+// channel (see restore_control above). Held past LR_HOLD_MS (fires immediately, no release
+// needed): toggle LR. Three tiers off one button, same debounce-by-polling approach as always.
 static void button_task(void *pv)
 {
     (void)pv;
@@ -215,7 +232,7 @@ static void button_task(void *pv)
             if (!fired) {
                 const uint32_t held = rt_ms() - t_down;
                 if (held > LONG_MS) {
-                    rt_set_lc(0);
+                    restore_control();
                 } else {
                     rt_set_lc((g_lc + 1) % LC_COUNT);
                 }
@@ -269,8 +286,9 @@ void app_main(void)
 
     xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
 
-    ESP_LOGI(TAG, "running. GPIO9: tap = next low-contention mode, hold = all radios, "
-                  "long-hold (%dms) = toggle LR", LR_HOLD_MS);
+    ESP_LOGI(TAG, "running. GPIO9: tap = next low-contention mode, hold (%dms) = RESTORE "
+                  "all radios + LR off, long-hold (%dms) = toggle LR",
+             LONG_MS, LR_HOLD_MS);
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(REPORT_MS));

@@ -50,7 +50,7 @@ static void tx_task(void *pv)
                 rt_tx_failed(CH_ESPNOW);
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(TX_PERIOD_MS));
+        vTaskDelay(pdMS_TO_TICKS(rt_jitter_ms(TX_PERIOD_MS)));
     }
 }
 

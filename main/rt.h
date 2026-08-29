@@ -67,6 +67,13 @@ typedef struct __attribute__((packed)) {
 uint8_t  rt_node_id(void);
 uint32_t rt_ms(void);
 
+// ms with +/-5% of randomness. Every transmit loop delays by this rather than by a constant:
+// two boards running the same firmware would otherwise sit at exactly the same period and
+// either collide on the air every time or never, so the loss figure would be measuring the
+// timers rather than the range. It also keeps a channel's transmits from landing in permanent
+// lockstep with the phone link's connection events.
+uint32_t rt_jitter_ms(uint32_t ms);
+
 // Low-contention mode: which channel gets the antenna mostly to itself. 0 = all of them
 // (normal operation); otherwise only channel (g_lc-1) transmits, and everything else that
 // might touch the radio on its own schedule backs off too - the Wi-Fi driver stops outright,
@@ -98,7 +105,10 @@ void rt_set_lr(bool lr);
 //     continuously, both of which outrank 802.15.4 in the coex arbiter - so the antenna stays
 //     exactly as busy while the report claims the channel has been isolated.
 //   - forces LR off for LC_WIFI_UI, the one mode where a phone must reach the SoftAP.
-//   - hands the new mode to rt_154_set_lc() for its coex priority.
+//
+// Note what it deliberately does not do: touch anyone's coexistence priority. Isolation comes
+// from radios being off or backed off, never from re-ranking the arbiter - see the long
+// comment at the top of rt_154.c for why that is not the same thing.
 void rt_apply_lc_radios(int lc);
 
 // Whether the Wi-Fi driver is actually started right now, as opposed to merely not being
@@ -141,11 +151,6 @@ void rt_154_start(void);
 // mode change. A no-op before rt_espnow_start() has run.
 void rt_espnow_resume(void);
 
-// Set 802.15.4's coexistence priority for the new low-contention mode. ESP-IDF hardcodes
-// ordinary 802.15.4 tx/rx at the lowest of four coex tiers, which is why it loses every
-// arbitration rather than merely most of them - see rt_154.c. No-op on targets without the
-// radio.
-void rt_154_set_lc(int lc);
 
 // Connectable legacy advert + GATT service, so a phone browser can see the numbers.
 // Legacy because Chrome's scanner cannot see extended or coded adverts at all.
