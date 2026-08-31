@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_now.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -62,19 +63,49 @@ static void tx_task(void *pv)
 // a blind re-add. Asking esp_now_add_peer() and swallowing ESP_ERR_ESPNOW_EXIST worked, but the
 // component logs its own "Peer exists. Please call API esp_now_mod_peer()!" warning before
 // returning, which reads like a fault every time a mode changes.
+// Pin the transmit rate instead of inheriting whatever rate control decides.
+//
+// ESP-NOW rides the Wi-Fi PHY configuration - which is exactly why turning LR on for an
+// ESP-NOW test drags Wi-Fi into LR too and takes the phone's view of the SoftAP with it. That
+// coupling is real and is not going away. What this adds is an explicit statement of the rate
+// for our own frames, so a range result is attributable to a known modulation rather than to
+// whatever the driver felt like at the time.
+//
+// 1 Mbps long-preamble DSSS is the longest-range non-LR rate; LORA_250K is the LR one. The
+// result is logged rather than swallowed: it is worth knowing whether the LR rate is accepted
+// while the protocol list does *not* contain WIFI_PROTOCOL_LR, because if it were, ESP-NOW
+// could run at LR rate with the AP still visible to a phone - which would be a genuinely new
+// option rather than the all-or-nothing choice LR is today. Do not assume it works; read the
+// line.
+static void pin_rate(void)
+{
+    esp_now_rate_config_t cfg = { 0 };
+    cfg.phymode = g_lr ? WIFI_PHY_MODE_LR : WIFI_PHY_MODE_11B;
+    cfg.rate    = g_lr ? WIFI_PHY_RATE_LORA_250K : WIFI_PHY_RATE_1M_L;
+    cfg.ersu    = false;
+    cfg.dcm     = false;
+
+    const esp_err_t err = esp_now_set_peer_rate_config((uint8_t *)BCAST, &cfg);
+    ESP_LOGI(TAG, "tx rate %s -> %s", g_lr ? "LR 250k" : "11b 1M", esp_err_to_name(err));
+}
+
 void rt_espnow_resume(void)
 {
-    if (!s_inited || esp_now_is_peer_exist(BCAST)) {
+    if (!s_inited) {
         return;
     }
-    esp_now_peer_info_t peer = { 0 };
-    memcpy(peer.peer_addr, BCAST, 6);
-    peer.channel = 0;  // whatever channel the interface is already on
-    peer.ifidx   = WIFI_IF_STA;
-    peer.encrypt = false;
-    RT_TRY(TAG, esp_now_add_peer(&peer));
-
-    ESP_LOGI(TAG, "broadcast peer re-added after a wifi restart");
+    if (!esp_now_is_peer_exist(BCAST)) {
+        esp_now_peer_info_t peer = { 0 };
+        memcpy(peer.peer_addr, BCAST, 6);
+        peer.channel = 0;  // whatever channel the interface is already on
+        peer.ifidx   = WIFI_IF_STA;
+        peer.encrypt = false;
+        RT_TRY(TAG, esp_now_add_peer(&peer));
+        ESP_LOGI(TAG, "broadcast peer re-added after a wifi restart");
+    }
+    // Re-pinned on every Wi-Fi start: the rate lives in the driver, which has just restarted,
+    // and g_lr may have changed while it was down.
+    pin_rate();
 }
 
 void rt_espnow_start(void)

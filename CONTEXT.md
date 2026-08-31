@@ -174,6 +174,23 @@ similar distance, it is not.
 
 ---
 
+## Hardware
+
+**The boards are now Seeed XIAO ESP32C6, not the DevKitC/DevKitM.** Same chip, different RF
+front end, and the `platformio.ini` environments are still *named* `devkitc`/`devkitm` — the
+owner repurposed them (and their COM ports) to flash the XIAOs. The board manifests only
+supply things this project pins anyway (4MB flash, custom partition table), so the mismatch is
+cosmetic, but the env comments about "WROOM-1, PCB antenna" and "MINI-1, different antenna
+design" are now wrong.
+
+- **GPIO14 is the RF antenna switch. Do not configure it, read it, or drive it.** It floats
+  with an external pulldown, which selects the onboard chip antenna, and there is no IPEX
+  connected. Touching it would silently change the antenna mid-test. Only GPIO9 (BOOT) is
+  configured anywhere in this firmware; keep it that way.
+- The chip antenna is **worse than the IPEX**, and worse than the PCB antennas on the dev
+  modules. So absolute distances from XIAO runs are not comparable with earlier DevKit runs.
+  Comparisons *between channels within one run* still are, which is what matters.
+
 ## Field results so far
 
 From the owner's own walks, not from this code. These are the reason 802.15.4 is the focus.
@@ -187,9 +204,11 @@ From the owner's own walks, not from this code. These are the reason 802.15.4 is
   so it achieved **the longest distance measured so far**. This is the clearest evidence yet
   that connectionless single-shot beats a better PHY that needs a session.
 - **802.15.4.** Hypothesised winner: good sensitivity *and* single-shot, non-connected, so it
-  should combine ESP-NOW-in-LR's resilience with a better PHY. **No success at all yet, bench
-  or field** — which, given the coexistence findings below, is at least partly because it was
-  never getting on the air. This is the main focus of the next field test.
+  should combine ESP-NOW-in-LR's resilience with a better PHY. Had **no success at all**, bench
+  or field, until 2026-08-31 — which turned out to be entirely because it was never getting on
+  the air (see Coexistence). It now works: two boards, `154` mode, ~90-100% PDR at RSSI in the
+  -60s to -90s, and it also survives all-radios mode. This is the main focus of the next field
+  test and it is finally testable.
 
 The pattern to hold on to: **a protocol that needs a session loses to one that does not, long
 before the PHY does.** That is why the metric is "did anything arrive," never "how much."
@@ -287,6 +306,22 @@ on transmission, not delivery, so TX success is observable with no peer present.
 Also observed: after switching back to `all`, two frames got through in the moment before the
 scanner and Wi-Fi came back up, then it returned to 0%. The brief non-100% number is a
 transition artefact, not sharing.
+
+**FIXED, and confirmed with two boards.** With the scanner duty-cycled and transmit retries in
+place, all-radios mode now reads:
+
+```
+== node 04  up 2s  lc=off (all radios)  lr=off  wifi=on ==
+  tx: espnow=9[9 ok, 0 rejected]  ble_adv=5  154=8[8 ok, 0 rejected]
+  E4 154  rssi -72 (avg -77, -83..-72)  pdr 60% now / 60% all  rx 3 miss 2  lqi 8
+W 154: tx rejected: coexist 10(+10)
+```
+
+Read those two lines together, because between them they are the whole point: **every packet
+got out (`8 ok, 0 rejected`) and the arbiter still refused ten attempts (`coexist 10(+10)`)**.
+The refusals did not stop — the retries simply outlast them. Nothing was taken from Wi-Fi or
+BLE; 802.15.4 just stopped giving up after the first no. All three channels are now measurable
+in the same run, at the same instant, which is what all-radios mode was for.
 
 **The dedup trap in the fix above:** `rt_154.c`'s ISR handler only logs when the error *type*
 changes (`if (error != s_last_tx_err)`), on purpose — `ESP_LOGW` from ISR context takes a

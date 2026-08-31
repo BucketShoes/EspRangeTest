@@ -55,10 +55,18 @@ static const char *TAG = "rt";
 volatile bool g_lr;
 
 #if RT_STAGE >= 1
-// The default protocol set ESP-IDF would pick for 2.4GHz on a chip with 11ax support - kept
-// explicit rather than read back, since read-modify-write against a driver that is about to
-// be stopped is more moving parts than just stating what we want.
-#define WIFI_PROTO_BASE (WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX)
+// 11b and nothing else.
+//
+// This used to be 11B|11G|11N|11AX - the set ESP-IDF would pick by default - which let rate
+// control choose anything up to HE, and rate sets range. On an instrument whose only metric is
+// distance, letting the driver silently pick a faster, shorter-range modulation is an unknown
+// in the middle of the measurement. 11b is the long-range one and the only one this project
+// has ever been interested in; g/n/ax are dropped outright rather than merely deprioritised.
+//
+// LR is deliberately not here. It goes in only when g_lr is set, because its mere presence in
+// the list makes the SoftAP invisible to anything that is not an ESP (see LR mode in
+// CONTEXT.md) - the flag is not a preference, it is a different world.
+#define WIFI_PROTO_BASE (WIFI_PROTOCOL_11B)
 
 // What the driver is actually doing right now, so wifi_apply() can tell a real change from a
 // repeat and leave a working AP (and any phone on it) alone when nothing needs to move.
