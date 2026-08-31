@@ -44,8 +44,13 @@ static void tx_task(void *pv)
     (void)pv;
     for (;;) {
         if (rt_tx_enabled(CH_ESPNOW)) {
+            // The real figure, read back from the driver, not the one we asked for: the
+            // hardware quantises the request to its own ladder of values.
+            int8_t qdbm = 0;
+            esp_wifi_get_max_tx_power(&qdbm);
+
             rt_pkt_t p;
-            rt_fill(&p, CH_ESPNOW, 20);
+            rt_fill(&p, CH_ESPNOW, (int8_t)(qdbm / 4));
             // A non-OK return here means the driver would not even queue it - the common
             // case is ESP_ERR_ESPNOW_NO_MEM under heavy contention. A queued send that fails
             // in the air is reported later, in on_send().

@@ -163,6 +163,8 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
 
     if (b == RT_CMD_LR_OFF || b == RT_CMD_LR_ON) {
         rt_set_lr(b == RT_CMD_LR_ON);
+    } else if (b >= RT_CMD_PWR && b < RT_CMD_PWR + RT_PWR_COUNT) {
+        rt_set_power(b - RT_CMD_PWR);
     } else {
         rt_set_lc(b);  // ignores anything out of range on its own
     }
@@ -274,7 +276,7 @@ static int start_adv(void)
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
     p.itvl_min      = UI_SLOW() ? UI_ITVL_SLOW_MIN : UI_ITVL_FAST_MIN;
     p.itvl_max      = UI_SLOW() ? UI_ITVL_SLOW_MAX : UI_ITVL_FAST_MAX;
-    p.tx_power      = 9;
+    p.tx_power      = rt_power()->dbm_ble;
     p.sid           = 1;
 
     int8_t pwr = 0;
@@ -360,6 +362,20 @@ void rt_ui_notify(void)
     if (g_lc != s_last_lc) {
         s_last_lc = g_lc;
         apply_lc_ble_params();
+    }
+
+    // Advertising power is fixed when the instance is configured, so a level change needs the
+    // advert rebuilding. Only safe while nothing is connected on it - restarting a connectable
+    // instance mid-connection would open a second slot rather than change the existing link,
+    // which is the same reason apply_lc_ble_params() leaves it alone when connected. A phone
+    // that is already connected keeps the power it connected at until it drops.
+    static int s_last_pwr = -1;
+    if (g_pwr != s_last_pwr) {
+        s_last_pwr = g_pwr;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE && !s_ui_suspended) {
+            ble_gap_ext_adv_stop(UI_INSTANCE);
+            start_adv();
+        }
     }
 
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {

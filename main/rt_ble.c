@@ -53,6 +53,20 @@ static const char *TAG = "ble";
 
 static uint8_t s_own_addr_type;
 static bool    s_ready;
+
+// What the controller actually gave us when asked, which is what goes into the packet - it
+// picks the nearest power it supports, not the one requested.
+static int8_t s_adv_power;
+
+// Set from whatever context changed the level; acted on by adv_task. Advertising power is
+// fixed at ble_gap_ext_adv_configure() time, so changing it means reconfiguring the instance,
+// which is not something to do from the button task or a GATT write callback.
+static volatile bool s_pwr_dirty;
+
+void rt_ble_apply_power(void)
+{
+    s_pwr_dirty = true;
+}
 static bool    s_scanning;
 static bool    s_scan_solo;   // which duty cycle s_scanning is currently running at
 
@@ -60,7 +74,7 @@ static bool    s_scan_solo;   // which duty cycle s_scanning is currently runnin
 static int set_adv_data(void)
 {
     rt_pkt_t p;
-    rt_fill(&p, CH_BLE_ADV, 9);
+    rt_fill(&p, CH_BLE_ADV, s_adv_power);
 
     uint8_t ad[2 + sizeof(rt_pkt_t)];
     ad[0] = 1 + sizeof(rt_pkt_t);  // length of what follows
@@ -99,7 +113,7 @@ static int start_adv(void)
     params.secondary_phy = BLE_HCI_LE_PHY_CODED;
     params.itvl_min      = ADV_ITVL_MIN;
     params.itvl_max      = ADV_ITVL_MAX;
-    params.tx_power      = 9;
+    params.tx_power      = rt_power()->dbm_ble;
     params.sid           = 0;
 
     int8_t selected_tx_power = 0;
@@ -122,7 +136,9 @@ static int start_adv(void)
         return rc;
     }
 
-    ESP_LOGI(TAG, "coded-PHY adverts up, tx power %d dBm", selected_tx_power);
+    s_adv_power = selected_tx_power;
+    ESP_LOGI(TAG, "coded-PHY adverts up, asked %d dBm, got %d dBm",
+             rt_power()->dbm_ble, selected_tx_power);
     return 0;
 }
 
@@ -203,7 +219,11 @@ static void adv_task(void *pv)
         }
         if (rt_tx_enabled(CH_BLE_ADV)) {
             ble_gap_ext_adv_stop(ADV_INSTANCE);
-            if (set_adv_data() == 0) {
+            if (s_pwr_dirty) {
+                // Power is a configure-time parameter, so the whole instance is rebuilt.
+                s_pwr_dirty = false;
+                start_adv();
+            } else if (set_adv_data() == 0) {
                 ble_gap_ext_adv_start(ADV_INSTANCE, 0, 0);
             }
             // Also catches a mode change between all-radios and the ble_adv test, which needs

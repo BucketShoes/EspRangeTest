@@ -146,7 +146,7 @@ static void wifi_apply(void)
 
     RT_TRY(TAG, esp_wifi_start());
     RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
-    RT_TRY(TAG, esp_wifi_set_max_tx_power(78));  // 0.25dBm units, ~19.5dBm
+    rt_wifi_apply_power();
 
     s_wifi_on = true;
     s_wifi_lr = want_lr;
@@ -155,6 +155,25 @@ static void wifi_apply(void)
     ESP_LOGI(TAG, "wifi started: lr=%s", want_lr ? "on" : "off");
 }
 #endif
+
+// Applying a power level is only meaningful while the driver is up, and every path that starts
+// it calls this - so a level chosen while Wi-Fi was stopped is applied when it comes back.
+void rt_wifi_apply_power(void)
+{
+#if RT_STAGE >= 1
+    if (!s_wifi_on) {
+        return;
+    }
+    RT_TRY(TAG, esp_wifi_set_max_tx_power(rt_power()->wifi_qdbm));
+
+    // Read back, because the hardware quantises the request to a fixed ladder of values (see
+    // esp_wifi.h) and the one we asked for is usually not the one we got.
+    int8_t got = 0;
+    if (esp_wifi_get_max_tx_power(&got) == ESP_OK) {
+        ESP_LOGI(TAG, "wifi tx power %d.%02ddBm", got / 4, (got % 4) * 25);
+    }
+#endif
+}
 
 bool rt_wifi_active(void)
 {

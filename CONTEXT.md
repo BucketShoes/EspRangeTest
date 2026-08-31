@@ -287,6 +287,44 @@ For future doubt of the same kind, the test needing no code is **RSSI versus dis
 genuine antenna coupling changes ~6 dB per doubling, so 20 cm against 2 m should differ by
 ~20 dB. If RSSI barely moves, the path is not going through the antennas.
 
+## Transmit power
+
+**One level for all three radios, chosen at runtime, booting at minimum.** The table lives in
+`s_power[]` in `rt_stats.c`; `rt.h` explains the reasoning; each radio applies it in its own
+file (`rt_wifi_apply_power` / `rt_154_apply_power` / `rt_ble_apply_power`).
+
+| level | Wi-Fi / ESP-NOW | 802.15.4 | BLE |
+|---|---|---|---|
+| min *(boot default)* | 2 dBm | −15 dBm | −12 dBm |
+| low | 5 dBm | −6 dBm | −6 dBm |
+| mid | 11 dBm | 5 dBm | 3 dBm |
+| max | 20 dBm | 20 dBm | **9 dBm** |
+
+Why this exists at all: the levels used to be four unrelated constants in four files — Wi-Fi
+19.5 dBm, 802.15.4 20 dBm, BLE 9 dBm — and nobody had compared them to each other. **BLE was
+running 11 dB below the other two**, roughly a 3.5× distance handicap in free space, on the
+channel that was nevertheless winning. Every BLE-versus-anything result predating 2026-09-01
+was measured under that handicap and should be read with it in mind.
+
+- **Booting at minimum** keeps a whole range comparison inside a room, which makes this
+  testable at a desk instead of needing a field. It is also the gentler state to leave a board
+  transmitting in while the antenna question is open.
+- **A fixed level is no good for comparisons** — hence the switch in the web UI (second button
+  row) and the `RT_CMD_PWR` command byte, rather than a compile-time constant.
+- **BLE is capped at 9 dBm at "max" on purpose.** On the owner's earlier boards, asking for
+  more than 9 produced distortion rather than range, whatever the part claimed. The C6 may be
+  honest up to 20 — **untested**. Until someone checks, "max" is *not* equal across channels
+  and any comparison run there should say so.
+- Every radio's power is **read back** after being set, because all three quantise the request
+  (Wi-Fi to a fixed ladder in `esp_wifi.h`, 802.15.4 to 3 dB steps, BLE to whatever the
+  controller has). The read-back value is what goes into the packet's `txdbm`, so the far end
+  records what was transmitted rather than what was asked for.
+- A power change resets the stats, for the same reason a mode or PHY change does: the old RSSI
+  and loss figures were taken under different conditions.
+- A phone already connected keeps the power it connected at until it drops — advertising power
+  is fixed when the instance is configured, and rebuilding a connectable instance mid-link
+  would open a second slot rather than change the existing one.
+
 ## Field results so far
 
 From the owner's own walks, not from this code. These are the reason 802.15.4 is the focus.

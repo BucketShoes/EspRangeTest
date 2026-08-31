@@ -106,6 +106,46 @@ void rt_set_lr(bool lr);
 // keeps working unchanged.
 #define RT_CMD_LR_OFF 0x80
 #define RT_CMD_LR_ON  0x81
+#define RT_CMD_PWR    0x90  // 0x90 + level, so 0x90..0x93
+
+// ---- Transmit power ----------------------------------------------------------------------
+//
+// One level, applied to all three radios at once, chosen at runtime.
+//
+// Central because a range comparison only means something if every channel is being asked for
+// the same thing, and for most of this project's life they were not: Wi-Fi at 19.5dBm,
+// 802.15.4 at 20dBm, BLE at 9 - an 11dB handicap, roughly 3.5x in distance, on the channel
+// that was winning anyway. The numbers were scattered across four files and nobody was
+// comparing them to each other.
+//
+// Runtime-selectable because a fixed level is no good for comparisons, and because full power
+// needs somewhere to walk to. At minimum the whole test should fit in a room, which makes a
+// range comparison something you can run at a desk. It is also the safer state to leave a
+// board transmitting in while the antenna situation is still in question.
+//
+// BLE is deliberately capped below the others at the top: on the owner's earlier boards,
+// asking for more than 9dBm produced distortion rather than range, whatever was claimed. The
+// C6 may be honest up to 20 - untested. Until it is checked, "max" is not equal across
+// channels and comparisons at max should say so.
+typedef struct {
+    const char *name;
+    int8_t      wifi_qdbm;  // esp_wifi_set_max_tx_power units: 0.25dBm, valid [8,84]
+    int8_t      dbm_154;    // esp_ieee802154_set_txpower: [-15,20], quantised to 3dB steps
+    int8_t      dbm_ble;    // NimBLE ext adv request; the controller picks the nearest it has
+} rt_power_t;
+
+#define RT_PWR_COUNT 4
+
+extern volatile int g_pwr;
+const rt_power_t *rt_power(void);
+void rt_set_power(int level);
+
+// Applied per radio rather than centrally: each needs a different call, and the BLE ones need
+// their advertising instance reconfigured rather than a value poked, which cannot be done from
+// the button task. Those two just mark themselves dirty and pick it up on their own cycle.
+void rt_wifi_apply_power(void);
+void rt_154_apply_power(void);
+void rt_ble_apply_power(void);
 
 // Called by rt_set_lc() after every mode change, from whichever context asked for it (button
 // task, or a BLE command write). Defined in main.c because that is the file owning the Wi-Fi
@@ -154,7 +194,7 @@ void rt_report(void);
 // Current state as short CSV text lines, for the web UI. Text rather than a binary format
 // on purpose: it is the same information the serial report shows, it is readable in a BLE
 // debugging app, and it needs no decoder on the browser side.
-//   S,<node>,<uptime_s>,<lc>,<lr>
+//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr>
 //   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
 #define RT_LINE_MAX 72
 int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);

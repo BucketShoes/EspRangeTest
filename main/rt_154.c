@@ -115,6 +115,15 @@ static volatile uint32_t s_tx_err_n[TX_ERR_N];    // ISR writes, tx_task reads
 static uint32_t          s_tx_err_shown[TX_ERR_N];
 static uint32_t          s_err_next_ms;
 
+void rt_154_apply_power(void)
+{
+    RT_TRY(TAG, esp_ieee802154_set_txpower(rt_power()->dbm_154));
+    // Read back: the driver quantises to 3dB steps, and this value goes into every packet, so
+    // the far end records what was actually transmitted rather than what was requested.
+    s_txpower = esp_ieee802154_get_txpower();
+    ESP_LOGI(TAG, "tx power %d dBm", s_txpower);
+}
+
 static void report_tx_errors(void)
 {
     // Signed difference so this survives the rt_ms() wrap at ~49 days.
@@ -329,8 +338,7 @@ void rt_154_start(void)
 {
     RT_TRY(TAG, esp_ieee802154_enable());
     RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
-    RT_TRY(TAG, esp_ieee802154_set_txpower(20));
-    s_txpower = esp_ieee802154_get_txpower();
+    rt_154_apply_power();
     RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
     RT_TRY(TAG, esp_ieee802154_set_short_address(rt_node_id()));
     RT_TRY(TAG, esp_ieee802154_set_promiscuous(true));  // hear everything, filter in rt_rx
@@ -338,11 +346,12 @@ void rt_154_start(void)
     RT_TRY(TAG, esp_ieee802154_receive());
 
     xTaskCreate(tx_task, "154_tx", 3072, NULL, 4, NULL);
-    ESP_LOGI(TAG, "channel %d, tx every %dms, %d dBm", CHANNEL, TX_PERIOD_MS, s_txpower);
+    ESP_LOGI(TAG, "channel %d, tx every %dms", CHANNEL, TX_PERIOD_MS);
 }
 
 #else  // no 802.15.4 radio on this target (C3, S3)
 
 void rt_154_start(void) {}
+void rt_154_apply_power(void) {}
 
 #endif

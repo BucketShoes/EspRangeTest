@@ -13,6 +13,44 @@ const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
 volatile int g_lc = 0;
 
+// Boots at minimum. Full power is opt-in for the same reason LR is: it is the state that needs
+// a field to test in, and the one where an antenna fault is least forgiving. Wi-Fi's units are
+// quarter-dBm and its hardware quantises further (see esp_wifi.h), so the comment is the
+// value it will actually land on, not the one asked for.
+static const rt_power_t s_power[RT_PWR_COUNT] = {
+    { "min",  8, -15, -12 },  // wifi  2dBm
+    { "low", 20,  -6,  -6 },  // wifi  5dBm
+    { "mid", 44,   5,   3 },  // wifi 11dBm
+    { "max", 80,  20,   9 },  // wifi 20dBm; ble stays at 9, see rt.h
+};
+
+volatile int g_pwr = 0;
+
+const rt_power_t *rt_power(void)
+{
+    const int i = g_pwr;
+    return &s_power[(i >= 0 && i < RT_PWR_COUNT) ? i : 0];
+}
+
+void rt_set_power(int level)
+{
+    if (level < 0 || level >= RT_PWR_COUNT) {
+        return;
+    }
+    g_pwr = level;
+    // Old RSSI and loss figures were taken at a different power, so they are not comparable
+    // with what follows - same reasoning as a mode or PHY change.
+    rt_stats_reset();
+
+    rt_wifi_apply_power();
+    rt_154_apply_power();
+    rt_ble_apply_power();
+
+    const rt_power_t *p = rt_power();
+    printf("\n>>> tx power = %s (wifi %d.%02ddBm, 154 %ddBm, ble %ddBm)\n",
+           p->name, p->wifi_qdbm / 4, (p->wifi_qdbm % 4) * 25, p->dbm_154, p->dbm_ble);
+}
+
 typedef struct {
     bool     seen;
     uint32_t rx, missed;      // totals since boot
@@ -200,8 +238,8 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     int            n   = 0;
 
     if (n < max) {
-        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d", rt_node_id(),
-                 (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0);
+        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d", rt_node_id(),
+                 (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0, g_pwr);
     }
 
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
@@ -236,9 +274,9 @@ void rt_report(void)
     // wifi= is the Wi-Fi *driver*, not the ESP-NOW tx gate on the line below. The two are
     // separate on purpose: a mode that mutes ESP-NOW while leaving the driver up is the exact
     // failure this rig kept measuring, so the report has to be able to show that state.
-    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s ==\n", rt_node_id(),
+    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s  pwr=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
-           rt_wifi_active() ? "on" : "off");
+           rt_wifi_active() ? "on" : "off", rt_power()->name);
     // "queued" is what we asked the radio to send; "ok" and "rejected" are what its own
     // completion callback said happened. ble_adv has no completion callback to report, so it
     // shows a queued count only - absence of ok/rejected there is the API, not a result.
