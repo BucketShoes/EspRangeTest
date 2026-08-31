@@ -69,9 +69,10 @@ const LC = ['all', 'espnow', 'ble_adv', '154', 'wifi'];
 // is down to tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
 const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 
-// Transmit power, one level for all three radios. 0x90 + index; must match RT_CMD_PWR and the
-// s_power table in main/rt_stats.c. Boards boot at "min", which is deliberate - it keeps a
-// whole range comparison inside a room, and full power is the state that wants a field.
+// Transmit power, set per radio. Byte is base + channel*8 + level; must match RT_CMD_PWR and
+// s_pwr_dbm[] in main/rt_stats.c. Per-radio rather than global so mixed setups are possible -
+// BLE low enough to keep a phone connected while 802.15.4 runs at full power, say. Boards boot
+// with every channel at "min", which keeps a whole range comparison inside a room.
 const CMD_PWR = 0x90;
 const PWR = ['min', 'low', 'mid', 'max'];
 
@@ -142,7 +143,9 @@ function onLine(d, line) {
     // f[5] (power) is absent from firmware older than the power-level work; leave d.pwr
     // undefined in that case rather than showing "min", which would be a guess.
     d.node = f[1]; d.uptime = +f[2]; d.lc = +f[3]; d.lr = +f[4];
-    if (f.length > 5) d.pwr = +f[5];
+    // One level per radio, in CH_ order. Absent on firmware older than the power work; left
+    // undefined rather than defaulted, so the buttons show "unknown" instead of a guess.
+    if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
   } else if (f[0] === 'R') {
     // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
     d.rows.set(f[1] + '/' + f[2], {
@@ -196,19 +199,23 @@ function render() {
     disc.onclick = () => disconnect(d.dev, d);
     modes.appendChild(disc);
 
-    // Second row: transmit power. Separate from the mode buttons because it is orthogonal to
-    // them - any power level is valid in any mode - and because mixing them invites clicking
-    // the wrong one mid-walk.
+    // One row per radio, below the modes. Separate from the mode buttons because power is
+    // orthogonal to them - any level is valid in any mode - and because mixing the two invites
+    // clicking the wrong one mid-walk.
     const pwr = document.createElement('div');
-    pwr.className = 'row';
-    pwr.appendChild(Object.assign(document.createElement('span'),
-                                  { className: 'hint', textContent: 'tx power' }));
-    PWR.forEach((label, i) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      if (d.pwr === i) b.className = 'on';
-      b.onclick = () => cmd(d, CMD_PWR + i);
-      pwr.appendChild(b);
+    LC.slice(1, 4).forEach((chName, ch) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.appendChild(Object.assign(document.createElement('span'),
+                                    { className: 'hint', textContent: chName + ' tx' }));
+      PWR.forEach((label, i) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        if (d.pwr && d.pwr[ch] === i) b.className = 'on';
+        b.onclick = () => cmd(d, CMD_PWR + ch * 8 + i);
+        row.appendChild(b);
+      });
+      pwr.appendChild(row);
     });
 
     const rows = [...d.rows.values()].sort(
@@ -219,7 +226,7 @@ function render() {
       `<span class="${d.live ? 'ok' : 'bad'}" style="font-size:12px">` +
       `${d.live ? 'connected' : 'reconnecting…'}</span></h2>` +
       `<div class="meta">up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
-      `tx: <b>${d.pwr === undefined ? '?' : PWR[d.pwr]}</b> · ` +
+      `tx: <b>${d.pwr ? d.pwr.map(p => PWR[p]).join('/') : '?'}</b> · ` +
       `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b></div>`;
     el.appendChild(modes);
     el.appendChild(pwr);

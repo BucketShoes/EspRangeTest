@@ -164,7 +164,7 @@ void rt_wifi_apply_power(void)
     if (!s_wifi_on) {
         return;
     }
-    RT_TRY(TAG, esp_wifi_set_max_tx_power(rt_power()->wifi_qdbm));
+    RT_TRY(TAG, esp_wifi_set_max_tx_power(rt_power_dbm(CH_ESPNOW) * 4));
 
     // Read back, because the hardware quantises the request to a fixed ladder of values (see
     // esp_wifi.h) and the one we asked for is usually not the one we got.

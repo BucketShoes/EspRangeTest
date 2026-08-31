@@ -106,39 +106,30 @@ void rt_set_lr(bool lr);
 // keeps working unchanged.
 #define RT_CMD_LR_OFF 0x80
 #define RT_CMD_LR_ON  0x81
-#define RT_CMD_PWR    0x90  // 0x90 + level, so 0x90..0x93
-
 // ---- Transmit power ----------------------------------------------------------------------
 //
-// One level, applied to all three radios at once, chosen at runtime.
+// Per channel, independently, chosen at runtime. The point is mixed setups: BLE at a level
+// that keeps a phone connected while 802.15.4 runs at full power, and the reverse, without
+// rebuilding. A single global level cannot express the thing actually being tested.
 //
-// Central because a range comparison only means something if every channel is being asked for
-// the same thing, and for most of this project's life they were not: Wi-Fi at 19.5dBm,
-// 802.15.4 at 20dBm, BLE at 9 - an 11dB handicap, roughly 3.5x in distance, on the channel
-// that was winning anyway. The numbers were scattered across four files and nobody was
-// comparing them to each other.
+// Central table rather than four constants in four files, because until 2026-09-01 that is
+// what it was - Wi-Fi 19.5dBm, 802.15.4 20dBm, BLE 9dBm - and the numbers were never in one
+// place to be compared. The 9 was a deliberate handicap carried over from earlier boards where
+// asking for more than 9 produced distortion rather than range; whether the C6 is honest above
+// that is an open question, and "max" here goes to 20 specifically so it can be answered.
 //
-// Runtime-selectable because a fixed level is no good for comparisons, and because full power
-// needs somewhere to walk to. At minimum the whole test should fit in a room, which makes a
-// range comparison something you can run at a desk. It is also the safer state to leave a
-// board transmitting in while the antenna situation is still in question.
-//
-// BLE is deliberately capped below the others at the top: on the owner's earlier boards,
-// asking for more than 9dBm produced distortion rather than range, whatever was claimed. The
-// C6 may be honest up to 20 - untested. Until it is checked, "max" is not equal across
-// channels and comparisons at max should say so.
-typedef struct {
-    const char *name;
-    int8_t      wifi_qdbm;  // esp_wifi_set_max_tx_power units: 0.25dBm, valid [8,84]
-    int8_t      dbm_154;    // esp_ieee802154_set_txpower: [-15,20], quantised to 3dB steps
-    int8_t      dbm_ble;    // NimBLE ext adv request; the controller picks the nearest it has
-} rt_power_t;
-
+// Levels are indices into s_pwr_dbm[] in rt_stats.c. Boards boot at "min", which keeps a whole
+// range comparison inside a room.
 #define RT_PWR_COUNT 4
+extern const char *rt_pwr_name[RT_PWR_COUNT];
 
-extern volatile int g_pwr;
-const rt_power_t *rt_power(void);
-void rt_set_power(int level);
+// Command byte: base + channel*8 + level, so espnow is 0x90..0x93, ble_adv 0x98..0x9B and
+// 154 0xA0..0xA3. Spaced by 8 rather than packed so a byte is readable in hex while debugging.
+#define RT_CMD_PWR 0x90
+
+extern volatile int g_pwr[CH_COUNT];   // level per channel
+int8_t rt_power_dbm(int chan);         // what that level means, in dBm
+void   rt_set_power(int chan, int level);
 
 // Applied per radio rather than centrally: each needs a different call, and the BLE ones need
 // their advertising instance reconfigured rather than a value poked, which cannot be done from
@@ -171,6 +162,10 @@ bool rt_wifi_active(void);
 // incomparable to new ones, so both wipe the table the same way.
 void rt_stats_reset(void);
 
+// Wipe one channel only. A power change invalidates that channel's history and nothing else,
+// so throwing away the other two channels' data alongside it would be gratuitous.
+void rt_stats_reset_chan(int chan);
+
 // Fill in a packet ready to send on this channel, advancing that channel's sequence number.
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
 
@@ -194,7 +189,7 @@ void rt_report(void);
 // Current state as short CSV text lines, for the web UI. Text rather than a binary format
 // on purpose: it is the same information the serial report shows, it is readable in a BLE
 // debugging app, and it needs no decoder on the browser side.
-//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr>
+//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>
 //   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
 #define RT_LINE_MAX 72
 int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);

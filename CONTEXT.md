@@ -289,41 +289,45 @@ genuine antenna coupling changes ~6 dB per doubling, so 20 cm against 2 m should
 
 ## Transmit power
 
-**One level for all three radios, chosen at runtime, booting at minimum.** The table lives in
-`s_power[]` in `rt_stats.c`; `rt.h` explains the reasoning; each radio applies it in its own
-file (`rt_wifi_apply_power` / `rt_154_apply_power` / `rt_ble_apply_power`).
+**One level per radio, set independently at runtime, all booting at minimum.** Table is
+`s_pwr_dbm[]` in `rt_stats.c`; each radio applies its own (`rt_wifi_apply_power` /
+`rt_154_apply_power` / `rt_ble_apply_power`).
 
-| level | Wi-Fi / ESP-NOW | 802.15.4 | BLE |
+| level | Wi-Fi / ESP-NOW | BLE | 802.15.4 |
 |---|---|---|---|
-| min *(boot default)* | 2 dBm | −15 dBm | −12 dBm |
+| min *(boot default)* | 2 dBm | −12 dBm | −15 dBm |
 | low | 5 dBm | −6 dBm | −6 dBm |
-| mid | 11 dBm | 5 dBm | 3 dBm |
-| max | 20 dBm | 20 dBm | **9 dBm** |
+| mid | 11 dBm | 3 dBm | 5 dBm |
+| max | 20 dBm | 20 dBm | 20 dBm |
 
-Why this exists at all: the levels used to be four unrelated constants in four files — Wi-Fi
-19.5 dBm, 802.15.4 20 dBm, BLE 9 dBm — and nobody had compared them to each other. **BLE was
-running 11 dB below the other two**, roughly a 3.5× distance handicap in free space, on the
-channel that was nevertheless winning. Every BLE-versus-anything result predating 2026-09-01
-was measured under that handicap and should be read with it in mind.
+**Per radio, not global**, because the mixed setup is the point: BLE low enough to hold a phone
+connection while 802.15.4 runs at full power is a real test, and a single level cannot express
+it. Booting at minimum keeps a whole comparison inside a room.
 
-- **Booting at minimum** keeps a whole range comparison inside a room, which makes this
-  testable at a desk instead of needing a field. It is also the gentler state to leave a board
-  transmitting in while the antenna question is open.
-- **A fixed level is no good for comparisons** — hence the switch in the web UI (second button
-  row) and the `RT_CMD_PWR` command byte, rather than a compile-time constant.
-- **BLE is capped at 9 dBm at "max" on purpose.** On the owner's earlier boards, asking for
-  more than 9 produced distortion rather than range, whatever the part claimed. The C6 may be
-  honest up to 20 — **untested**. Until someone checks, "max" is *not* equal across channels
-  and any comparison run there should say so.
+**On the 9 dBm that used to be hardcoded in BLE.** It was a deliberate handicap carried from
+earlier boards, where asking for more than 9 gave distortion rather than range regardless of
+what the part claimed. It was set and left alone because power levels were not the problem at
+the time. It was never a rule, and "max" now goes to 20 on BLE specifically so the open
+question — is the C6 honest above 9? — can be answered by pressing a button. If it is, BLE has
+been winning under a handicap and should win by more.
+
 - Every radio's power is **read back** after being set, because all three quantise the request
   (Wi-Fi to a fixed ladder in `esp_wifi.h`, 802.15.4 to 3 dB steps, BLE to whatever the
   controller has). The read-back value is what goes into the packet's `txdbm`, so the far end
   records what was transmitted rather than what was asked for.
-- A power change resets the stats, for the same reason a mode or PHY change does: the old RSSI
-  and loss figures were taken under different conditions.
-- A phone already connected keeps the power it connected at until it drops — advertising power
+- A power change resets **only that channel's** stats. The other two were not touched and
+  their history is still good.
+- The phone-UI advert shares the BLE level — same radio, and a fourth knob would not enable a
+  measurement that the third does not.
+- A phone already connected keeps the power it connected at until it drops: advertising power
   is fixed when the instance is configured, and rebuilding a connectable instance mid-link
   would open a second slot rather than change the existing one.
+
+**Comparing ESP dBm with phone dBm is not like for like.** The ESP figure is conducted power at
+the pin, before the chip antenna's own loss; phone figures are usually radiated/EIRP. So an ESP
+"20 dBm" is somewhat less than 20 dBm in the air, and the gap to a phone's ~5 dBm is narrower
+than the numbers suggest. More power one way is still more power — the caveat is about reading
+absolute differences, not about the direction of the effect.
 
 ## Field results so far
 

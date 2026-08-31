@@ -113,7 +113,7 @@ static int start_adv(void)
     params.secondary_phy = BLE_HCI_LE_PHY_CODED;
     params.itvl_min      = ADV_ITVL_MIN;
     params.itvl_max      = ADV_ITVL_MAX;
-    params.tx_power      = rt_power()->dbm_ble;
+    params.tx_power      = rt_power_dbm(CH_BLE_ADV);
     params.sid           = 0;
 
     int8_t selected_tx_power = 0;
@@ -138,7 +138,7 @@ static int start_adv(void)
 
     s_adv_power = selected_tx_power;
     ESP_LOGI(TAG, "coded-PHY adverts up, asked %d dBm, got %d dBm",
-             rt_power()->dbm_ble, selected_tx_power);
+             rt_power_dbm(CH_BLE_ADV), selected_tx_power);
     return 0;
 }
 

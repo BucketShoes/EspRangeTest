@@ -163,8 +163,9 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
 
     if (b == RT_CMD_LR_OFF || b == RT_CMD_LR_ON) {
         rt_set_lr(b == RT_CMD_LR_ON);
-    } else if (b >= RT_CMD_PWR && b < RT_CMD_PWR + RT_PWR_COUNT) {
-        rt_set_power(b - RT_CMD_PWR);
+    } else if (b >= RT_CMD_PWR && b < RT_CMD_PWR + CH_COUNT * 8) {
+        // base + channel*8 + level; rt_set_power() range-checks both halves.
+        rt_set_power((b - RT_CMD_PWR) / 8, (b - RT_CMD_PWR) % 8);
     } else {
         rt_set_lc(b);  // ignores anything out of range on its own
     }
@@ -276,7 +277,9 @@ static int start_adv(void)
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
     p.itvl_min      = UI_SLOW() ? UI_ITVL_SLOW_MIN : UI_ITVL_FAST_MIN;
     p.itvl_max      = UI_SLOW() ? UI_ITVL_SLOW_MAX : UI_ITVL_FAST_MAX;
-    p.tx_power      = rt_power()->dbm_ble;
+    // The phone link shares the BLE level: it is the same radio, and a separate knob for the
+    // control advert would be a fourth thing to get wrong for no measurement it enables.
+    p.tx_power      = rt_power_dbm(CH_BLE_ADV);
     p.sid           = 1;
 
     int8_t pwr = 0;
@@ -370,8 +373,8 @@ void rt_ui_notify(void)
     // which is the same reason apply_lc_ble_params() leaves it alone when connected. A phone
     // that is already connected keeps the power it connected at until it drops.
     static int s_last_pwr = -1;
-    if (g_pwr != s_last_pwr) {
-        s_last_pwr = g_pwr;
+    if (g_pwr[CH_BLE_ADV] != s_last_pwr) {
+        s_last_pwr = g_pwr[CH_BLE_ADV];
         if (s_conn == BLE_HS_CONN_HANDLE_NONE && !s_ui_suspended) {
             ble_gap_ext_adv_stop(UI_INSTANCE);
             start_adv();

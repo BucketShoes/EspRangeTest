@@ -13,42 +13,48 @@ const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
 volatile int g_lc = 0;
 
-// Boots at minimum. Full power is opt-in for the same reason LR is: it is the state that needs
-// a field to test in, and the one where an antenna fault is least forgiving. Wi-Fi's units are
-// quarter-dBm and its hardware quantises further (see esp_wifi.h), so the comment is the
-// value it will actually land on, not the one asked for.
-static const rt_power_t s_power[RT_PWR_COUNT] = {
-    { "min",  8, -15, -12 },  // wifi  2dBm
-    { "low", 20,  -6,  -6 },  // wifi  5dBm
-    { "mid", 44,   5,   3 },  // wifi 11dBm
-    { "max", 80,  20,   9 },  // wifi 20dBm; ble stays at 9, see rt.h
+const char *rt_pwr_name[RT_PWR_COUNT] = { "min", "low", "mid", "max" };
+
+// dBm per channel per level. Ranges differ by radio: Wi-Fi is 2..20 (and quantises to its own
+// ladder, see esp_wifi.h), 802.15.4 is -15..20 in 3dB steps, BLE is whatever the controller
+// offers near the request. All three top out at 20 - including BLE, so the open question of
+// whether this chip is honest above 9dBm is something a button press can answer.
+static const int8_t s_pwr_dbm[CH_COUNT][RT_PWR_COUNT] = {
+    [CH_ESPNOW]  = {   2, 5,  11, 20 },
+    [CH_BLE_ADV] = { -12, -6,  3, 20 },
+    [CH_154]     = { -15, -6,  5, 20 },
 };
 
-volatile int g_pwr = 0;
+volatile int g_pwr[CH_COUNT];  // all zero: every channel boots at "min"
 
-const rt_power_t *rt_power(void)
+int8_t rt_power_dbm(int chan)
 {
-    const int i = g_pwr;
-    return &s_power[(i >= 0 && i < RT_PWR_COUNT) ? i : 0];
+    if (chan < 0 || chan >= CH_COUNT) {
+        return 0;
+    }
+    const int lvl = g_pwr[chan];
+    return s_pwr_dbm[chan][(lvl >= 0 && lvl < RT_PWR_COUNT) ? lvl : 0];
 }
 
-void rt_set_power(int level)
+void rt_set_power(int chan, int level)
 {
-    if (level < 0 || level >= RT_PWR_COUNT) {
+    if (chan < 0 || chan >= CH_COUNT || level < 0 || level >= RT_PWR_COUNT) {
         return;
     }
-    g_pwr = level;
-    // Old RSSI and loss figures were taken at a different power, so they are not comparable
-    // with what follows - same reasoning as a mode or PHY change.
-    rt_stats_reset();
+    g_pwr[chan] = level;
 
-    rt_wifi_apply_power();
-    rt_154_apply_power();
-    rt_ble_apply_power();
+    // Only this channel's history is invalidated - the other two were not touched.
+    rt_stats_reset_chan(chan);
 
-    const rt_power_t *p = rt_power();
-    printf("\n>>> tx power = %s (wifi %d.%02ddBm, 154 %ddBm, ble %ddBm)\n",
-           p->name, p->wifi_qdbm / 4, (p->wifi_qdbm % 4) * 25, p->dbm_154, p->dbm_ble);
+    switch (chan) {
+    case CH_ESPNOW:  rt_wifi_apply_power(); break;
+    case CH_BLE_ADV: rt_ble_apply_power();  break;
+    case CH_154:     rt_154_apply_power();  break;
+    default: break;
+    }
+
+    printf("\n>>> tx power %s = %s (%d dBm)\n", rt_chan_name[chan], rt_pwr_name[level],
+           rt_power_dbm(chan));
 }
 
 typedef struct {
@@ -122,6 +128,20 @@ static const char *lc_name(int lc)
         return "wifi+phone (BLE off, LR forced off)";
     }
     return rt_chan_name[lc - 1];
+}
+
+void rt_stats_reset_chan(int chan)
+{
+    if (chan < 0 || chan >= CH_COUNT) {
+        return;
+    }
+    for (int i = 0; i < RT_MAX_PEERS; i++) {
+        memset(&s_peers[i].ch[chan], 0, sizeof(s_peers[i].ch[chan]));
+    }
+    s_tx_seq[chan]   = 0;
+    s_tx_count[chan] = 0;
+    s_tx_ok[chan]    = 0;
+    s_tx_fail[chan]  = 0;
 }
 
 void rt_stats_reset(void)
@@ -238,8 +258,9 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     int            n   = 0;
 
     if (n < max) {
-        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d", rt_node_id(),
-                 (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0, g_pwr);
+        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d", rt_node_id(),
+                 (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0,
+                 g_pwr[CH_ESPNOW], g_pwr[CH_BLE_ADV], g_pwr[CH_154]);
     }
 
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
@@ -274,9 +295,14 @@ void rt_report(void)
     // wifi= is the Wi-Fi *driver*, not the ESP-NOW tx gate on the line below. The two are
     // separate on purpose: a mode that mutes ESP-NOW while leaving the driver up is the exact
     // failure this rig kept measuring, so the report has to be able to show that state.
-    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s  pwr=%s ==\n", rt_node_id(),
+    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
-           rt_wifi_active() ? "on" : "off", rt_power()->name);
+           rt_wifi_active() ? "on" : "off");
+    printf("  pwr: ");
+    for (int c = 0; c < CH_COUNT; c++) {
+        printf("%s=%s(%ddBm)  ", rt_chan_name[c], rt_pwr_name[g_pwr[c]], rt_power_dbm(c));
+    }
+    printf("\n");
     // "queued" is what we asked the radio to send; "ok" and "rejected" are what its own
     // completion callback said happened. ble_adv has no completion callback to report, so it
     // shows a queued count only - absence of ok/rejected there is the API, not a result.

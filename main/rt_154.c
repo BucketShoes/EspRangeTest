@@ -117,7 +117,7 @@ static uint32_t          s_err_next_ms;
 
 void rt_154_apply_power(void)
 {
-    RT_TRY(TAG, esp_ieee802154_set_txpower(rt_power()->dbm_154));
+    RT_TRY(TAG, esp_ieee802154_set_txpower(rt_power_dbm(CH_154)));
     // Read back: the driver quantises to 3dB steps, and this value goes into every packet, so
     // the far end records what was actually transmitted rather than what was requested.
     s_txpower = esp_ieee802154_get_txpower();
