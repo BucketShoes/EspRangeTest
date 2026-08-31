@@ -162,10 +162,14 @@ void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *in
     esp_ieee802154_receive_handle_done(frame);
 }
 
+// The radio confirming a frame actually went out. ack is NULL here - these frames never request
+// one - so this fires on transmission, not on delivery, which is exactly the question being
+// asked: did the antenna ever get used at all?
 void esp_ieee802154_transmit_done(const uint8_t *frame, const uint8_t *ack,
                                   esp_ieee802154_frame_info_t *ack_info)
 {
     (void)frame; (void)ack; (void)ack_info;
+    rt_tx_ok(CH_154);
 }
 
 // ISR context - counter increments only, no logging. See report_tx_errors() above.

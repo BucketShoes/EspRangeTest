@@ -33,6 +33,7 @@ static struct {
 
 static uint32_t s_tx_seq[CH_COUNT];
 static uint32_t s_tx_count[CH_COUNT];
+static uint32_t s_tx_ok[CH_COUNT];
 static uint32_t s_tx_fail[CH_COUNT];
 static uint8_t  s_node_id;
 
@@ -92,6 +93,7 @@ void rt_stats_reset(void)
     memset(s_peers, 0, sizeof(s_peers));
     memset(s_tx_seq, 0, sizeof(s_tx_seq));
     memset(s_tx_count, 0, sizeof(s_tx_count));
+    memset(s_tx_ok, 0, sizeof(s_tx_ok));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
 }
 
@@ -116,6 +118,13 @@ void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
     p->txdbm = txdbm;
     p->seq   = s_tx_seq[chan]++;
     s_tx_count[chan]++;
+}
+
+void rt_tx_ok(int chan)
+{
+    if (chan >= 0 && chan < CH_COUNT) {
+        s_tx_ok[chan]++;
+    }
 }
 
 void rt_tx_failed(int chan)
@@ -230,14 +239,18 @@ void rt_report(void)
     printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
            rt_wifi_active() ? "on" : "off");
+    // "queued" is what we asked the radio to send; "ok" and "rejected" are what its own
+    // completion callback said happened. ble_adv has no completion callback to report, so it
+    // shows a queued count only - absence of ok/rejected there is the API, not a result.
     printf("  tx: ");
     for (int c = 0; c < CH_COUNT; c++) {
         printf("%s=%lu%s", rt_chan_name[c], (unsigned long)s_tx_count[c],
                rt_tx_enabled(c) ? "" : "(off)");
-        if (s_tx_fail[c]) {
-            printf("(%lu failed)", (unsigned long)s_tx_fail[c]);
+        if (s_tx_ok[c] || s_tx_fail[c]) {
+            printf("[%lu ok, %lu rejected]", (unsigned long)s_tx_ok[c],
+                   (unsigned long)s_tx_fail[c]);
         }
-        printf(" ");
+        printf("  ");
     }
     printf("\n");
 

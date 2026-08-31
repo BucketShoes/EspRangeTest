@@ -134,10 +134,15 @@ void rt_stats_reset(void);
 // Fill in a packet ready to send on this channel, advancing that channel's sequence number.
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
 
-// Count a send that the radio itself rejected or failed to get on air - distinct from the
-// packet just not arriving, which is what the whole rig measures. Without this, a channel
-// stuck at 100% loss looks identical whether it is genuinely not being heard or never left
-// the antenna in the first place.
+// The two halves of "did it actually transmit". Both are driven by the radio's own completion
+// callback, not by what we asked for, so together they answer the only question that matters
+// when a channel reads 100% loss: was it not heard, or did it never leave the antenna?
+//
+// Reporting attempts-minus-failures is not good enough. That makes "it worked" the default
+// assumption for anything not explicitly reported broken, which is the same swallowed-failure
+// trap as everywhere else in this project - so a confirmed success has to be counted as
+// deliberately as a confirmed rejection.
+void rt_tx_ok(int chan);
 void rt_tx_failed(int chan);
 
 // Record a reception. Ignores anything that is not ours.

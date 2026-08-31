@@ -31,7 +31,9 @@ static void on_rx(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 static void on_send(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
     (void)mac_addr;
-    if (status != ESP_NOW_SEND_SUCCESS) {
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        rt_tx_ok(CH_ESPNOW);
+    } else {
         rt_tx_failed(CH_ESPNOW);
     }
 }
