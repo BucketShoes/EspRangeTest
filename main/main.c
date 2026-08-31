@@ -29,6 +29,26 @@ static const char *TAG = "rt";
 #define BUTTON_GPIO  9
 #define WIFI_CHAN    1
 
+// XIAO ESP32C6 RF switch power. Drive LOW to put the antenna on the air at all.
+//
+// The module's antenna path runs through an FM8625H SPDT switch whose VDD comes from a P-FET
+// (Q3) with a 10k pull-up on its gate and its pull-down not populated. Gate high means the FET
+// is off, so **out of reset the RF switch has no supply**: the antenna is not connected to the
+// radio, and the only coupling left is the switch's off-isolation. Measured cost of that:
+// about 70 dB, which is what had two boards a metre apart delivering 3 packets out of 5000.
+//
+// So this is not an optimisation or a board variant to support politely. Without it the
+// hardware does not radiate, and every radio on the chip is equally affected.
+//
+// GPIO14 (VCTL, port select) is deliberately NOT touched. R24 holds it at ground, selecting
+// RF1 = the onboard ceramic antenna, which is the one fitted - there is no IPEX on these
+// boards. Driving it would be the only way to select an antenna that is not there.
+//
+// Harmless on the DevKitC/DevKitM, where GPIO3 is an ordinary unused pin - and GPIO3 is not a
+// strapping pin on the C6 (those are 8, 9 and 15), so driving it out of reset is safe.
+#define ANT_PWR_GPIO   3
+#define ANT_SETTLE_MS  100   // the vendor example waits before using the switch; so do we
+
 // The button has exactly two gestures, and no third is allowed to appear.
 //
 // Tap = next mode, hold = restore. That is it. HOLD_MS is not a window you have to release
@@ -280,6 +300,20 @@ void app_main(void)
         // partition is worth a complaint, not a boot loop.
         ESP_LOGW(TAG, "nvs_flash_init -> %s (continuing)", esp_err_to_name(err));
     }
+
+    // Before any radio: an unpowered antenna switch makes every measurement below meaningless.
+    const gpio_config_t ant = {
+        .pin_bit_mask = 1ULL << ANT_PWR_GPIO,
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&ant);
+    gpio_set_level(ANT_PWR_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(ANT_SETTLE_MS));
+    ESP_LOGI(TAG, "RF switch powered (GPIO%d low); GPIO14 left alone, so the onboard "
+                  "ceramic antenna stays selected", ANT_PWR_GPIO);
 
     esp_chip_info_t info;
     esp_chip_info(&info);

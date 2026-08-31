@@ -191,7 +191,38 @@ design" are now wrong.
   modules. So absolute distances from XIAO runs are not comparable with earlier DevKit runs.
   Comparisons *between channels within one run* still are, which is what matters.
 
-## Open: ~70 dB of missing link budget on the XIAOs (2026-09-01)
+## The XIAO RF switch is unpowered out of reset — root cause of everything below
+
+**Drive GPIO3 LOW or the board does not radiate.** Confirmed from the XIAO ESP32C6 schematic
+(`XIAO_ESP32_C6_v1.0_SCH`) and Seeed's own wiki. Traced:
+
+- The antenna path runs through **U5, an FM8625H SPDT RF switch**. Its ANT pin is the only
+  connection to the C6's antenna pin — everything goes through it.
+- Its **VDD comes from Q3**, a P-channel FET whose gate has a 10k pull-up (R21) to +3V3, with
+  the matching pull-down (R22) **not populated**. Gate pulled high ⇒ Vgs = 0 ⇒ FET off ⇒
+  **switch VDD = 0 out of reset.** The schematic states it outright: *"RF Switch Power: 0: ON,
+  1: OFF"* on the GPIO3 net.
+- **GPIO14 drives VCTL** (port select: 0 = RF1 = onboard ceramic antenna ANT1, 1 = RF2 = the
+  U.FL/IPEX ANT2). **R24 (5.1k) holds it at ground**, so the ceramic antenna is selected with
+  no firmware involvement. There is no IPEX fitted on these boards, so GPIO14 must be left
+  alone — driving it high would select a connector with nothing on it.
+
+An unpowered SPDT switch is not an open circuit, it is a very lossy one: signal leaks through
+its off-isolation and through board parasitics. That is exactly the ~70 dB shortfall measured
+below, and why the occasional single packet got through at −91 dBm instead of nothing at all.
+
+**It does not damage anything.** The C6's PA tolerates a bad match; the reflected power is
+dissipated rather than radiated, which is why both boards ran warm (~35 °C — mild for a part
+rated to 105 °C junction). The board is wasteful and deaf in this state, not self-destructive,
+with or without an external antenna connected.
+
+It is a genuinely poor default — any firmware for this module, of any framework, has to know
+this pin exists — but it is the hardware's behaviour, not a fault in the boards.
+
+Fixed in `main.c`: GPIO3 is driven low before any radio is initialised, with a 100 ms settle
+matching Seeed's example. GPIO14 is untouched.
+
+## What that fault looked like: ~70 dB of missing link budget (2026-09-01)
 
 Two boards, less than 1 m apart, both flashed together, both in `154` mode, logs covering the
 same ~400s window (`test04.txt` / `teste4.txt`):
@@ -215,24 +246,34 @@ software can produce that:
 - coexistence blocks transmits, and these transmits are confirmed on air;
 - a frame-handling bug gives 0%, not 0.05% — and 0.05% at −91 dBm is exactly what a receiver
   working correctly on an extremely weak signal looks like;
-- 802.15.4 transmit power defaults to the driver's **maximum** (`esp_ieee802154_pib.c` fills
-  the power table with `IEEE802154_TXPOWER_VALUE_MAX`), and the whole adjustable range is only
-  ~20 dB anyway. It is now set and read back explicitly so this stops being a question.
+- 802.15.4 transmit power defaults to the driver's **maximum**, and the whole adjustable range
+  is only ~20 dB, so it could not account for 70 dB even at minimum. The macro is awkward to
+  find because its definition and its use are in different components: defined in
+  `components/hal/esp32c6/include/hal/ieee802154_ll.h:12` as `20` (min `-15`), used in
+  `components/ieee802154/driver/esp_ieee802154_pib.c:44`. Power is now set and read back
+  explicitly so this stops being a question.
 
 70 dB is the signature of RF that never reaches an antenna — the two boards coupling through
 stray leakage rather than through a radiating element. Both boards being warm fits: a badly
 matched load reflects transmit power back into the PA.
 
-**Prime suspect: the XIAO's antenna switch.** The owner has GPIO14 floating on an external
-pulldown, selecting the onboard chip antenna, with no IPEX fitted. Worth confirming against
-Seeed's own documentation whether that board also has a separate **RF-switch enable** pin that
-must be driven (on some XIAO variants it is active-low and the switch is disabled when it
-floats), because a disabled switch would attenuate exactly like this. **Unverified — check the
-schematic, do not take this paragraph as fact, and do not touch GPIO14.**
+**Cause: the RF switch was unpowered** — see the section above, confirmed from the schematic.
 
-Decisive test needing no code: **RSSI versus distance.** Genuine antenna coupling changes
-~6 dB per doubling of distance, so 20 cm versus 2 m should differ by ~20 dB. If RSSI barely
-moves, the path is not through the antennas and no amount of firmware will fix it.
+Two things this episode is worth remembering for:
+
+- **A single early packet reads as "it works".** Every previous session saw one direction
+  connect quickly and the other stay silent, and stopped there. What was actually happening
+  was one packet at −90 dBm on each side, out of thousands, in whichever direction happened to
+  land first. `rx 1 miss 0` and a healthy link look the same at a glance; only the transmit
+  totals next to them showed the ratio.
+- **Symmetry is diagnostic.** RF is reciprocal, so a link that seems one-way, and whose
+  direction changes between runs, is almost never RF. Here it was neither one-way nor
+  software: both directions were equally dead and the apparent asymmetry was sampling noise on
+  a 0.05% link.
+
+For future doubt of the same kind, the test needing no code is **RSSI versus distance**:
+genuine antenna coupling changes ~6 dB per doubling, so 20 cm against 2 m should differ by
+~20 dB. If RSSI barely moves, the path is not going through the antennas.
 
 ## Field results so far
 
