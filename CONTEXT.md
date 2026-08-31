@@ -208,13 +208,25 @@ design" are now wrong.
   alone — driving it high would select a connector with nothing on it.
 
 An unpowered SPDT switch is not an open circuit, it is a very lossy one: signal leaks through
-its off-isolation and through board parasitics. That is exactly the ~70 dB shortfall measured
-below, and why the occasional single packet got through at −91 dBm instead of nothing at all.
+its off-isolation, and there is copper from the chip to the switch, inside a can that is not a
+perfect shield. At a metre, against a link budget this large, that stray coupling is enough to
+get an occasional packet through at −91 dBm — which is exactly what was measured, and is why
+the fault presented as a terrible link rather than as no link at all.
 
-**It does not damage anything.** The C6's PA tolerates a bad match; the reflected power is
-dissipated rather than radiated, which is why both boards ran warm (~35 °C — mild for a part
-rated to 105 °C junction). The board is wasteful and deaf in this state, not self-destructive,
-with or without an external antenna connected.
+**Whether it damages anything is unknown — do not assume it is safe.** An earlier revision of
+this file claimed the PA tolerates a bad match and that the boards' warmth was reflected power.
+Both claims were wrong and are withdrawn:
+
+- No VSWR ruggedness figure has been found for the C6. Espressif's datasheets do not publish
+  one. "It survived, so it is fine" is not evidence of no cumulative damage.
+- The warmth is not diagnostic and never was. The part draws roughly 300 mA at 3.3 V while
+  transmitting — about 1 W — so a reflected 100 mW is lost in the noise of that budget. ~35 °C
+  measured by finger on the can says the chip is working, nothing more.
+
+The owner's reasoning is the safer one to hold: a *lossy* switch is probably kinder to the PA
+than a *missing* antenna, because it attenuates and dissipates rather than reflecting a hard
+open straight back. That argues for leaving the ceramic antenna selected — which is what the
+hardware does unaided — rather than powering the switch over to an unpopulated IPEX.
 
 It is a genuinely poor default — any firmware for this module, of any framework, has to know
 this pin exists — but it is the hardware's behaviour, not a fault in the boards.
