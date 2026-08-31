@@ -57,13 +57,14 @@ static void tx_task(void *pv)
 }
 
 // Called after every esp_wifi_start(), so the peer table is known-good rather than assumed to
-// have survived the stop. It does survive - the peer list belongs to the ESP-NOW module, which
-// esp_wifi_stop() does not touch - so the usual outcome here is ESP_ERR_ESPNOW_EXIST, which is
-// success by another name. Re-adding costs two lines; finding out the hard way, mid-walk, that
-// an assumption about somebody else's driver was wrong costs a test run.
+// have survived the stop. Confirmed by the logs that it does survive - the peer list belongs to
+// the ESP-NOW module, which esp_wifi_stop() does not touch - so this is now a check rather than
+// a blind re-add. Asking esp_now_add_peer() and swallowing ESP_ERR_ESPNOW_EXIST worked, but the
+// component logs its own "Peer exists. Please call API esp_now_mod_peer()!" warning before
+// returning, which reads like a fault every time a mode changes.
 void rt_espnow_resume(void)
 {
-    if (!s_inited) {
+    if (!s_inited || esp_now_is_peer_exist(BCAST)) {
         return;
     }
     esp_now_peer_info_t peer = { 0 };
@@ -71,11 +72,9 @@ void rt_espnow_resume(void)
     peer.channel = 0;  // whatever channel the interface is already on
     peer.ifidx   = WIFI_IF_STA;
     peer.encrypt = false;
+    RT_TRY(TAG, esp_now_add_peer(&peer));
 
-    const esp_err_t err = esp_now_add_peer(&peer);
-    if (err != ESP_OK && err != ESP_ERR_ESPNOW_EXIST) {
-        ESP_LOGE(TAG, "esp_now_add_peer -> %s", esp_err_to_name(err));
-    }
+    ESP_LOGI(TAG, "broadcast peer re-added after a wifi restart");
 }
 
 void rt_espnow_start(void)

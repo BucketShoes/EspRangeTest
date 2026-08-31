@@ -186,6 +186,12 @@ static void restore_control(void)
 #if RT_STAGE >= 1
 static void wifi_start(void)
 {
+    // The Wi-Fi driver dumps ~30 lines of per-MCS TX power tables and HE/iTWT chatter at
+    // WARN on every esp_wifi_start(). That was tolerable when it happened once at boot; now
+    // that a mode change stops and starts the driver, it buries the report every time you
+    // press the button. Errors still come through.
+    esp_log_level_set("wifi", ESP_LOG_ERROR);
+
     RT_TRY(TAG, esp_netif_init());
     RT_TRY(TAG, esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();

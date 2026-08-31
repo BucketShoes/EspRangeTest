@@ -271,6 +271,23 @@ the original code discarded the error silently - the same "swallowed failure loo
 to a genuinely untested channel" trap as everywhere else in this project. In `all` mode,
 802.15.4 is not "disadvantaged", it is **completely absent**.
 
+**RESOLVED 2026-08-31 — it was contention, not configuration.** Bench log, one board, cycling
+modes with the button:
+
+| mode | Wi-Fi | coded scanner | 802.15.4 result |
+|---|---|---|---|
+| `off (all radios)` | on | 100% duty | 33 queued, **33 refused** — 0.0% |
+| `154` | stopped | stopped | 36 queued, **1 refused** (at the transition) — ~97% |
+
+So the radio, the channel, the frame format and the driver setup were all fine the whole time.
+802.15.4 transmits happily the moment it is given room, which retires the whole "maybe 15.4 is
+misconfigured" branch. Note this needs only one board: `esp_ieee802154_transmit_done()` fires
+on transmission, not delivery, so TX success is observable with no peer present.
+
+Also observed: after switching back to `all`, two frames got through in the moment before the
+scanner and Wi-Fi came back up, then it returned to 0%. The brief non-100% number is a
+transition artefact, not sharing.
+
 **The dedup trap in the fix above:** `rt_154.c`'s ISR handler only logs when the error *type*
 changes (`if (error != s_last_tx_err)`), on purpose — `ESP_LOGW` from ISR context takes a
 newlib lock and would eventually hang. Side effect: once coexist starts failing, it logs
@@ -359,6 +376,27 @@ does not *depend* on that being true.
 The report header now prints `wifi=on/off` — the Wi-Fi **driver**, distinct from the ESP-NOW
 `(off)` tx-gate marker on the line below. The failure mode this project keeps hitting is a
 radio quietly still on while the numbers imply otherwise, so that state has to be visible.
+
+**Forcing a share without touching priorities.** All-radios mode is supposed to test all three
+*at the same instant* — the only way to compare them without aiming, multipath and where you
+happened to be standing varying between runs, which is worth a high failure rate. Two
+mechanisms, both "ask for less" or "ask again", neither re-ranking anybody:
+
+- **The coded scanner duty-cycles in all-radios mode** (`rt_ble.c`: 80ms window / 200ms
+  interval = 40%, versus `window == interval` while `ble_adv` is the channel under test). It
+  was the single continuous claim on the antenna and the direct cause of the 100.0% figure
+  above. The cost is coded adverts missed that would otherwise have been heard — accepted
+  deliberately: that loss is the price of a simultaneous comparison, and it is cheaper than a
+  channel that cannot transmit at all.
+- **802.15.4 retries a refused transmit** (`rt_154.c`, `TX_TRIES` / `TX_BACKOFF_MS`). A
+  coexistence refusal is not a collision or a timeout — the arbiter says no immediately and
+  nothing goes on the air — so asking again 10–30ms later costs no airtime and takes no slot
+  from anyone. We are not outranking Wi-Fi or BLE, only declining to give up after the first
+  no. Backoff is randomised so two boards do not retry in lockstep. Retries re-send the **same
+  frame**: `rt_fill()` runs once per scheduled packet, so the sequence number does not advance
+  and the receiver's loss arithmetic is untouched. Likewise `rt_tx_ok`/`rt_tx_failed` record
+  the verdict on the *packet*, so queued still equals ok + rejected; individual refusals show
+  up in the `tx rejected:` counters instead.
 
 **Priorities stay at the IDF default — decided, not overlooked.** Raising 802.15.4's coex tier
 was tried and reverted. The reasoning, from the owner: Wi-Fi and BLE are not greedy, they are

@@ -36,9 +36,25 @@ static const char *TAG = "ble";
 #define ADV_ITVL_MIN  0x0100  // 0.625ms units -> 160ms
 #define ADV_ITVL_MAX  0x0180  // -> 240ms
 
+// Scan duty cycle. window == interval is a 100% duty receiver - the antenna claimed
+// permanently, so nothing below it in the coex arbiter (which is to say 802.15.4) ever sees a
+// gap. Measured: in all-radios mode that was 100.0% of 802.15.4 transmits refused, and with
+// the scanner off it was 0%.
+//
+// Continuous is right while ble_adv is the channel under test: it is the thing being measured
+// and nothing else is transmitting. It is wrong in all-radios mode, where the point is to
+// measure all three *at the same instant* - which is the only way to compare them without
+// aiming, multipath and where you happened to be standing varying between runs. A duty-cycled
+// scanner loses coded adverts it would otherwise have heard; that loss is the price of the
+// comparison, not a defect, and it is cheaper than a channel that cannot transmit at all.
+#define SCAN_ITVL_SOLO   0x0060  // 0.625ms units -> 60ms, window == interval
+#define SCAN_ITVL_SHARED 0x0140  // -> 200ms
+#define SCAN_WIN_SHARED  0x0080  // -> 80ms, so 40% duty and 60% left for everyone else
+
 static uint8_t s_own_addr_type;
 static bool    s_ready;
 static bool    s_scanning;
+static bool    s_scan_solo;   // which duty cycle s_scanning is currently running at
 
 // Advertising payload: one manufacturer-specific AD structure wrapping rt_pkt_t.
 static int set_adv_data(void)
@@ -140,11 +156,13 @@ static int scan_gap_cb(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-static void start_scan(void)
+// solo: ble_adv is the channel under test, so listen continuously. Otherwise duty-cycle, so
+// 802.15.4 and Wi-Fi have somewhere to go.
+static void start_scan(bool solo)
 {
     struct ble_gap_ext_disc_params coded = { 0 };
-    coded.itvl   = 0x0060;
-    coded.window = 0x0060;  // window == interval: listen continuously
+    coded.itvl    = solo ? SCAN_ITVL_SOLO : SCAN_ITVL_SHARED;
+    coded.window  = solo ? SCAN_ITVL_SOLO : SCAN_WIN_SHARED;
     coded.passive = 1;
 
     // uncoded params are required by the API but disabled here - scanning 1M as well would
@@ -153,16 +171,17 @@ static void start_scan(void)
                                     NULL, &coded, scan_gap_cb, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "ext_disc rc=%d", rc);
-    } else {
-        s_scanning = true;
-        ESP_LOGI(TAG, "scanning coded PHY");
+        return;
     }
+    s_scanning  = true;
+    s_scan_solo = solo;
+    ESP_LOGI(TAG, "scanning coded PHY, %s",
+             solo ? "continuously (ble_adv is the channel under test)"
+                  : "40% duty (sharing the antenna with the other radios)");
 }
 
-// The scan window equals the interval above, so this is a 100% duty-cycle receiver - the
-// single biggest, and only continuous, source of radio contention this board creates on its
-// own. It only earns its keep while ble_adv is actually the channel being measured; low
-// contention on anything else stops it so that channel gets a clean run at the antenna.
+// Quiet: callers say why, since this is used both to stop scanning altogether and to drop the
+// scan before restarting it at a different duty cycle.
 static void stop_scan(void)
 {
     if (!s_scanning) {
@@ -170,7 +189,6 @@ static void stop_scan(void)
     }
     ble_gap_disc_cancel();
     s_scanning = false;
-    ESP_LOGI(TAG, "coded PHY scan stopped (low contention on another channel)");
 }
 
 // Refresh the advert so each one carries a new sequence number. Data cannot be swapped while
@@ -188,12 +206,19 @@ static void adv_task(void *pv)
             if (set_adv_data() == 0) {
                 ble_gap_ext_adv_start(ADV_INSTANCE, 0, 0);
             }
-            if (!s_scanning) {
-                start_scan();
+            // Also catches a mode change between all-radios and the ble_adv test, which needs
+            // the same scan restarted at a different duty cycle.
+            const bool solo = (g_lc == CH_BLE_ADV + 1);
+            if (!s_scanning || s_scan_solo != solo) {
+                stop_scan();
+                start_scan(solo);
             }
         } else {
             ble_gap_ext_adv_stop(ADV_INSTANCE);
-            stop_scan();
+            if (s_scanning) {
+                stop_scan();
+                ESP_LOGI(TAG, "coded PHY scan stopped (low contention on another channel)");
+            }
         }
     }
 }
@@ -214,7 +239,7 @@ static void on_sync(void)
     // practice the board always boots at lc=0, so this only matters if that ever stops
     // being true - which is exactly the kind of assumption that put 802.15.4 at 100% loss.
     if (rt_tx_enabled(CH_BLE_ADV)) {
-        start_scan();
+        start_scan(g_lc == CH_BLE_ADV + 1);
     }
 #if RT_STAGE >= 4
     rt_ui_on_sync(s_own_addr_type);

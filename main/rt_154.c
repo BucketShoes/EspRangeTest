@@ -10,6 +10,7 @@
 
 #include "esp_ieee802154.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 // Must be included explicitly: an undefined macro evaluates to 0 in #if, so without this
@@ -25,6 +26,24 @@ static const char *TAG = "154";
 #define TX_PERIOD_MS 250
 #define CHANNEL      26     // top of the band, furthest from most Wi-Fi traffic
 #define PANID        0x5254
+
+// Retry a refused transmit instead of giving up on it.
+//
+// This is the one way to get a bigger share of the antenna that takes nothing from anybody.
+// A coexistence refusal is not a collision and not a timeout - the arbiter says no immediately
+// and the frame never goes out, so asking again a few milliseconds later costs no airtime and
+// steals no slot. We are not outranking Wi-Fi or BLE, we are just declining to give up after
+// the first no, and the frame lands the moment a gap appears.
+//
+// Retries re-send the *same* frame. rt_fill() runs once per scheduled packet, so the sequence
+// number does not advance on a retry and the receiver's loss arithmetic is untouched: one
+// scheduled packet is still one sequence number, however many attempts it took.
+//
+// Backoff is randomised because two boards running this firmware would otherwise retry in
+// lockstep and keep colliding with each other's retries instead of with the gaps.
+#define TX_TRIES      6
+#define TX_BACKOFF_MS 20    // actual delay is 10..30ms; FreeRTOS tick here is 10ms
+#define TX_WAIT_MS    50    // how long to wait for the radio's verdict on one attempt
 
 // Header: FCF(2) seq(1) dstpan(2) dstaddr(2) srcaddr(2) = 9 bytes, then payload, then a
 // 2-byte FCS the radio appends itself.
@@ -119,9 +138,41 @@ static void report_tx_errors(void)
     }
 }
 
+// Set by the ISR callbacks, read by tx_task between attempts. s_tx_task is what lets the ISR
+// wake the task the instant the verdict is in, rather than the task polling for it.
+static TaskHandle_t  s_tx_task;
+static volatile bool s_tx_landed;
+
+// One scheduled packet, up to TX_TRIES attempts at getting it on the air. Returns whether the
+// radio ever confirmed it went out.
+static bool transmit_with_retries(uint8_t *frame)
+{
+    for (int attempt = 0; attempt < TX_TRIES; attempt++) {
+        if (attempt > 0) {
+            vTaskDelay(pdMS_TO_TICKS(TX_BACKOFF_MS / 2 + esp_random() % TX_BACKOFF_MS));
+        }
+
+        s_tx_landed = false;
+        ulTaskNotifyTake(pdTRUE, 0);  // drop any verdict left over from a previous packet
+
+        if (esp_ieee802154_transmit(frame, false) != ESP_OK) {
+            continue;  // driver would not even take it; no callback is coming
+        }
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(TX_WAIT_MS)) == 0) {
+            break;     // no verdict at all - something is wrong that retrying will not fix
+        }
+        if (s_tx_landed) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void tx_task(void *pv)
 {
     (void)pv;
+    s_tx_task = xTaskGetCurrentTaskHandle();
+
     for (;;) {
         report_tx_errors();
         if (rt_tx_enabled(CH_154)) {
@@ -145,7 +196,16 @@ static void tx_task(void *pv)
             memcpy(&f[HDR_LEN], &p, sizeof(p));
 
             frame[0] = HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN;  // PSDU length incl. FCS
-            esp_ieee802154_transmit(frame, false);
+
+            // ok/failed is the verdict on the packet, not on an attempt - so queued still
+            // equals ok + failed however many refusals happened along the way. The refusals
+            // themselves are not lost: report_tx_errors() counts every one of them, which is
+            // where the cost of getting a frame out shows up.
+            if (transmit_with_retries(frame)) {
+                rt_tx_ok(CH_154);
+            } else {
+                rt_tx_failed(CH_154);
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(rt_jitter_ms(TX_PERIOD_MS)));
     }
@@ -169,17 +229,29 @@ void esp_ieee802154_transmit_done(const uint8_t *frame, const uint8_t *ack,
                                   esp_ieee802154_frame_info_t *ack_info)
 {
     (void)frame; (void)ack; (void)ack_info;
-    rt_tx_ok(CH_154);
+    s_tx_landed = true;
+    BaseType_t woken = pdFALSE;
+    if (s_tx_task) {
+        vTaskNotifyGiveFromISR(s_tx_task, &woken);
+    }
+    portYIELD_FROM_ISR(woken);
 }
 
-// ISR context - counter increments only, no logging. See report_tx_errors() above.
+// ISR context - counter increments and a wake-up, no logging. See report_tx_errors() above.
+// Note this no longer calls rt_tx_failed(): a refused attempt is not a lost packet until the
+// retries are exhausted, and that verdict belongs to tx_task.
 void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
 {
     (void)frame;
     if ((unsigned)error < TX_ERR_N) {
         s_tx_err_n[error]++;
     }
-    rt_tx_failed(CH_154);
+    s_tx_landed = false;
+    BaseType_t woken = pdFALSE;
+    if (s_tx_task) {
+        vTaskNotifyGiveFromISR(s_tx_task, &woken);
+    }
+    portYIELD_FROM_ISR(woken);
 }
 
 void rt_154_start(void)
