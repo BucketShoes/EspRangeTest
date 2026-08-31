@@ -1,0 +1,1015 @@
+  tx: espnow=0(off)  ble_adv=0(off)  154=449[449 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 150s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=457[457 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 152s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=466[466 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 154s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=474[474 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 156s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=482[482 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 158s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=490[490 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 160s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=498[498 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 162s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=506[506 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 164s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=514[514 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 166s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=523[523 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 168s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=531[531 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 170s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=539[539 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 172s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=547[547 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 174s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=555[555 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 176s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=563[563 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 178s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=572[571 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 180s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=579[579 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 182s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=588[588 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 184s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=595[595 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 186s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=604[604 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 188s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=612[612 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 190s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=620[620 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 192s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=628[628 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 194s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=636[636 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 196s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=644[644 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 198s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=653[652 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 200s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=661[661 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 202s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=669[669 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 204s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=677[677 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 206s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=685[685 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 208s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=693[693 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 210s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=701[701 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 212s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=710[710 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 214s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=718[718 ok, 0 rejected]  
+  (nothing heard yet)
+I (215464) ui: phone connected
+I (215474) ui: requested coded S=8 on the connection, rc=0
+I (215744) ui: connection PHY now tx=3 rx=3
+I (216704) ui: MTU 247
+
+== node 04  up 216s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=726[726 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 218s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=734[734 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 220s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=742[742 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 222s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=750[750 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 224s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=758[758 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 226s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=767[766 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 228s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=775[775 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 230s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=783[783 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 232s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=791[791 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 234s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=799[799 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 236s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=807[807 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 238s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=816[816 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 240s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=824[824 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 242s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=832[832 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 244s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=840[840 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 246s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=848[848 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 248s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=856[856 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 250s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=864[864 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 252s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=873[872 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 254s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=881[881 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 256s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=889[889 ok, 0 rejected]  
+  (nothing heard yet)
+W (257894) 154: tx rejected: coexist 160(+1)
+
+== node 04  up 258s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=897[897 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 260s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=905[905 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 262s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=913[913 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 264s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=921[921 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 266s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=929[929 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 268s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=937[937 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 270s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=945[945 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 272s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=953[953 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 274s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=961[961 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 276s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=969[969 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 278s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=978[978 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 280s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=986[986 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 282s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=994[994 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 284s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1002[1002 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 286s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1010[1010 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 288s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1018[1018 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 290s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1026[1026 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 292s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1034[1034 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 294s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1042[1042 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 296s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1051[1051 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 298s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1059[1059 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 300s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1067[1067 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 302s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1075[1075 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 304s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1083[1083 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 306s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1092[1092 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 308s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1100[1100 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 310s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1108[1108 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 312s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1116[1116 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 314s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1124[1124 ok, 0 rejected]  
+  (nothing heard yet)
+W (316524) 154: tx rejected: coexist 161(+1)
+
+== node 04  up 316s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1132[1132 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 318s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1140[1140 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 320s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1148[1148 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 322s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1156[1156 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 324s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1164[1164 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 326s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1172[1172 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 328s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1180[1180 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 330s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1189[1188 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 332s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1197[1197 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 334s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1205[1205 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 336s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1213[1213 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 338s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1221[1221 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 340s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1229[1229 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 342s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1237[1237 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 344s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1246[1245 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 346s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1254[1254 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 348s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1262[1262 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 350s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1270[1270 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 352s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1279[1278 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 354s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1287[1287 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 356s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1295[1295 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 358s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1303[1303 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 360s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1311[1311 ok, 0 rejected]  
+  (nothing heard yet)
+W (362504) 154: tx rejected: coexist 162(+1)
+
+== node 04  up 362s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1319[1319 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 364s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1327[1327 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 366s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1335[1335 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 368s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1344[1344 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 370s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1352[1352 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 372s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1360[1360 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 374s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1368[1368 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 376s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1376[1376 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 378s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1384[1384 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 380s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1393[1393 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 382s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1401[1401 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 384s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1409[1409 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 386s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1417[1417 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 388s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1425[1425 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 390s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1433[1433 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 392s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1441[1441 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 394s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1449[1449 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 396s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1458[1458 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 398s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1466[1466 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 400s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1474[1474 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 402s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1482[1482 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 404s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1490[1490 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 406s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1498[1498 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 408s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1506[1506 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 410s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1514[1514 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 412s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1522[1522 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 414s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1530[1530 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 416s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1538[1538 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 418s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1547[1547 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 420s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1555[1555 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 422s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1563[1563 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 424s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1571[1571 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 426s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1579[1579 ok, 0 rejected]  
+  (nothing heard yet)
+W (428294) 154: tx rejected: coexist 163(+1)
+
+== node 04  up 428s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1587[1587 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 430s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1595[1595 ok, 0 rejected]  
+  (nothing heard yet)
+W (432704) 154: tx rejected: coexist 164(+1)
+
+== node 04  up 432s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1603[1603 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 434s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1612[1612 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 436s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1620[1620 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 438s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1628[1628 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 440s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1636[1636 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 442s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1644[1644 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 444s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1652[1652 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 446s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1660[1660 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 448s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1669[1669 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 450s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1677[1677 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 452s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1685[1685 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 454s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1693[1693 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 456s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1701[1701 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 458s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1709[1709 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 460s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1717[1717 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 462s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1725[1725 ok, 0 rejected]  
+  (nothing heard yet)
+
+== node 04  up 464s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1733[1733 ok, 0 rejected]  
+  E4 154      rssi  -91 (avg  -91, -91..-91)  pdr 100% now / 100% all  rx 1 miss 0  1074ms ago lqi 4
+
+== node 04  up 466s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1741[1741 ok, 0 rejected]  
+  E4 154      rssi  -91 (avg  -91, -91..-91)  pdr  -1% now / 100% all  rx 1 miss 0  3074ms ago lqi 4
+
+== node 04  up 468s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1750[1750 ok, 0 rejected]  
+  E4 154      rssi  -91 (avg  -91, -91..-91)  pdr  -1% now / 100% all  rx 1 miss 0  5074ms ago lqi 4
+
+== node 04  up 470s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1758[1758 ok, 0 rejected]  
+  E4 154      rssi  -91 (avg  -91, -91..-91)  pdr  -1% now / 100% all  rx 1 miss 0  7074ms ago lqi 4
+
+== node 04  up 472s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1766[1766 ok, 0 rejected]  
+  E4 154      rssi  -91 (avg  -91, -91..-91)  pdr  -1% now / 100% all  rx 1 miss 0  9074ms ago lqi 4
+
+== node 04  up 474s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1774[1774 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr   2% now /   5% all  rx 2 miss 38  1443ms ago lqi 6
+
+== node 04  up 476s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1782[1782 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  3443ms ago lqi 6
+
+== node 04  up 478s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1790[1790 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  5443ms ago lqi 6
+
+== node 04  up 480s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1799[1799 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  7443ms ago lqi 6
+
+== node 04  up 482s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1807[1807 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  9443ms ago lqi 6
+
+== node 04  up 484s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1815[1815 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  11443ms ago lqi 6
+
+== node 04  up 486s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1823[1823 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  13443ms ago lqi 6
+
+== node 04  up 488s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1831[1831 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  15443ms ago lqi 6
+
+== node 04  up 490s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1839[1839 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  17443ms ago lqi 6
+W (491234) 154: tx rejected: coexist 165(+1)
+
+== node 04  up 492s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1847[1847 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  19443ms ago lqi 6
+
+== node 04  up 494s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1855[1855 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  21443ms ago lqi 6
+
+== node 04  up 496s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1864[1864 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  23443ms ago lqi 6
+W (497884) 154: tx rejected: coexist 166(+1)
+
+== node 04  up 498s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1872[1872 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  25443ms ago lqi 6
+
+== node 04  up 500s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1880[1880 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  27443ms ago lqi 6
+
+== node 04  up 502s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1888[1888 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  29443ms ago lqi 6
+
+== node 04  up 504s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1896[1896 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  31443ms ago lqi 6
+
+== node 04  up 506s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1904[1904 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  33443ms ago lqi 6
+
+== node 04  up 508s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1912[1912 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  35443ms ago lqi 6
+
+== node 04  up 510s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1921[1920 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  37443ms ago lqi 6
+
+== node 04  up 512s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1929[1929 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  39443ms ago lqi 6
+
+== node 04  up 514s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1937[1937 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  41443ms ago lqi 6
+W (515554) 154: tx rejected: coexist 167(+1)
+
+== node 04  up 516s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1945[1945 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  43443ms ago lqi 6
+
+== node 04  up 518s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1953[1953 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  45443ms ago lqi 6
+
+== node 04  up 520s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1962[1961 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  47443ms ago lqi 6
+
+== node 04  up 522s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1970[1970 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  49443ms ago lqi 6
+
+== node 04  up 524s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1978[1978 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  51443ms ago lqi 6
+
+== node 04  up 526s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1986[1986 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  53443ms ago lqi 6
+
+== node 04  up 528s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1994[1994 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  55443ms ago lqi 6
+
+== node 04  up 530s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2002[2002 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  57443ms ago lqi 6
+
+== node 04  up 532s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2010[2010 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  59443ms ago lqi 6
+W (533194) 154: tx rejected: coexist 168(+1)
+
+== node 04  up 534s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2018[2018 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  61443ms ago lqi 6
+
+== node 04  up 536s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2027[2027 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  63443ms ago lqi 6
+
+== node 04  up 538s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2035[2035 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  65443ms ago lqi 6
+
+== node 04  up 540s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2043[2043 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  67443ms ago lqi 6
+
+== node 04  up 542s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2051[2051 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  69443ms ago lqi 6
+
+== node 04  up 544s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2059[2059 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  71443ms ago lqi 6
+
+== node 04  up 546s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2067[2067 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  73443ms ago lqi 6
+
+== node 04  up 548s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2075[2075 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  75443ms ago lqi 6
+
+== node 04  up 550s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2084[2084 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  77443ms ago lqi 6
+
+== node 04  up 552s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2092[2092 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  79443ms ago lqi 6
+
+== node 04  up 554s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2100[2100 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  81443ms ago lqi 6
+
+== node 04  up 556s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2108[2108 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  83443ms ago lqi 6
+
+== node 04  up 558s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2116[2116 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  85443ms ago lqi 6
+
+== node 04  up 560s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2124[2124 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  87443ms ago lqi 6
+W (561704) 154: tx rejected: coexist 169(+1)
+
+== node 04  up 562s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2132[2132 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  89443ms ago lqi 6
+
+== node 04  up 564s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2140[2140 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  91443ms ago lqi 6
+
+== node 04  up 566s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2148[2148 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  93443ms ago lqi 6
+
+== node 04  up 568s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2157[2157 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  95443ms ago lqi 6
+W (570364) 154: tx rejected: coexist 170(+1)
+
+== node 04  up 570s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2165[2165 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  97443ms ago lqi 6
+
+== node 04  up 572s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2173[2173 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  99443ms ago lqi 6
+
+== node 04  up 574s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2181[2181 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  101443ms ago lqi 6
+
+== node 04  up 576s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2189[2189 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  103443ms ago lqi 6
+
+== node 04  up 578s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2197[2197 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  105443ms ago lqi 6
+
+== node 04  up 580s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2205[2205 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  107443ms ago lqi 6
+
+== node 04  up 582s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2213[2213 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  109443ms ago lqi 6
+
+== node 04  up 584s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2221[2221 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  111443ms ago lqi 6
+W (585744) 154: tx rejected: coexist 171(+1)
+
+== node 04  up 586s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2229[2229 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  113443ms ago lqi 6
+
+== node 04  up 588s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2237[2237 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  115443ms ago lqi 6
+
+== node 04  up 590s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2245[2245 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  117443ms ago lqi 6
+
+== node 04  up 592s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2253[2253 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  119443ms ago lqi 6
+
+== node 04  up 594s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2261[2261 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  121443ms ago lqi 6
+
+== node 04  up 596s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2269[2269 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  123443ms ago lqi 6
+
+== node 04  up 598s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2277[2277 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  125443ms ago lqi 6
+
+== node 04  up 600s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2286[2286 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  127443ms ago lqi 6
+
+== node 04  up 602s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2294[2294 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  129443ms ago lqi 6
+
+== node 04  up 604s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2302[2302 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  131443ms ago lqi 6
+
+== node 04  up 606s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2310[2310 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  133443ms ago lqi 6
+
+== node 04  up 608s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2318[2318 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  135443ms ago lqi 6
+
+== node 04  up 610s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2326[2326 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  137443ms ago lqi 6
+W (611924) 154: tx rejected: coexist 172(+1)
+
+== node 04  up 612s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2334[2334 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  139443ms ago lqi 6
+W (613934) 154: tx rejected: coexist 173(+1)
+
+== node 04  up 614s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2342[2342 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  141443ms ago lqi 6
+
+== node 04  up 616s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2351[2350 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  143443ms ago lqi 6
+W (618154) 154: tx rejected: coexist 174(+1)
+
+== node 04  up 618s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2359[2359 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  145443ms ago lqi 6
+
+== node 04  up 620s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2367[2367 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  147443ms ago lqi 6
+
+== node 04  up 622s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2375[2375 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  149443ms ago lqi 6
+W (624364) 154: tx rejected: coexist 176(+2)
+
+== node 04  up 624s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2383[2383 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  151443ms ago lqi 6
+
+== node 04  up 626s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2391[2391 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  153443ms ago lqi 6
+
+== node 04  up 628s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2399[2399 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  155443ms ago lqi 6
+
+== node 04  up 630s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2407[2407 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  157443ms ago lqi 6
+
+== node 04  up 632s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2415[2415 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  159443ms ago lqi 6
+W (632994) 154: tx rejected: coexist 177(+1)
+
+== node 04  up 634s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2423[2423 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  161443ms ago lqi 6
+
+== node 04  up 636s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2431[2431 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  163443ms ago lqi 6
+
+== node 04  up 638s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2439[2439 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  165443ms ago lqi 6
+
+== node 04  up 640s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2448[2448 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  167443ms ago lqi 6
+
+== node 04  up 642s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2456[2456 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  169443ms ago lqi 6
+
+== node 04  up 644s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2464[2464 ok, 0 rejected]  
+  E4 154      rssi  -92 (avg  -91, -92..-91)  pdr  -1% now /   5% all  rx 2 miss 38  171443ms ago lqi 6

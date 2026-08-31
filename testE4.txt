@@ -1,0 +1,1015 @@
+== node E4  up 253s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=939[938 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  231250ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  189052ms ago lqi 4
+
+== node E4  up 255s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=948[947 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  233260ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  191062ms ago lqi 4
+
+== node E4  up 257s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=956[955 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  235270ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  193072ms ago lqi 4
+
+== node E4  up 259s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=964[963 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  237280ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  195082ms ago lqi 4
+
+== node E4  up 261s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=972[971 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  239290ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  197092ms ago lqi 4
+
+== node E4  up 263s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=981[980 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  241300ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  199102ms ago lqi 4
+
+== node E4  up 265s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=989[988 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  243310ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  201112ms ago lqi 4
+
+== node E4  up 267s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=997[996 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  245320ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  203122ms ago lqi 4
+W (269624) 154: tx rejected: coexist 122(+1)
+
+== node E4  up 269s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1005[1004 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  247330ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  205132ms ago lqi 4
+
+== node E4  up 271s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1013[1012 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  249340ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  207142ms ago lqi 4
+
+== node E4  up 273s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1022[1021 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  251350ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  209152ms ago lqi 4
+
+== node E4  up 275s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1030[1029 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  253360ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  211162ms ago lqi 4
+
+== node E4  up 277s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1038[1037 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  255370ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  213172ms ago lqi 4
+
+== node E4  up 279s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1046[1045 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  257380ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  215182ms ago lqi 4
+
+== node E4  up 281s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1054[1053 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  259390ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  217192ms ago lqi 4
+
+== node E4  up 283s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1063[1061 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  261400ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  219202ms ago lqi 4
+
+== node E4  up 285s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1071[1070 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  263410ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  221212ms ago lqi 4
+
+== node E4  up 287s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1079[1078 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  265420ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  223222ms ago lqi 4
+
+== node E4  up 289s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1087[1086 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  267430ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  225232ms ago lqi 4
+
+== node E4  up 291s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1095[1094 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  269440ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  227242ms ago lqi 4
+
+== node E4  up 293s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1103[1102 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  271450ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  229252ms ago lqi 4
+
+== node E4  up 295s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1112[1111 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  273460ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  231262ms ago lqi 4
+
+== node E4  up 297s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1120[1119 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  275470ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  233272ms ago lqi 4
+
+== node E4  up 299s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1128[1127 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  277480ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  235282ms ago lqi 4
+
+== node E4  up 301s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1136[1135 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  279490ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  237292ms ago lqi 4
+
+== node E4  up 303s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1144[1143 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  281500ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  239302ms ago lqi 4
+
+== node E4  up 305s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1153[1151 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  283510ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  241312ms ago lqi 4
+
+== node E4  up 307s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1161[1160 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  285520ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  243322ms ago lqi 4
+
+== node E4  up 309s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1169[1168 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  287530ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  245332ms ago lqi 4
+
+== node E4  up 311s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1177[1176 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  289540ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  247342ms ago lqi 4
+
+== node E4  up 313s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1185[1184 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  291550ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  249352ms ago lqi 4
+
+== node E4  up 315s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1193[1192 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  293560ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  251362ms ago lqi 4
+
+== node E4  up 317s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1201[1200 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  295570ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  253372ms ago lqi 4
+
+== node E4  up 319s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1210[1209 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  297580ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  255382ms ago lqi 4
+
+== node E4  up 321s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1218[1217 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  299590ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  257392ms ago lqi 4
+
+== node E4  up 323s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1226[1225 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  301600ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  259402ms ago lqi 4
+
+== node E4  up 325s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1234[1233 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  303610ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  261412ms ago lqi 4
+
+== node E4  up 327s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1242[1241 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  305620ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  263422ms ago lqi 4
+
+== node E4  up 329s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1251[1250 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  307630ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  265432ms ago lqi 4
+
+== node E4  up 331s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1259[1258 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  309640ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  267442ms ago lqi 4
+
+== node E4  up 333s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1267[1266 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  311650ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  269452ms ago lqi 4
+
+== node E4  up 335s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1275[1274 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  313660ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  271462ms ago lqi 4
+
+== node E4  up 337s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1283[1282 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  315670ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  273472ms ago lqi 4
+
+== node E4  up 339s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1291[1290 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  317680ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  275482ms ago lqi 4
+W (341694) 154: tx rejected: coexist 123(+1)
+
+== node E4  up 341s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1299[1298 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  319690ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  277492ms ago lqi 4
+
+== node E4  up 343s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1308[1307 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  321700ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  279502ms ago lqi 4
+
+== node E4  up 345s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1316[1315 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  323710ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  281512ms ago lqi 4
+
+== node E4  up 347s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1324[1323 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  325720ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  283522ms ago lqi 4
+
+== node E4  up 349s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1332[1331 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  327730ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  285532ms ago lqi 4
+
+== node E4  up 351s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1340[1339 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  329740ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  287542ms ago lqi 4
+W (352294) 154: tx rejected: coexist 124(+1)
+
+== node E4  up 353s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1348[1347 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  331750ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  289552ms ago lqi 4
+
+== node E4  up 355s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1357[1355 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  333760ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  291562ms ago lqi 4
+
+== node E4  up 357s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1365[1364 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  335770ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  293572ms ago lqi 4
+
+== node E4  up 359s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1373[1372 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  337780ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  295582ms ago lqi 4
+W (360904) 154: tx rejected: coexist 125(+1)
+
+== node E4  up 361s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1381[1380 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  339790ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  297592ms ago lqi 4
+
+== node E4  up 363s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1389[1388 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  341800ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  299602ms ago lqi 4
+
+== node E4  up 365s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1397[1396 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  343810ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  301612ms ago lqi 4
+
+== node E4  up 367s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1405[1404 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  345820ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  303622ms ago lqi 4
+
+== node E4  up 369s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1414[1412 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  347830ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  305632ms ago lqi 4
+
+== node E4  up 371s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1422[1421 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  349840ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  307642ms ago lqi 4
+
+== node E4  up 373s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1430[1429 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  351850ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  309652ms ago lqi 4
+
+== node E4  up 375s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1438[1437 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  353860ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  311662ms ago lqi 4
+
+== node E4  up 377s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1446[1445 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  355870ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  313672ms ago lqi 4
+
+== node E4  up 379s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1454[1453 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  357880ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  315682ms ago lqi 4
+
+== node E4  up 381s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1462[1461 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  359890ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  317692ms ago lqi 4
+
+== node E4  up 383s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1471[1470 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  361900ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  319702ms ago lqi 4
+
+== node E4  up 385s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1479[1478 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  363910ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  321712ms ago lqi 4
+
+== node E4  up 387s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1487[1486 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  365920ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  323722ms ago lqi 4
+
+== node E4  up 389s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1495[1494 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  367930ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  325732ms ago lqi 4
+
+== node E4  up 391s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1504[1503 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  369940ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  327742ms ago lqi 4
+
+== node E4  up 393s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1512[1511 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  371950ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  329752ms ago lqi 4
+
+== node E4  up 395s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1520[1519 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  373960ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  331762ms ago lqi 4
+
+== node E4  up 397s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1528[1527 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  375970ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  333772ms ago lqi 4
+
+== node E4  up 400s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1536[1535 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  377980ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  335782ms ago lqi 4
+
+== node E4  up 402s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1544[1543 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  379990ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  337792ms ago lqi 4
+
+== node E4  up 404s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1553[1552 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  382000ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  339802ms ago lqi 4
+
+== node E4  up 406s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1561[1560 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  384010ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  341812ms ago lqi 4
+
+== node E4  up 408s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1569[1568 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  386020ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  343822ms ago lqi 4
+
+== node E4  up 410s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1577[1576 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  388030ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  345832ms ago lqi 4
+
+== node E4  up 412s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1585[1584 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  390040ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  347842ms ago lqi 4
+
+== node E4  up 414s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1593[1592 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  392050ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  349852ms ago lqi 4
+
+== node E4  up 416s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1601[1600 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  394060ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  351862ms ago lqi 4
+
+== node E4  up 418s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1609[1608 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  396070ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  353872ms ago lqi 4
+
+== node E4  up 420s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1617[1616 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  398080ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  355882ms ago lqi 4
+
+== node E4  up 422s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1625[1624 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  400090ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  357892ms ago lqi 4
+
+== node E4  up 424s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1633[1632 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  402100ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  359902ms ago lqi 4
+
+== node E4  up 426s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1642[1641 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  404110ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  361912ms ago lqi 4
+
+== node E4  up 428s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1650[1649 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  406120ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  363922ms ago lqi 4
+
+== node E4  up 430s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1658[1657 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  408130ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  365932ms ago lqi 4
+
+== node E4  up 432s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1666[1665 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  410140ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  367942ms ago lqi 4
+
+== node E4  up 434s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1674[1673 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  412150ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  369952ms ago lqi 4
+
+== node E4  up 436s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1682[1681 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  414160ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  371962ms ago lqi 4
+
+== node E4  up 438s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1690[1689 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  416170ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  373972ms ago lqi 4
+W (439844) 154: tx rejected: coexist 126(+1)
+
+== node E4  up 440s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1699[1698 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  418180ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  375982ms ago lqi 4
+
+== node E4  up 442s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1707[1706 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  420190ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  377992ms ago lqi 4
+
+== node E4  up 444s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1715[1714 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  422200ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  380002ms ago lqi 4
+
+== node E4  up 446s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1723[1722 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  424210ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  382012ms ago lqi 4
+
+== node E4  up 448s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1731[1730 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  426220ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  384022ms ago lqi 4
+
+== node E4  up 450s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1739[1738 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  428230ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  386032ms ago lqi 4
+
+== node E4  up 452s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1748[1747 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  430240ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  388042ms ago lqi 4
+
+== node E4  up 454s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1756[1755 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  432250ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  390052ms ago lqi 4
+
+== node E4  up 456s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1764[1763 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  434260ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  392062ms ago lqi 4
+
+== node E4  up 458s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1772[1771 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  436270ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  394072ms ago lqi 4
+
+== node E4  up 460s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1780[1779 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  438280ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  396082ms ago lqi 4
+
+== node E4  up 462s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1788[1787 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  440290ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  398092ms ago lqi 4
+
+== node E4  up 464s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1796[1795 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  442300ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  400102ms ago lqi 4
+
+== node E4  up 466s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1804[1803 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  444310ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  402112ms ago lqi 4
+
+== node E4  up 468s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1812[1811 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  446320ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  404122ms ago lqi 4
+
+== node E4  up 470s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1820[1819 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  448330ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  406132ms ago lqi 4
+
+== node E4  up 472s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1829[1828 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  450340ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  408142ms ago lqi 4
+
+== node E4  up 474s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1837[1836 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  452350ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  410152ms ago lqi 4
+
+== node E4  up 476s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1845[1844 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  454360ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  412162ms ago lqi 4
+
+== node E4  up 478s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1854[1853 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  456370ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  414172ms ago lqi 4
+
+== node E4  up 480s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1862[1861 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  458380ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  416182ms ago lqi 4
+
+== node E4  up 482s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1870[1869 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  460390ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  418192ms ago lqi 4
+
+== node E4  up 484s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1878[1877 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  462400ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  420202ms ago lqi 4
+W (485264) 154: tx rejected: coexist 127(+1)
+
+== node E4  up 486s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1886[1885 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  464410ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  422212ms ago lqi 4
+
+== node E4  up 488s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1894[1893 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  466420ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  424222ms ago lqi 4
+
+== node E4  up 490s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1903[1902 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  468430ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  426232ms ago lqi 4
+
+== node E4  up 492s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1911[1910 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  470440ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  428242ms ago lqi 4
+
+== node E4  up 494s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1919[1918 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  472450ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  430252ms ago lqi 4
+
+== node E4  up 496s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1927[1926 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  474460ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  432262ms ago lqi 4
+
+== node E4  up 498s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1935[1934 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  476470ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  434272ms ago lqi 4
+
+== node E4  up 500s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1943[1942 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  478480ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  436282ms ago lqi 4
+W (502804) 154: tx rejected: coexist 128(+1)
+
+== node E4  up 502s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1951[1950 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  480490ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  438292ms ago lqi 4
+
+== node E4  up 504s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1959[1958 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  482500ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  440302ms ago lqi 4
+
+== node E4  up 506s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1967[1966 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  484510ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  442312ms ago lqi 4
+
+== node E4  up 508s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1975[1974 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  486520ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  444322ms ago lqi 4
+W (509284) 154: tx rejected: coexist 130(+2)
+
+== node E4  up 510s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1984[1982 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  488530ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  446332ms ago lqi 4
+
+== node E4  up 512s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=1992[1991 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  490540ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  448342ms ago lqi 4
+
+== node E4  up 514s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2000[1999 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  492550ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  450352ms ago lqi 4
+
+== node E4  up 516s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2008[2007 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  494560ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  452362ms ago lqi 4
+
+== node E4  up 518s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2017[2015 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  496570ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  454372ms ago lqi 4
+W (520044) 154: tx rejected: coexist 131(+1)
+
+== node E4  up 520s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2024[2023 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  498580ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  456382ms ago lqi 4
+
+== node E4  up 522s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2033[2032 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  500590ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  458392ms ago lqi 4
+
+== node E4  up 524s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2041[2040 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  502600ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  460402ms ago lqi 4
+
+== node E4  up 526s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2049[2048 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  504610ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  462412ms ago lqi 4
+
+== node E4  up 528s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2057[2056 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  506620ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  464422ms ago lqi 4
+
+== node E4  up 530s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2065[2064 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  508630ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  466432ms ago lqi 4
+
+== node E4  up 532s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2073[2072 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  510640ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  468442ms ago lqi 4
+
+== node E4  up 534s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2082[2081 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  512650ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  470452ms ago lqi 4
+
+== node E4  up 536s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2090[2089 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  514660ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  472462ms ago lqi 4
+
+== node E4  up 538s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2098[2097 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  516670ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  474472ms ago lqi 4
+W (539774) 154: tx rejected: coexist 132(+1)
+
+== node E4  up 540s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2106[2105 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  518680ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  476482ms ago lqi 4
+
+== node E4  up 542s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2114[2113 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  520690ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  478492ms ago lqi 4
+W (543784) 154: tx rejected: coexist 134(+2)
+
+== node E4  up 544s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2122[2121 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  522700ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  480502ms ago lqi 4
+
+== node E4  up 546s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2130[2129 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  524710ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  482512ms ago lqi 4
+
+== node E4  up 548s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2138[2137 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  526720ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  484522ms ago lqi 4
+
+== node E4  up 550s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2146[2145 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  528730ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  486532ms ago lqi 4
+W (552194) 154: tx rejected: coexist 135(+1)
+
+== node E4  up 552s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2155[2153 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  530740ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  488542ms ago lqi 4
+
+== node E4  up 554s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2163[2162 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  532750ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  490552ms ago lqi 4
+
+== node E4  up 556s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2171[2170 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  534760ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  492562ms ago lqi 4
+
+== node E4  up 558s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2179[2178 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  536770ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  494572ms ago lqi 4
+
+== node E4  up 560s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2187[2186 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  538780ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  496582ms ago lqi 4
+
+== node E4  up 562s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2195[2194 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  540790ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  498592ms ago lqi 4
+
+== node E4  up 564s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2203[2202 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  542800ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  500602ms ago lqi 4
+
+== node E4  up 566s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2212[2211 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  544810ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  502612ms ago lqi 4
+
+== node E4  up 568s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2220[2219 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  546820ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  504622ms ago lqi 4
+
+== node E4  up 570s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2228[2227 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  548830ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  506632ms ago lqi 4
+
+== node E4  up 572s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2236[2235 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  550840ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  508642ms ago lqi 4
+
+== node E4  up 574s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2244[2243 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  552850ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  510652ms ago lqi 4
+
+== node E4  up 576s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2252[2251 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  554860ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  512662ms ago lqi 4
+
+== node E4  up 578s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2260[2259 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  556870ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  514672ms ago lqi 4
+
+== node E4  up 580s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2269[2268 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  558880ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  516682ms ago lqi 4
+
+== node E4  up 582s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2277[2276 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  560890ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  518692ms ago lqi 4
+W (584734) 154: tx rejected: coexist 136(+1)
+
+== node E4  up 584s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2285[2284 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  562900ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  520702ms ago lqi 4
+W (586964) 154: tx rejected: coexist 137(+1)
+
+== node E4  up 586s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2293[2292 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  564910ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  522712ms ago lqi 4
+W (589174) 154: tx rejected: coexist 139(+2)
+
+== node E4  up 588s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2301[2300 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  566920ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  524722ms ago lqi 4
+
+== node E4  up 590s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2309[2308 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  568930ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  526732ms ago lqi 4
+
+== node E4  up 592s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2318[2317 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  570940ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  528742ms ago lqi 4
+
+== node E4  up 594s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2326[2325 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  572950ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  530752ms ago lqi 4
+
+== node E4  up 596s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2334[2333 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  574960ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  532762ms ago lqi 4
+
+== node E4  up 598s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2342[2341 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  576970ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  534772ms ago lqi 4
+
+== node E4  up 601s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2350[2349 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  578980ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  536782ms ago lqi 4
+
+== node E4  up 603s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2358[2357 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  580990ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  538792ms ago lqi 4
+
+== node E4  up 605s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2366[2365 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  583000ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  540802ms ago lqi 4
+
+== node E4  up 607s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2375[2373 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  585010ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  542812ms ago lqi 4
+
+== node E4  up 609s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2383[2382 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  587020ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  544822ms ago lqi 4
+
+== node E4  up 611s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2391[2390 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  589030ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  546832ms ago lqi 4
+W (612684) 154: tx rejected: coexist 141(+2)
+
+== node E4  up 613s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2399[2398 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  591040ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  548842ms ago lqi 4
+
+== node E4  up 615s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2407[2406 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  593050ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  550852ms ago lqi 4
+
+== node E4  up 617s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2415[2414 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  595060ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  552862ms ago lqi 4
+
+== node E4  up 619s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2423[2422 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  597070ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  554872ms ago lqi 4
+
+== node E4  up 621s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2431[2430 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  599080ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  556882ms ago lqi 4
+
+== node E4  up 623s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2439[2438 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  601090ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  558892ms ago lqi 4
+
+== node E4  up 625s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2448[2447 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  603100ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  560902ms ago lqi 4
+
+== node E4  up 627s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2456[2455 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  605110ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  562912ms ago lqi 4
+
+== node E4  up 629s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2464[2463 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  607120ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  564922ms ago lqi 4
+
+== node E4  up 631s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2472[2471 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  609130ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  566932ms ago lqi 4
+
+== node E4  up 633s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2480[2479 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  611140ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  568942ms ago lqi 4
+
+== node E4  up 635s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2488[2487 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  613150ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  570952ms ago lqi 4
+
+== node E4  up 637s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2497[2496 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  615160ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  572962ms ago lqi 4
+
+== node E4  up 639s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2505[2504 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  617170ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  574972ms ago lqi 4
+
+== node E4  up 641s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2513[2512 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  619180ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  576982ms ago lqi 4
+
+== node E4  up 643s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2521[2520 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  621190ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  578992ms ago lqi 4
+
+== node E4  up 645s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2529[2528 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  623200ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  581002ms ago lqi 4
+
+== node E4  up 647s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2537[2536 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  625210ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  583012ms ago lqi 4
+
+== node E4  up 649s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2546[2545 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  627220ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  585022ms ago lqi 4
+
+== node E4  up 651s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2554[2553 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  629230ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  587032ms ago lqi 4
+
+== node E4  up 653s  lc=154  lr=off  wifi=off ==
+  tx: espnow=0(off)  ble_adv=0(off)  154=2562[2561 ok, 1 rejected]  
+  04 ble_adv  rssi  -73 (avg  -73, -73..-73)  pdr  -1% now / 100% all  rx 1 miss 0  631240ms ago
+  04 154      rssi  -90 (avg  -90, -90..-90)  pdr  -1% now / 100% all  rx 1 miss 0  589042ms ago lqi 4

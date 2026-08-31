@@ -191,6 +191,49 @@ design" are now wrong.
   modules. So absolute distances from XIAO runs are not comparable with earlier DevKit runs.
   Comparisons *between channels within one run* still are, which is what matters.
 
+## Open: ~70 dB of missing link budget on the XIAOs (2026-09-01)
+
+Two boards, less than 1 m apart, both flashed together, both in `154` mode, logs covering the
+same ~400s window (`test04.txt` / `teste4.txt`):
+
+| direction | transmitted | received | rate |
+|---|---|---|---|
+| 04 → E4 | 2464 (all confirmed on air) | **1** | 0.04% |
+| E4 → 04 | 2561 (all confirmed on air) | **2** | 0.08% |
+
+RSSI on the packets that did arrive: **−90, −91, −92**. Both boards sat at ~35 °C.
+
+**This is not asymmetric and it is not a software bug.** Both directions are equally dead, to
+within one packet — which is what reciprocity predicts and is the opposite of the earlier
+impression that the silence "flipped direction". The flip was just which board happened to
+catch its single packet first. Transmission is confirmed by the radio's own `transmit_done`
+callback thousands of times on each side, so frames are genuinely going on the air.
+
+Free-space path loss at 1 m and 2.4 GHz is about 40 dB. At ~20 dBm transmit that predicts an
+RSSI near −20 dBm; the boards see −91. **About 70 dB is unaccounted for.** Nothing in the
+software can produce that:
+- coexistence blocks transmits, and these transmits are confirmed on air;
+- a frame-handling bug gives 0%, not 0.05% — and 0.05% at −91 dBm is exactly what a receiver
+  working correctly on an extremely weak signal looks like;
+- 802.15.4 transmit power defaults to the driver's **maximum** (`esp_ieee802154_pib.c` fills
+  the power table with `IEEE802154_TXPOWER_VALUE_MAX`), and the whole adjustable range is only
+  ~20 dB anyway. It is now set and read back explicitly so this stops being a question.
+
+70 dB is the signature of RF that never reaches an antenna — the two boards coupling through
+stray leakage rather than through a radiating element. Both boards being warm fits: a badly
+matched load reflects transmit power back into the PA.
+
+**Prime suspect: the XIAO's antenna switch.** The owner has GPIO14 floating on an external
+pulldown, selecting the onboard chip antenna, with no IPEX fitted. Worth confirming against
+Seeed's own documentation whether that board also has a separate **RF-switch enable** pin that
+must be driven (on some XIAO variants it is active-low and the switch is disabled when it
+floats), because a disabled switch would attenuate exactly like this. **Unverified — check the
+schematic, do not take this paragraph as fact, and do not touch GPIO14.**
+
+Decisive test needing no code: **RSSI versus distance.** Genuine antenna coupling changes
+~6 dB per doubling of distance, so 20 cm versus 2 m should differ by ~20 dB. If RSSI barely
+moves, the path is not through the antennas and no amount of firmware will fix it.
+
 ## Field results so far
 
 From the owner's own walks, not from this code. These are the reason 802.15.4 is the focus.

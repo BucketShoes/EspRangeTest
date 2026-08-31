@@ -5,6 +5,7 @@
 // project does not care about. Raw frames also mean no joining, no coordinator, and no
 // association to lose at the far end.
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -51,6 +52,20 @@ static const char *TAG = "154";
 #define FCS_LEN 2
 
 static uint8_t s_seq;
+
+// What the radio says its transmit power actually is, read back rather than assumed, and put
+// into the packet so the far end records the real number. The driver defaults this to its
+// maximum, so it was never the reason 802.15.4 was quiet - but "the payload says 20 dBm
+// because someone typed 20" is exactly the kind of unchecked claim this project keeps getting
+// caught by.
+static int8_t s_txpower;
+
+// Frames the radio handed us, and frames that survived validation. Both are reported, because
+// they answer different questions and the difference between them is the whole diagnosis:
+// "heard nothing at all" is an antenna or a distance problem, "heard plenty, kept none" is a
+// parsing or addressing problem, and they look identical if you only count what you kept.
+static volatile uint32_t s_rx_frames;
+static volatile uint32_t s_rx_ours;
 
 // Coexistence priority is deliberately left at the ESP-IDF default.
 //
@@ -136,6 +151,20 @@ static void report_tx_errors(void)
     if (fresh) {
         ESP_LOGW(TAG, "tx rejected: %s", buf);
     }
+
+    // The receiver's side of the same question. "Nothing heard" and "plenty heard, none of it
+    // ours" are completely different faults and the results table cannot tell them apart, so
+    // say both. Silent while the radio is genuinely hearing nothing at all - which is itself
+    // the answer when the other board is transmitting.
+    static uint32_t shown_frames, shown_ours;
+    if (s_rx_frames != shown_frames || s_rx_ours != shown_ours) {
+        ESP_LOGI(TAG, "rx %lu frames, %lu ours (+%lu, +%lu)",
+                 (unsigned long)s_rx_frames, (unsigned long)s_rx_ours,
+                 (unsigned long)(s_rx_frames - shown_frames),
+                 (unsigned long)(s_rx_ours - shown_ours));
+        shown_frames = s_rx_frames;
+        shown_ours   = s_rx_ours;
+    }
 }
 
 // Set by the ISR callbacks, read by tx_task between attempts. s_tx_task is what lets the ISR
@@ -192,7 +221,7 @@ static void tx_task(void *pv)
             f[8] = 0x00;
 
             rt_pkt_t p;
-            rt_fill(&p, CH_154, 20);
+            rt_fill(&p, CH_154, s_txpower);
             memcpy(&f[HDR_LEN], &p, sizeof(p));
 
             frame[0] = HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN;  // PSDU length incl. FCS
@@ -211,13 +240,55 @@ static void tx_task(void *pv)
     }
 }
 
+// Is this one of ours, laid out the way rt_154.c lays them out?
+//
+// The radio is in promiscuous mode, so it hands up *every* 802.15.4 frame on channel 26 - any
+// PAN, any addressing mode, anything a Zigbee or Thread device nearby happens to emit. HDR_LEN
+// is only 9 bytes for the specific addressing this file transmits; a frame using long
+// addresses or an uncompressed PAN has a different header length, so reading its payload at a
+// fixed offset finds whatever happened to be at byte 10. Previously the only thing standing
+// between that and the results table was rt_rx()'s two-byte magic - one chance in 65536 that
+// arbitrary bytes look like a measurement.
+//
+// So check the header actually is the shape the offset assumes, before trusting the offset:
+// data frame, PAN ID compressed, short destination, short source - byte for byte what
+// tx_task builds - addressed to our PAN, broadcast, and with the header's source address
+// agreeing with the sender id inside the payload. A foreign frame now has to match all of
+// that as well as the magic.
+static bool frame_is_ours(const uint8_t *f, int psdu)
+{
+    if (psdu < HDR_LEN + (int)sizeof(rt_pkt_t) + FCS_LEN) {
+        return false;
+    }
+    // FCF: type = data, PAN ID compression set.
+    if ((f[0] & 0x07) != 0x01 || (f[0] & 0x40) == 0) {
+        return false;
+    }
+    // FCF: destination and source address modes both "short" - this is what fixes HDR_LEN.
+    if (((f[1] >> 2) & 0x03) != 0x02 || ((f[1] >> 6) & 0x03) != 0x02) {
+        return false;
+    }
+    if ((uint16_t)(f[3] | (f[4] << 8)) != PANID) {
+        return false;
+    }
+    if (f[5] != 0xFF || f[6] != 0xFF) {  // we only ever broadcast
+        return false;
+    }
+    // The sender id appears twice - in the header's source address and in the payload. A frame
+    // that is genuinely ours agrees with itself.
+    return f[7] == f[HDR_LEN + offsetof(rt_pkt_t, node)];
+}
+
 void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *info)
 {
     // frame[0] is the PSDU length, including the trailing FCS.
-    const int psdu = frame[0];
-    const int payload = psdu - HDR_LEN - FCS_LEN;
-    if (payload >= (int)sizeof(rt_pkt_t)) {
-        rt_rx(&frame[1 + HDR_LEN], payload, CH_154, info->rssi, info->lqi);
+    const int      psdu = frame[0];
+    const uint8_t *f    = &frame[1];
+
+    s_rx_frames++;
+    if (frame_is_ours(f, psdu)) {
+        s_rx_ours++;
+        rt_rx(&f[HDR_LEN], psdu - HDR_LEN - FCS_LEN, CH_154, info->rssi, info->lqi);
     }
     esp_ieee802154_receive_handle_done(frame);
 }
@@ -258,6 +329,8 @@ void rt_154_start(void)
 {
     RT_TRY(TAG, esp_ieee802154_enable());
     RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
+    RT_TRY(TAG, esp_ieee802154_set_txpower(20));
+    s_txpower = esp_ieee802154_get_txpower();
     RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
     RT_TRY(TAG, esp_ieee802154_set_short_address(rt_node_id()));
     RT_TRY(TAG, esp_ieee802154_set_promiscuous(true));  // hear everything, filter in rt_rx
@@ -265,7 +338,7 @@ void rt_154_start(void)
     RT_TRY(TAG, esp_ieee802154_receive());
 
     xTaskCreate(tx_task, "154_tx", 3072, NULL, 4, NULL);
-    ESP_LOGI(TAG, "channel %d, tx every %dms", CHANNEL, TX_PERIOD_MS);
+    ESP_LOGI(TAG, "channel %d, tx every %dms, %d dBm", CHANNEL, TX_PERIOD_MS, s_txpower);
 }
 
 #else  // no 802.15.4 radio on this target (C3, S3)
