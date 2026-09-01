@@ -33,6 +33,17 @@
   .stale{opacity:.4}
   #err{color:var(--bad);font-size:13px;min-height:18px;margin-bottom:8px}
   .hint{color:var(--dim);font-size:13px;line-height:1.5}
+  .pwr{border-top:1px solid var(--line);margin:2px 0 10px;padding-top:8px}
+  .pwrhead{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);
+           font-weight:600;margin-bottom:6px}
+  .pwrrow{display:flex;gap:10px;align-items:center;margin-bottom:7px}
+  .pwrrow.all{border-top:1px dashed var(--line);padding-top:9px;margin-top:9px}
+  .pwrrow.all .pwrlab{color:var(--acc);font-weight:600}
+  .pwrlab{width:66px;flex:none;font-size:12px;color:var(--dim)}
+  .pwrrow input[type=range]{flex:1;min-width:90px;accent-color:var(--acc);height:26px}
+  .pwrval{width:62px;flex:none;text-align:right;font-variant-numeric:tabular-nums;
+          font-size:13px}
+  .pwrval.pending{color:var(--warn)}
   code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12px}
 </style>
 </head>
@@ -74,6 +85,7 @@ const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 // hardware's - Wi-Fi cannot go below +2dBm, the other two reach -15 - so "all" clamps each
 // radio to its own floor rather than refusing. Boards boot at minimum.
 const CMD_PWR_SET = 0xB0;
+const PWR_CH = ['espnow', 'ble_adv', '154'];  // CH_ order, matches the S line power fields
 const PWR_RANGE = [
   { min: 2, max: 20, step: 1 },   // espnow / wifi
   { min: -15, max: 20, step: 3 }, // ble_adv
@@ -157,7 +169,7 @@ function onLine(d, line) {
       pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
     });
   }
-  render();
+  scheduleRender();
 }
 
 async function cmd(d, ...v) {
@@ -173,112 +185,182 @@ const pdrClass = p => p < 0 ? 'dim' : p >= 90 ? 'ok' : p >= 50 ? 'warn' : 'bad';
 const rssiClass = r => r >= -70 ? 'ok' : r >= -90 ? 'warn' : 'bad';
 const pdrTxt = p => p < 0 ? '–' : p + '%';
 
-function render() {
-  $devs.innerHTML = '';
-  for (const d of devs.values()) {
-    const el = document.createElement('div');
-    el.className = 'dev';
+// ---- rendering ---------------------------------------------------------------------------
+//
+// Cards are built once and updated in place. They used to be thrown away and rebuilt on every
+// notification - and onLine() ran that per *line*, so a single report tore the whole UI down
+// four to nineteen times. Anything the operator was touching was destroyed mid-gesture and
+// replaced by one showing the board's last reported value, which made the sliders unusable.
+//
+// The rule now: the board owns every control's value, except one the operator is currently
+// working. That one is theirs until they let go and the write has had time to land.
 
-    const modes = document.createElement('div');
-    modes.className = 'row';
-    LC.forEach((label, i) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      if (d.lc === i) b.className = 'on';
-      b.onclick = () => cmd(d, i);
-      modes.appendChild(b);
+// How long a slider stays the operator's after release - long enough for the write to go out
+// and the next report to come back, so it cannot snap to a stale reading in between. It has to
+// expire on time rather than wait for the value to match, because the board clamps: ask Wi-Fi
+// for -15 and it answers 2, and 2 is the right thing to show.
+const OWN_MS = 1800;
+const owned = s => s._touching || (performance.now() - (s._wrote ?? -1e9) < OWN_MS);
+
+function buildCard(d) {
+  const el = document.createElement('div');
+  el.className = 'dev';
+  el.innerHTML = '<h2><span class="nm"></span>' +
+                 '<span class="st" style="font-size:12px"></span></h2>' +
+                 '<div class="meta"></div>';
+  const R = { el, nm: el.querySelector('.nm'), st: el.querySelector('.st'),
+              meta: el.querySelector('.meta'), modes: [], sliders: [] };
+
+  const modes = document.createElement('div');
+  modes.className = 'row';
+  LC.forEach((label, i) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => cmd(d, i);
+    modes.appendChild(b);
+    R.modes.push(b);
+  });
+
+  // LR lives here rather than on the board's button, which is down to two gestures (tap = next
+  // mode, hold = restore) so the recovery gesture cannot become a timed window. Turning LR on
+  // from here is safe precisely because holding the button turns it off again.
+  R.lr = document.createElement('button');
+  R.lr.title = 'Long-range PHY for Wi-Fi and ESP-NOW. Non-ESP devices, including this phone, ' +
+               'cannot see the board’s AP while it is on.';
+  R.lr.onclick = () => cmd(d, d.lr ? CMD_LR_OFF : CMD_LR_ON);
+  modes.appendChild(R.lr);
+
+  const disc = document.createElement('button');
+  disc.textContent = 'Disconnect';
+  disc.onclick = () => disconnect(d.dev, d);
+  modes.appendChild(disc);
+  el.appendChild(modes);
+
+  const pwr = document.createElement('div');
+  pwr.className = 'pwr';
+  pwr.appendChild(Object.assign(document.createElement('div'),
+                                { className: 'pwrhead', textContent: 'tx power, dBm' }));
+
+  const mkRow = (label, range, onSet, extra) => {
+    const row = document.createElement('div');
+    row.className = 'pwrrow' + (extra ? ' ' + extra : '');
+    row.appendChild(Object.assign(document.createElement('span'),
+                                  { className: 'pwrlab', textContent: label }));
+
+    const s = document.createElement('input');
+    Object.assign(s, { type: 'range', min: range.min, max: range.max, step: range.step });
+    s.value = range.min;
+    const out = Object.assign(document.createElement('b'),
+                              { className: 'pwrval', textContent: '?' });
+
+    // Ownership is explicit rather than inferred: pointer events for touch and mouse, focus
+    // for the keyboard, so arrow-key adjustment is not fought either.
+    const grab = () => { s._touching = true; };
+    const drop = () => { s._touching = false; };
+    s.addEventListener('pointerdown', grab);
+    s.addEventListener('pointerup', drop);
+    s.addEventListener('pointercancel', drop);
+    s.addEventListener('focus', grab);
+    s.addEventListener('blur', drop);
+
+    // 'input' is every pixel of the drag - show it, do not transmit it. 'change' is one event
+    // per gesture, on release, which is the one worth a GATT write.
+    s.addEventListener('input', () => {
+      out.textContent = '→ ' + s.value;
+      out.classList.add('pending');
     });
+    s.addEventListener('change', () => { s._wrote = performance.now(); onSet(+s.value); });
 
-    // LR lives here rather than on the board's button, which is down to two gestures (tap =
-    // next mode, hold = restore) so that the recovery gesture cannot become a timed window.
-    // Turning LR on from here is safe precisely because holding the button turns it off again:
-    // the danger is only ever LR on *while Wi-Fi is the control channel*, and the board forces
-    // it off in the wifi mode anyway.
-    const lr = document.createElement('button');
-    lr.textContent = d.lr ? 'LR on' : 'LR off';
-    if (d.lr) lr.className = 'on';
-    lr.title = 'Long-range PHY for Wi-Fi and ESP-NOW. Non-ESP devices, including this phone, ' +
-               'cannot see the board\u2019s AP while it is on.';
-    lr.onclick = () => cmd(d, d.lr ? CMD_LR_OFF : CMD_LR_ON);
-    modes.appendChild(lr);
+    row.appendChild(s);
+    row.appendChild(out);
+    R.sliders.push({ s, out });
+    return row;
+  };
 
-    const disc = document.createElement('button');
-    disc.textContent = 'Disconnect';
-    disc.onclick = () => disconnect(d.dev, d);
-    modes.appendChild(disc);
+  PWR_CH.forEach((name, ch) =>
+    pwr.appendChild(mkRow(name, PWR_RANGE[ch], v => setPwr(d, ch, v))));
 
-    // One slider per radio, below the modes, plus an "all" row that drives every radio to the
-    // same dBm - the setting a fair comparison needs. Separate from the mode buttons because
-    // power is orthogonal to them, and because mixing the two invites clicking the wrong one
-    // mid-walk. The label shows the achieved dBm from the board, not the slider position, so
-    // a radio that quantised the request says so.
-    const pwr = document.createElement('div');
+  // "all" is a command, not a state: it has no value of its own, so it shows the common value
+  // when the three agree and "mixed" when they do not. Its range is the widest of the three
+  // and each radio clamps itself, so dragging it to -15 leaves Wi-Fi at its floor of 2.
+  pwr.appendChild(mkRow('all →', { min: -15, max: 20, step: 1 },
+                        v => setPwr(d, PWR_CH.length, v), 'all'));
+  el.appendChild(pwr);
 
-    const pwrRow = (label, range, value, onSet) => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.appendChild(Object.assign(document.createElement('span'),
-                                    { className: 'hint', textContent: label }));
-      const s = document.createElement('input');
-      Object.assign(s, { type: 'range', min: range.min, max: range.max, step: range.step });
-      s.value = value ?? range.min;
-      const out = Object.assign(document.createElement('b'),
-                                { textContent: (value ?? '?') + ' dBm' });
-      // 'change', not 'input': one write when the slider is released, not one per pixel.
-      s.onchange = () => onSet(+s.value);
-      s.oninput = () => { out.textContent = s.value + ' dBm'; };
-      row.appendChild(s);
-      row.appendChild(out);
-      return row;
-    };
+  R.body = document.createElement('div');
+  el.appendChild(R.body);
+  return R;
+}
 
-    LC.slice(1, 4).forEach((chName, ch) => {
-      pwr.appendChild(pwrRow(chName + ' tx', PWR_RANGE[ch], d.pwr && d.pwr[ch],
-                             v => setPwr(d, ch, v)));
-    });
-    // Widest range of the three, so "all" can reach every radio's floor; each clamps itself.
-    pwr.appendChild(pwrRow('all tx', { min: -15, max: 20, step: 1 }, undefined,
-                           v => setPwr(d, 3, v)));
+function updateCard(d) {
+  const R = d.ui;
+  R.nm.textContent = d.name || '?';
+  R.st.textContent = d.live ? 'connected' : 'reconnecting…';
+  R.st.className = d.live ? 'ok' : 'bad';
+  R.meta.innerHTML =
+    `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
+    `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b>`;
 
-    const rows = [...d.rows.values()].sort(
-      (a, b) => (a.peer + a.ch).localeCompare(b.peer + b.ch));
+  R.modes.forEach((b, i) => { b.className = d.lc === i ? 'on' : ''; });
+  R.lr.textContent = d.lr ? 'LR on' : 'LR off';
+  R.lr.className = d.lr ? 'on' : '';
 
-    el.innerHTML =
-      `<h2><span>${d.name || '?'}</span>` +
-      `<span class="${d.live ? 'ok' : 'bad'}" style="font-size:12px">` +
-      `${d.live ? 'connected' : 'reconnecting…'}</span></h2>` +
-      `<div class="meta">up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
-      `tx: <b>${d.pwr ? d.pwr.join('/') + ' dBm' : '?'}</b> · ` +
-      `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b></div>`;
-    el.appendChild(modes);
-    el.appendChild(pwr);
-
-    if (!rows.length) {
-      const p = document.createElement('div');
-      p.className = 'hint';
-      p.textContent = 'Nothing heard yet. Is the other board powered up?';
-      el.appendChild(p);
-    } else {
-      const t = document.createElement('table');
-      t.innerHTML = '<tr><th>peer / radio</th><th>rssi</th><th>avg</th>' +
-                    '<th>pdr</th><th>all</th><th>miss</th></tr>';
-      for (const r of rows) {
-        const tr = document.createElement('tr');
-        // Grey out a row that has gone quiet - on a walk, silence is the result.
-        if (r.age > 5000) tr.className = 'stale';
-        tr.innerHTML =
-          `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
-          `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
-          `<td class="dim">${r.avg}</td>` +
-          `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
-          `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
-          `<td class="dim">${r.miss}</td>`;
-        t.appendChild(tr);
-      }
-      el.appendChild(t);
+  R.sliders.forEach((sl, i) => {
+    if (owned(sl.s)) return;  // hands off - the operator has this one
+    const all = i >= PWR_CH.length;
+    const v = !d.pwr ? undefined
+            : all ? (d.pwr.every(p => p === d.pwr[0]) ? d.pwr[0] : undefined)
+                  : d.pwr[i];
+    sl.out.classList.remove('pending');
+    if (v === undefined) {
+      sl.out.textContent = (all && d.pwr) ? 'mixed' : '?';
+      return;
     }
-    $devs.appendChild(el);
+    sl.s.value = v;
+    sl.out.textContent = v;
+  });
+
+  const rows = [...d.rows.values()].sort(
+    (a, b) => (a.peer + a.ch).localeCompare(b.peer + b.ch));
+
+  if (!rows.length) {
+    R.body.innerHTML =
+      '<div class="hint">Nothing heard yet. Is the other board powered up?</div>';
+    return;
   }
+  // Nothing in here is interactive, so rebuilding it wholesale costs nothing.
+  R.body.innerHTML =
+    '<table><tr><th>peer / radio</th><th>rssi</th><th>avg</th>' +
+    '<th>pdr</th><th>all</th><th>miss</th></tr>' +
+    rows.map(r =>
+      // Grey out a row that has gone quiet - on a walk, silence is the result.
+      `<tr class="${r.age > 5000 ? 'stale' : ''}">` +
+      `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
+      `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
+      `<td class="dim">${r.avg}</td>` +
+      `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
+      `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
+      `<td class="dim">${r.miss}</td></tr>`).join('') +
+    '</table>';
+}
+
+function render() {
+  for (const d of devs.values()) {
+    if (!d.ui) {
+      d.ui = buildCard(d);
+      $devs.appendChild(d.ui.el);
+    }
+    updateCard(d);
+  }
+}
+
+// A report is up to nineteen notifications describing one instant, so redraw once when they
+// have all arrived rather than once per line.
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
 }
 
 // A phone that sleeps mid-walk stops rendering and drops the link.
