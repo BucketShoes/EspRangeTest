@@ -29,7 +29,8 @@ static const char *TAG = "rt";
 #define BUTTON_GPIO  9
 #define WIFI_CHAN    1
 
-// XIAO ESP32C6 RF switch power. Drive LOW to put the antenna on the air at all.
+// XIAO ESP32C6 RF switch power. Drive LOW to put the antenna on the air at all - but only
+// once every radio's transmit power has been set: see antenna_switch_on() below.
 //
 // The module's antenna path runs through an FM8625H SPDT switch whose VDD comes from a P-FET
 // (Q3) with a 10k pull-up on its gate and its pull-down not populated. Gate high means the FET
@@ -46,8 +47,9 @@ static const char *TAG = "rt";
 //
 // Harmless on the DevKitC/DevKitM, where GPIO3 is an ordinary unused pin - and GPIO3 is not a
 // strapping pin on the C6 (those are 8, 9 and 15), so driving it out of reset is safe.
-#define ANT_PWR_GPIO   3
-#define ANT_SETTLE_MS  100   // the vendor example waits before using the switch; so do we
+#define ANT_PWR_GPIO    3
+#define ANT_SETTLE_MS   100   // the vendor example waits before using the switch; so do we
+#define ANT_PWR_WAIT_MS 3000  // backstop on waiting for BLE to report its power
 
 // The button has exactly two gestures, and no third is allowed to appear.
 //
@@ -276,6 +278,53 @@ static void wifi_start(void)
 }
 #endif
 
+// Power the antenna switch - last, deliberately, after every radio is up and every transmit
+// power has been programmed.
+//
+// Ordering is the whole point. Until this runs, the switch is unpowered and the RF path is
+// heavily attenuated: that is the state the boards have already spent hours in, so whatever it
+// does to a PA, it has already done and been survived. Enabling it turns a clamped path into
+// an open one, and doing that *before* power is set would put the one transmit this code
+// cannot control - the few milliseconds between esp_wifi_start() and
+// esp_wifi_set_max_tx_power(), which the API will not let us close - at up to +20dBm into a
+// path whose match is still unproven. After this point every Wi-Fi restart still has that
+// window, but by then it is into a known antenna, which is just ordinary transmitting.
+//
+// So: attenuated path takes the uncontrolled burst, and the good path only ever sees powers
+// this firmware chose.
+//
+// Waiting on BLE specifically because rt_ble_apply_power() runs from the NimBLE sync callback,
+// which is asynchronous - init returning does not mean the controller has been told anything.
+// The timeout is a backstop, not an expectation; if it ever fires, that is worth knowing.
+//
+// GPIO14 (port select) is still never touched: R24 holds it at ground for RF1, the onboard
+// ceramic antenna, which is the only one fitted.
+static void antenna_switch_on(void)
+{
+    const uint32_t deadline = rt_ms() + ANT_PWR_WAIT_MS;
+    while (!rt_ble_power_ready() && (int32_t)(rt_ms() - deadline) < 0) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (!rt_ble_power_ready()) {
+        ESP_LOGW(TAG, "BLE never reported its tx power; powering the antenna anyway");
+    }
+
+    const gpio_config_t ant = {
+        .pin_bit_mask = 1ULL << ANT_PWR_GPIO,
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&ant);
+    gpio_set_level(ANT_PWR_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(ANT_SETTLE_MS));
+
+    ESP_LOGI(TAG, "RF switch powered (GPIO%d low), tx power already set: "
+                  "espnow %ddBm, ble %ddBm, 154 %ddBm", ANT_PWR_GPIO,
+             rt_power_actual(CH_ESPNOW), rt_power_actual(CH_BLE_ADV), rt_power_actual(CH_154));
+}
+
 // Tap (release before HOLD_MS) cycles low-contention mode; hold past HOLD_MS restores every
 // control channel. Two gestures, no windows - see the HOLD_MS comment at the top of the file.
 // Polled rather than interrupt-driven, same as always: a button needs debouncing anyway.
@@ -329,20 +378,6 @@ void app_main(void)
         ESP_LOGW(TAG, "nvs_flash_init -> %s (continuing)", esp_err_to_name(err));
     }
 
-    // Before any radio: an unpowered antenna switch makes every measurement below meaningless.
-    const gpio_config_t ant = {
-        .pin_bit_mask = 1ULL << ANT_PWR_GPIO,
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&ant);
-    gpio_set_level(ANT_PWR_GPIO, 0);
-    vTaskDelay(pdMS_TO_TICKS(ANT_SETTLE_MS));
-    ESP_LOGI(TAG, "RF switch powered (GPIO%d low); GPIO14 left alone, so the onboard "
-                  "ceramic antenna stays selected", ANT_PWR_GPIO);
-
     esp_chip_info_t info;
     esp_chip_info(&info);
     ESP_LOGI(TAG, "%s rev v%d.%d, node %02X", CONFIG_IDF_TARGET,
@@ -371,6 +406,8 @@ void app_main(void)
 #endif
 #endif
     ESP_LOGI(TAG, "init: done");
+
+    antenna_switch_on();
 
     xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
 

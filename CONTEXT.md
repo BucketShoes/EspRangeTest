@@ -231,8 +231,22 @@ hardware does unaided — rather than powering the switch over to an unpopulated
 It is a genuinely poor default — any firmware for this module, of any framework, has to know
 this pin exists — but it is the hardware's behaviour, not a fault in the boards.
 
-Fixed in `main.c`: GPIO3 is driven low before any radio is initialised, with a 100 ms settle
-matching Seeed's example. GPIO14 is untouched.
+Handled in `main.c`'s `antenna_switch_on()`, and **the ordering is the point**: the switch is
+powered *last*, after every radio is up and every transmit power has been programmed.
+
+Until then the path stays attenuated — which is the state these boards have already spent hours
+in, so whatever that does to a PA has already been done and survived. Powering the switch turns
+a clamped path into an open one, and doing that first would put the one transmit this firmware
+cannot control — the few milliseconds between `esp_wifi_start()` and
+`esp_wifi_set_max_tx_power()`, which the API will not let us close — at up to +20 dBm into a
+path whose match is unproven. Afterwards that window still exists on every Wi-Fi restart, but by
+then it is into a known antenna, which is just ordinary transmitting.
+
+The wait includes BLE explicitly, because `rt_ble_apply_power()` runs from the NimBLE sync
+callback: init returning does not mean the controller has been told anything. There is a 3 s
+backstop that logs if it ever fires.
+
+GPIO14 is untouched throughout.
 
 ## What that fault looked like: ~70 dB of missing link budget (2026-09-01)
 
@@ -294,7 +308,7 @@ genuine antenna coupling changes ~6 dB per doubling, so 20 cm against 2 m should
 
 | radio | range | granularity | why |
 |---|---|---|---|
-| espnow / wifi | **+2 … +20 dBm** | ~1 dB requested, hardware snaps to its own ladder | `esp_wifi_set_max_tx_power` takes 0.25 dBm units over `[8,84]`; +2 dBm really is the floor the API offers |
+| espnow / wifi | **+2 … +20 dBm** | ~1 dB requested, hardware snaps to its own ladder | `esp_wifi_set_max_tx_power` takes 0.25 dBm units over `[8,84]`; +2 dBm really is the floor the API offers, and there is no other public way down |
 | ble_adv | **−15 … +20 dBm** | 3 dB | controller levels `ESP_PWR_LVL_N15 … P20` |
 | 154 | **−15 … +20 dBm** | 3 dB | `esp_ieee802154_set_txpower` |
 
@@ -333,7 +347,8 @@ open one. Two real gaps were found:
    maximum — with the SoftAP already beaconing. Narrowed to the smallest possible gap by
    calling it immediately after start, before the channel is even set. **It cannot be closed
    entirely through this API**; a few milliseconds at up to +20 dBm on each Wi-Fi start is
-   unavoidable, including at boot.
+   unavoidable, including at boot. This is the reason the antenna switch is powered last —
+   the boot-time instance of this window lands on the attenuated path.
 
 Everything else checked and clear:
 - 802.15.4 power is set in `rt_154_start()` before the transmit task exists, so no frame

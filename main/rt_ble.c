@@ -64,6 +64,15 @@ static int8_t s_adv_power;
 // which is not something to do from the button task or a GATT write callback.
 static volatile bool s_pwr_dirty;
 
+// Cleared until rt_ble_apply_power() has run, or set immediately if BLE never starts. Read by
+// app_main before it powers the antenna switch.
+static volatile bool s_pwr_applied;
+
+bool rt_ble_power_ready(void)
+{
+    return s_pwr_applied;
+}
+
 // dBm to the controller's power index. Levels are 3dB apart from -15 (index 3) to +20
 // (index 15) - see esp_power_level_t in esp_bt.h.
 static esp_power_level_t pwr_level(int dbm)
@@ -96,6 +105,7 @@ void rt_ble_apply_power(void)
     for (int h = ESP_BLE_PWR_TYPE_CONN_HDL0; h <= ESP_BLE_PWR_TYPE_CONN_HDL8; h++) {
         esp_ble_tx_power_set((esp_ble_power_type_t)h, lvl);
     }
+    s_pwr_applied = true;
 }
 static bool    s_scanning;
 static bool    s_scan_solo;   // which duty cycle s_scanning is currently running at
@@ -323,6 +333,7 @@ void rt_ble_start(void)
         // Losing BLE costs the coded-PHY channel and the phone UI, but ESP-NOW and 802.15.4
         // can still produce a useful walk, so this must not be fatal.
         ESP_LOGE(TAG, "nimble_port_init -> %s; BLE disabled", esp_err_to_name(err));
+        s_pwr_applied = true;  // nothing will transmit, so nothing is waiting on us
         return;
     }
 #if RT_STAGE >= 4

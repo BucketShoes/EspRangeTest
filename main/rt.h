@@ -158,6 +158,11 @@ void rt_wifi_apply_power(void);
 void rt_154_apply_power(void);
 void rt_ble_apply_power(void);
 
+// True once BLE's transmit power has actually been programmed, or if BLE is not running at
+// all. on_sync is asynchronous, so app_main cannot assume it has happened yet - and the RF
+// switch must not be powered until it has. See the antenna comment in main.c.
+bool rt_ble_power_ready(void);
+
 // Called by rt_set_lc() after every mode change, from whichever context asked for it (button
 // task, or a BLE command write). Defined in main.c because that is the file owning the Wi-Fi
 // driver - rt_stats.c has no business touching a radio directly. It applies everything a mode
