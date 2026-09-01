@@ -353,11 +353,13 @@ open one. Two real gaps were found:
    dBm, default 20) feeds `components/esp_phy/esp32c6/phy_init_data.c`, the PHY power table
    loaded at PHY init — *before anything transmits*. Setting it caps every Wi-Fi transmission
    including the boot window, which is exactly how a power-limited product handles this. Two
-   things to know before using it: the floor is 10 dBm, so it cannot reach the +2 dBm the
-   runtime API can; and it is a hard ceiling, so a build with it at 10 can never run a Wi-Fi
-   range test above 10 dBm. **Left at the default of 20 here** because capping it would
-   silently limit the measurement this instrument exists to make — but it is the right knob if
-   a board is ever deployed rather than bench-tested.
+   things to know: the floor is 10 dBm, so it cannot reach the +2 dBm the runtime API can; and
+   it is a hard ceiling for the whole build, not a bring-up measure. **Set to 10 in
+   `sdkconfig.defaults`.** It caps Wi-Fi and ESP-NOW only — the table is the Wi-Fi rate ladder,
+   so BLE and 802.15.4 still reach 20 dBm — but **ESP-NOW cannot be range-tested above 10 dBm
+   while it is set**, and ESP-NOW in LR holds the distance record. Raise it to 20 before a field
+   test that needs Wi-Fi at full power. `s_range[CH_ESPNOW].max` reads the same symbol, so the
+   selectable range follows it automatically.
 
 Everything else checked and clear:
 - 802.15.4 power is set in `rt_154_start()` before the transmit task exists, so no frame

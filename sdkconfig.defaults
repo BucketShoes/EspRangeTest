@@ -47,6 +47,29 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 
+# NOTE, learned the hard way: editing this file does NOT change an existing build. PlatformIO
+# seeds sdkconfig.<env> from here once, and after that the generated file wins - the build will
+# succeed, report nothing, and quietly use the old value. Delete sdkconfig.devkitc /
+# sdkconfig.devkitm (both gitignored, both regenerate) after changing anything here, and then
+# grep the generated file to confirm the value actually landed.
+
+# Cap the Wi-Fi PHY's transmit power, in the one place that binds before anything transmits.
+#
+# esp_wifi_set_max_tx_power() cannot be called until after esp_wifi_start(), so there is a
+# window of a few milliseconds on every Wi-Fi start - boot included - where the driver is at
+# its own default of 20dBm and the SoftAP is already beaconing. This option feeds the PHY power
+# table in components/esp_phy/esp32c6/phy_init_data.c, which is loaded at PHY init, so it binds
+# earlier than any runtime call can.
+#
+# The cost, stated plainly: this is a HARD CEILING for the whole build, not a bring-up
+# measure. ESP-NOW and Wi-Fi cannot be range-tested above 10dBm while it is set - which matters,
+# because ESP-NOW in LR mode currently holds the distance record. Raise this to 20 before a
+# field test that needs Wi-Fi at full power. The valid range is 10..20; there is no lower.
+#
+# It does NOT touch BLE or 802.15.4 - that table is the Wi-Fi rate ladder only - so both of the
+# channels currently under investigation still reach 20dBm.
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
+
 # Long-running walks: a watchdog trip mid-test would lose the run.
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 

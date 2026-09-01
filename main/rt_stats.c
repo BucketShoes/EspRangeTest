@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sdkconfig.h"
+
 #include "esp_mac.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -16,7 +18,11 @@ volatile int g_lc = 0;
 // Each radio's real range, from its own API - see the note in rt.h. Wi-Fi's floor of +2dBm is
 // not a choice; it is where esp_wifi_set_max_tx_power's valid range starts.
 static const rt_pwr_range_t s_range[CH_COUNT] = {
-    [CH_ESPNOW]  = {   2, 20, 1 },
+    // Wi-Fi's ceiling is taken from the PHY cap rather than hardcoded, so asking for a power
+    // the PHY will not deliver is impossible. esp_wifi_get_max_tx_power() reports what the
+    // driver stored, not what the PHY allows, so without this the read-back could claim 20dBm
+    // while the radio transmitted 10 - a lie in exactly the field the packet carries.
+    [CH_ESPNOW]  = {   2, CONFIG_ESP_PHY_MAX_WIFI_TX_POWER, 1 },
     [CH_BLE_ADV] = { -15, 20, 3 },
     [CH_154]     = { -15, 20, 3 },
 };
