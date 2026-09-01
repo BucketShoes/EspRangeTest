@@ -345,10 +345,19 @@ open one. Two real gaps were found:
 2. **A brief full-power window on every Wi-Fi start.** `esp_wifi_set_max_tx_power()` may only
    be called *after* `esp_wifi_start()`, and until it is, the driver sits at its own default —
    maximum — with the SoftAP already beaconing. Narrowed to the smallest possible gap by
-   calling it immediately after start, before the channel is even set. **It cannot be closed
-   entirely through this API**; a few milliseconds at up to +20 dBm on each Wi-Fi start is
-   unavoidable, including at boot. This is the reason the antenna switch is powered last —
-   the boot-time instance of this window lands on the attenuated path.
+   calling it immediately after start, before the channel is even set. It cannot be closed
+   through *that* API, which is the reason the antenna switch is powered last: the boot-time
+   instance of this window lands on the attenuated path.
+
+   **But it can be bounded, one layer down.** `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER` (range 10–20
+   dBm, default 20) feeds `components/esp_phy/esp32c6/phy_init_data.c`, the PHY power table
+   loaded at PHY init — *before anything transmits*. Setting it caps every Wi-Fi transmission
+   including the boot window, which is exactly how a power-limited product handles this. Two
+   things to know before using it: the floor is 10 dBm, so it cannot reach the +2 dBm the
+   runtime API can; and it is a hard ceiling, so a build with it at 10 can never run a Wi-Fi
+   range test above 10 dBm. **Left at the default of 20 here** because capping it would
+   silently limit the measurement this instrument exists to make — but it is the right knob if
+   a board is ever deployed rather than bench-tested.
 
 Everything else checked and clear:
 - 802.15.4 power is set in `rt_154_start()` before the transmit task exists, so no frame
