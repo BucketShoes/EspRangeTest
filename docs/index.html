@@ -86,11 +86,13 @@ const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 // radio to its own floor rather than refusing. Boards boot at minimum.
 const CMD_PWR_SET = 0xB0;
 const PWR_CH = ['espnow', 'ble_adv', '154'];  // CH_ order, matches the S line power fields
-const PWR_RANGE = [
-  { min: 2, max: 20, step: 1 },   // espnow / wifi
-  { min: -15, max: 20, step: 3 }, // ble_adv
-  { min: -15, max: 20, step: 3 }, // 154
-];
+// One span for every radio, deliberately, even though Wi-Fi cannot go below +2dBm and the
+// other two quantise to 3dB steps. A fair test has to look like a fair test: sliders sitting at
+// visibly different places purely because their scales differ reads as a rigged comparison, and
+// lining them up is worth more than each control spanning exactly its own hardware. The board
+// clamps and quantises whatever it is sent, and the mismatch marker says so - asking Wi-Fi for
+// -15 and being told 2 is information, not an error.
+const PWR_SPAN = { min: -15, max: 20, step: 1 };
 
 const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen}
 const $err = document.getElementById('err');
@@ -264,13 +266,20 @@ function buildCard(d) {
   };
 
   PWR_CH.forEach((name, ch) =>
-    pwr.appendChild(mkRow(name, PWR_RANGE[ch], v => setPwr(d, ch, v))));
+    pwr.appendChild(mkRow(name, PWR_SPAN, v => setPwr(d, ch, v))));
 
-  // "all" is a command, not a state. Its range is the widest of the three and each radio
-  // clamps itself, so dragging it to -15 leaves Wi-Fi at its floor of 2 - which is exactly the
-  // case the mismatch marker exists to show.
-  pwr.appendChild(mkRow('all →', { min: -15, max: 20, step: 1 },
-                        v => setPwr(d, PWR_CH.length, v), 'all'));
+  // "all" is a command, not a state, so it has nothing of its own to report. Moving it drives
+  // the three radio sliders locally and immediately - no round trip. The board is told
+  // separately, in one write, and each radio clamps to its own limits; where that lands
+  // somewhere else the per-radio marker says so.
+  pwr.appendChild(mkRow('all →', PWR_SPAN, v => {
+    R.sliders.forEach((sl, i) => {
+      if (i >= PWR_CH.length) return;
+      sl.s.value = v;
+      paintSlider(sl);
+    });
+    setPwr(d, PWR_CH.length, v);
+  }, 'all'));
   el.appendChild(pwr);
 
   R.body = document.createElement('div');

@@ -199,11 +199,16 @@ void rt_set_lc(int lc)
     if (lc < 0 || lc >= LC_COUNT) {
         return;
     }
-    g_lc = lc;
-    rt_stats_reset();
     // Set g_lc first: rt_apply_lc_radios() and everything it reaches decide what to do by
     // reading g_lc, not the argument.
+    g_lc = lc;
+
+    // Radios first, table second. Stopping a radio is not instant - esp_wifi_stop() unwinds a
+    // driver, and callbacks already queued still land - so wiping the table first left a window
+    // where in-flight packets were recorded into the freshly cleared table. That is how an
+    // espnow row appeared under a report header saying 154 was isolated.
     rt_apply_lc_radios(lc);
+    rt_stats_reset();
 
     printf("\n>>> low contention = %s\n", lc_name(lc));
 }
@@ -236,6 +241,14 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
     if (len < (int)sizeof(rt_pkt_t) || chan < 0 || chan >= CH_COUNT) {
         return;
     }
+    // A channel this mode is not measuring does not belong in the table, even if the far end is
+    // still transmitting it and even if our own radio has not finished stopping. rt_tx_enabled()
+    // is the same set of channels the mode cares about, applied to the receive side: without
+    // this, the ordering above only narrows the window rather than closing it.
+    if (!rt_tx_enabled(chan)) {
+        return;
+    }
+
     rt_pkt_t p;
     memcpy(&p, data, sizeof(p));
     if (p.magic != RT_MAGIC || p.node == rt_node_id()) {

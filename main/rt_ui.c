@@ -32,8 +32,13 @@ static const char *TAG = "ui";
 // happen at a particular time; it only needs it to happen.
 #define UI_ITVL_FAST_MIN 0x00A0  // 0.625ms units -> 100ms
 #define UI_ITVL_FAST_MAX 0x0140  // -> 200ms
-#define UI_ITVL_SLOW_MIN 0x0500  // -> 800ms
-#define UI_ITVL_SLOW_MAX 0x0A00  // -> 1600ms
+// Slow, but still findable. 800-1600ms adverts meant a reconnect could take tens of seconds or
+// never complete - Chrome scans at its own duty cycle, and two sparse schedules can miss each
+// other for a very long time. Reconnecting is the normal case on a walk, so discovery has to
+// stay possible; the airtime saved by going slower than this was not worth a link that will
+// not come back.
+#define UI_ITVL_SLOW_MIN 0x01E0  // -> 300ms
+#define UI_ITVL_SLOW_MAX 0x0320  // -> 500ms
 
 // Slow in exactly two modes - espnow and 154 - and fast everywhere else.
 //
@@ -62,9 +67,14 @@ static const char *TAG = "ui";
 // laggy link and a slow initial connection are fine, this is a bench-test mode.
 #define CONN_ITVL_FAST_MIN 0x0010  // 20ms
 #define CONN_ITVL_FAST_MAX 0x0050  // 100ms
-#define CONN_ITVL_SLOW_MIN 0x00F0  // 300ms
-#define CONN_ITVL_SLOW_MAX 0x0258  // 750ms
-#define CONN_LATENCY_SLOW  4       // plus up to 4 skipped events - up to ~2.5s of quiet when idle
+// 500ms is the ceiling, and latency is zero, because nothing can be sent until a connection
+// event: at 750ms with 4 skipped events the link was idle for up to 2.5s, which is longer than
+// the report period, so reports were arriving late or being overtaken by the next one. A report
+// that does not arrive is a test that did not happen, and airtime saved by dropping it is not a
+// saving. Contention is behaving well enough now to afford this.
+#define CONN_ITVL_SLOW_MIN 0x00A0  // 200ms
+#define CONN_ITVL_SLOW_MAX 0x0190  // 500ms
+#define CONN_LATENCY_SLOW  0
 // Supervision timeout must clear (1 + latency) * itvl_max * 2 or the link drops on its own.
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
 #define CONN_TIMEOUT_SLOW 1000 // -> 10s. Must clear (1+4)*750ms*2 = 7.5s; 8s left no margin.
