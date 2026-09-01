@@ -300,14 +300,33 @@ function paintSlider(sl) {
   sl.out.className = 'pwrval' + cls;
 }
 
+// How long a row may go without a packet before it is dimmed. Measurement packets run at
+// 2-4Hz, so a second and a half of silence is already several missed - long enough to mean
+// something, short enough to see it happen rather than read about it later.
+const ROW_STALE_MS = 1500;
+// And how long the whole board may go without a report before the card says so. Two report
+// periods: one missed could be timing, two is the link.
+const LINK_STALE_MS = 2500;
+
 function updateCard(d) {
   const R = d.ui;
+  const now = Date.now();
+  // How long since this board last said anything. Every age below is the board's own figure
+  // plus this, so the numbers keep moving between reports instead of freezing at whatever the
+  // last packet said - a frozen age reads as a live one.
+  const drift = now - (d.seen ?? now);
+
   R.nm.textContent = d.name || '?';
   R.st.textContent = d.live ? 'connected' : 'reconnecting…';
   R.st.className = d.live ? 'ok' : 'bad';
+
+  const linkStale = drift > LINK_STALE_MS;
   R.meta.innerHTML =
     `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
-    `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b>`;
+    `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
+    `report <b class="${linkStale ? 'bad' : 'dim'}">` +
+    `${linkStale ? 'none for ' + (drift / 1000).toFixed(0) + 's' : (drift / 1000).toFixed(1) + 's ago'}` +
+    `</b>`;
 
   R.modes.forEach((b, i) => { b.className = d.lc === i ? 'on' : ''; });
   R.lr.textContent = d.lr ? 'LR on' : 'LR off';
@@ -339,16 +358,20 @@ function updateCard(d) {
   // Nothing in here is interactive, so rebuilding it wholesale costs nothing.
   R.body.innerHTML =
     '<table><tr><th>peer / radio</th><th>rssi</th><th>avg</th>' +
-    '<th>pdr</th><th>all</th><th>miss</th></tr>' +
-    rows.map(r =>
-      // Grey out a row that has gone quiet - on a walk, silence is the result.
-      `<tr class="${r.age > 5000 ? 'stale' : ''}">` +
-      `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
-      `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
-      `<td class="dim">${r.avg}</td>` +
-      `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
-      `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
-      `<td class="dim">${r.miss}</td></tr>`).join('') +
+    '<th>pdr</th><th>all</th><th>miss</th><th>last</th></tr>' +
+    rows.map(r => {
+      const age = r.age + drift;
+      // Dim a row that has gone quiet - on a walk, silence is the result, and it should be
+      // visible the moment it starts rather than five seconds later.
+      return `<tr class="${age > ROW_STALE_MS ? 'stale' : ''}">` +
+        `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
+        `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
+        `<td class="dim">${r.avg}</td>` +
+        `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
+        `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
+        `<td class="dim">${r.miss}</td>` +
+        `<td class="dim">${(age / 1000).toFixed(1)}s</td></tr>`;
+    }).join('') +
     '</table>';
 }
 
@@ -380,7 +403,7 @@ document.getElementById('wake').onclick = async function () {
   } catch (e) { fail('Screen wake lock unavailable: ' + e.message); }
 };
 
-setInterval(render, 1000);   // keep ages and stale styling moving between packets
+setInterval(scheduleRender, 400);  // ages and stale styling keep moving between reports
 </script>
 </body>
 </html>

@@ -32,13 +32,11 @@ static const char *TAG = "ui";
 // happen at a particular time; it only needs it to happen.
 #define UI_ITVL_FAST_MIN 0x00A0  // 0.625ms units -> 100ms
 #define UI_ITVL_FAST_MAX 0x0140  // -> 200ms
-// Slow, but still findable. 800-1600ms adverts meant a reconnect could take tens of seconds or
-// never complete - Chrome scans at its own duty cycle, and two sparse schedules can miss each
-// other for a very long time. Reconnecting is the normal case on a walk, so discovery has to
-// stay possible; the airtime saved by going slower than this was not worth a link that will
-// not come back.
-#define UI_ITVL_SLOW_MIN 0x01E0  // -> 300ms
-#define UI_ITVL_SLOW_MAX 0x0320  // -> 500ms
+// Slow, but still findable. 800-1600ms could not be reconnected to in any reasonable time -
+// Chrome scans on its own duty cycle and two sparse schedules miss each other for a long while.
+// These are the owner's numbers; do not "improve" them in either direction.
+#define UI_ITVL_SLOW_MIN 0x03C0  // -> 600ms
+#define UI_ITVL_SLOW_MAX 0x0640  // -> 1000ms
 
 // Slow in exactly two modes - espnow and 154 - and fast everywhere else.
 //
@@ -67,13 +65,16 @@ static const char *TAG = "ui";
 // laggy link and a slow initial connection are fine, this is a bench-test mode.
 #define CONN_ITVL_FAST_MIN 0x0010  // 20ms
 #define CONN_ITVL_FAST_MAX 0x0050  // 100ms
-// 500ms is the ceiling, and latency is zero, because nothing can be sent until a connection
-// event: at 750ms with 4 skipped events the link was idle for up to 2.5s, which is longer than
-// the report period, so reports were arriving late or being overtaken by the next one. A report
-// that does not arrive is a test that did not happen, and airtime saved by dropping it is not a
-// saving. Contention is behaving well enough now to afford this.
-#define CONN_ITVL_SLOW_MIN 0x00A0  // 200ms
-#define CONN_ITVL_SLOW_MAX 0x0190  // 500ms
+// 350-500ms, the owner's numbers. 500ms is the ceiling because nothing can be sent until a
+// connection event, and the report has to arrive while it is still worth reading.
+//
+// Latency stays at zero. Note what it actually costs, which is not what an earlier comment here
+// claimed: a slave with data queued uses the next anchor point regardless of latency, so
+// reports were never delayed by it. What latency delays is the *other* direction - a command
+// from the phone can wait up to (1+latency) intervals before the board hears it. At latency 4
+// and 500ms that is 2.5s of dead control, which is the part worth not having.
+#define CONN_ITVL_SLOW_MIN 0x0118  // 1.25ms units -> 350ms
+#define CONN_ITVL_SLOW_MAX 0x0190  // -> 500ms
 #define CONN_LATENCY_SLOW  0
 // Supervision timeout must clear (1 + latency) * itvl_max * 2 or the link drops on its own.
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
