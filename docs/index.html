@@ -69,12 +69,16 @@ const LC = ['all', 'espnow', 'ble_adv', '154', 'wifi'];
 // is down to tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
 const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 
-// Transmit power, set per radio. Byte is base + channel*8 + level; must match RT_CMD_PWR and
-// s_pwr_dbm[] in main/rt_stats.c. Per-radio rather than global so mixed setups are possible -
-// BLE low enough to keep a phone connected while 802.15.4 runs at full power, say. Boards boot
-// with every channel at "min", which keeps a whole range comparison inside a room.
-const CMD_PWR = 0x90;
-const PWR = ['min', 'low', 'mid', 'max'];
+// Transmit power in dBm, per radio. Two-byte write: [0xB0 + channel, dbm]; channel 3 sets all
+// three at once. Must match RT_CMD_PWR_SET and s_range[] in the firmware. Ranges are the
+// hardware's - Wi-Fi cannot go below +2dBm, the other two reach -15 - so "all" clamps each
+// radio to its own floor rather than refusing. Boards boot at minimum.
+const CMD_PWR_SET = 0xB0;
+const PWR_RANGE = [
+  { min: 2, max: 20, step: 1 },   // espnow / wifi
+  { min: -15, max: 20, step: 3 }, // ble_adv
+  { min: -15, max: 20, step: 3 }, // 154
+];
 
 const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen}
 const $err = document.getElementById('err');
@@ -143,8 +147,8 @@ function onLine(d, line) {
     // f[5] (power) is absent from firmware older than the power-level work; leave d.pwr
     // undefined in that case rather than showing "min", which would be a guess.
     d.node = f[1]; d.uptime = +f[2]; d.lc = +f[3]; d.lr = +f[4];
-    // One level per radio, in CH_ order. Absent on firmware older than the power work; left
-    // undefined rather than defaulted, so the buttons show "unknown" instead of a guess.
+    // Achieved dBm per radio, in CH_ order - what the radio reported back, not what was asked
+    // for. Absent on firmware older than the power work; left undefined rather than defaulted.
     if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
   } else if (f[0] === 'R') {
     // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
@@ -156,10 +160,14 @@ function onLine(d, line) {
   render();
 }
 
-async function cmd(d, v) {
+async function cmd(d, ...v) {
   if (!d.cmd) return;
-  try { await d.cmd.writeValue(new Uint8Array([v])); } catch (e) { fail(e.message); }
+  try { await d.cmd.writeValue(new Uint8Array(v)); } catch (e) { fail(e.message); }
 }
+
+// dbm may be negative; Uint8Array wraps it to two's complement, which is what the firmware
+// reads it back as.
+const setPwr = (d, ch, dbm) => cmd(d, CMD_PWR_SET + ch, dbm & 0xff);
 
 const pdrClass = p => p < 0 ? 'dim' : p >= 90 ? 'ok' : p >= 50 ? 'warn' : 'bad';
 const rssiClass = r => r >= -70 ? 'ok' : r >= -90 ? 'warn' : 'bad';
@@ -199,24 +207,38 @@ function render() {
     disc.onclick = () => disconnect(d.dev, d);
     modes.appendChild(disc);
 
-    // One row per radio, below the modes. Separate from the mode buttons because power is
-    // orthogonal to them - any level is valid in any mode - and because mixing the two invites
-    // clicking the wrong one mid-walk.
+    // One slider per radio, below the modes, plus an "all" row that drives every radio to the
+    // same dBm - the setting a fair comparison needs. Separate from the mode buttons because
+    // power is orthogonal to them, and because mixing the two invites clicking the wrong one
+    // mid-walk. The label shows the achieved dBm from the board, not the slider position, so
+    // a radio that quantised the request says so.
     const pwr = document.createElement('div');
-    LC.slice(1, 4).forEach((chName, ch) => {
+
+    const pwrRow = (label, range, value, onSet) => {
       const row = document.createElement('div');
       row.className = 'row';
       row.appendChild(Object.assign(document.createElement('span'),
-                                    { className: 'hint', textContent: chName + ' tx' }));
-      PWR.forEach((label, i) => {
-        const b = document.createElement('button');
-        b.textContent = label;
-        if (d.pwr && d.pwr[ch] === i) b.className = 'on';
-        b.onclick = () => cmd(d, CMD_PWR + ch * 8 + i);
-        row.appendChild(b);
-      });
-      pwr.appendChild(row);
+                                    { className: 'hint', textContent: label }));
+      const s = document.createElement('input');
+      Object.assign(s, { type: 'range', min: range.min, max: range.max, step: range.step });
+      s.value = value ?? range.min;
+      const out = Object.assign(document.createElement('b'),
+                                { textContent: (value ?? '?') + ' dBm' });
+      // 'change', not 'input': one write when the slider is released, not one per pixel.
+      s.onchange = () => onSet(+s.value);
+      s.oninput = () => { out.textContent = s.value + ' dBm'; };
+      row.appendChild(s);
+      row.appendChild(out);
+      return row;
+    };
+
+    LC.slice(1, 4).forEach((chName, ch) => {
+      pwr.appendChild(pwrRow(chName + ' tx', PWR_RANGE[ch], d.pwr && d.pwr[ch],
+                             v => setPwr(d, ch, v)));
     });
+    // Widest range of the three, so "all" can reach every radio's floor; each clamps itself.
+    pwr.appendChild(pwrRow('all tx', { min: -15, max: 20, step: 1 }, undefined,
+                           v => setPwr(d, 3, v)));
 
     const rows = [...d.rows.values()].sort(
       (a, b) => (a.peer + a.ch).localeCompare(b.peer + b.ch));
@@ -226,7 +248,7 @@ function render() {
       `<span class="${d.live ? 'ok' : 'bad'}" style="font-size:12px">` +
       `${d.live ? 'connected' : 'reconnecting…'}</span></h2>` +
       `<div class="meta">up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
-      `tx: <b>${d.pwr ? d.pwr.map(p => PWR[p]).join('/') : '?'}</b> · ` +
+      `tx: <b>${d.pwr ? d.pwr.join('/') + ' dBm' : '?'}</b> · ` +
       `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b></div>`;
     el.appendChild(modes);
     el.appendChild(pwr);

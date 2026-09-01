@@ -155,19 +155,23 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
 {
     (void)conn_handle; (void)attr_handle; (void)arg;
 
-    uint8_t b = 0;
-    uint16_t len = 0;
-    if (ble_hs_mbuf_to_flat(ctxt->om, &b, sizeof(b), &len) != 0 || len < 1) {
+    // One byte for the mode and LR commands, two for a power set - a dBm value does not fit
+    // usefully in the spare bits of the first byte, and signed.
+    uint8_t  b[2] = { 0, 0 };
+    uint16_t len  = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, b, sizeof(b), &len) != 0 || len < 1) {
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    if (b == RT_CMD_LR_OFF || b == RT_CMD_LR_ON) {
-        rt_set_lr(b == RT_CMD_LR_ON);
-    } else if (b >= RT_CMD_PWR && b < RT_CMD_PWR + CH_COUNT * 8) {
-        // base + channel*8 + level; rt_set_power() range-checks both halves.
-        rt_set_power((b - RT_CMD_PWR) / 8, (b - RT_CMD_PWR) % 8);
+    if (b[0] == RT_CMD_LR_OFF || b[0] == RT_CMD_LR_ON) {
+        rt_set_lr(b[0] == RT_CMD_LR_ON);
+    } else if (b[0] >= RT_CMD_PWR_SET && b[0] <= RT_CMD_PWR_SET + CH_COUNT) {
+        if (len < 2) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        rt_set_power(b[0] - RT_CMD_PWR_SET, (int8_t)b[1]);  // clamps per radio
     } else {
-        rt_set_lc(b);  // ignores anything out of range on its own
+        rt_set_lc(b[0]);  // ignores anything out of range on its own
     }
     return 0;
 }
@@ -372,9 +376,9 @@ void rt_ui_notify(void)
     // instance mid-connection would open a second slot rather than change the existing link,
     // which is the same reason apply_lc_ble_params() leaves it alone when connected. A phone
     // that is already connected keeps the power it connected at until it drops.
-    static int s_last_pwr = -1;
-    if (g_pwr[CH_BLE_ADV] != s_last_pwr) {
-        s_last_pwr = g_pwr[CH_BLE_ADV];
+    static int s_last_pwr = -128;
+    if (g_pwr_dbm[CH_BLE_ADV] != s_last_pwr) {
+        s_last_pwr = g_pwr_dbm[CH_BLE_ADV];
         if (s_conn == BLE_HS_CONN_HANDLE_NONE && !s_ui_suspended) {
             ble_gap_ext_adv_stop(UI_INSTANCE);
             start_adv();

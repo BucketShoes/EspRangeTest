@@ -13,35 +13,51 @@ const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
 volatile int g_lc = 0;
 
-const char *rt_pwr_name[RT_PWR_COUNT] = { "min", "low", "mid", "max" };
-
-// dBm per channel per level. Ranges differ by radio: Wi-Fi is 2..20 (and quantises to its own
-// ladder, see esp_wifi.h), 802.15.4 is -15..20 in 3dB steps, BLE is whatever the controller
-// offers near the request. All three top out at 20 - including BLE, so the open question of
-// whether this chip is honest above 9dBm is something a button press can answer.
-static const int8_t s_pwr_dbm[CH_COUNT][RT_PWR_COUNT] = {
-    [CH_ESPNOW]  = {   2, 5,  11, 20 },
-    [CH_BLE_ADV] = { -12, -6,  3, 20 },
-    [CH_154]     = { -15, -6,  5, 20 },
+// Each radio's real range, from its own API - see the note in rt.h. Wi-Fi's floor of +2dBm is
+// not a choice; it is where esp_wifi_set_max_tx_power's valid range starts.
+static const rt_pwr_range_t s_range[CH_COUNT] = {
+    [CH_ESPNOW]  = {   2, 20, 1 },
+    [CH_BLE_ADV] = { -15, 20, 3 },
+    [CH_154]     = { -15, 20, 3 },
 };
 
-volatile int g_pwr[CH_COUNT];  // all zero: every channel boots at "min"
+// Boot at each radio's minimum, deliberately. See rt.h.
+volatile int8_t g_pwr_dbm[CH_COUNT] = {
+    [CH_ESPNOW]  =   2,
+    [CH_BLE_ADV] = -15,
+    [CH_154]     = -15,
+};
+
+static int8_t s_pwr_actual[CH_COUNT];
+
+const rt_pwr_range_t *rt_power_range(int chan)
+{
+    return &s_range[(chan >= 0 && chan < CH_COUNT) ? chan : 0];
+}
 
 int8_t rt_power_dbm(int chan)
 {
-    if (chan < 0 || chan >= CH_COUNT) {
-        return 0;
-    }
-    const int lvl = g_pwr[chan];
-    return s_pwr_dbm[chan][(lvl >= 0 && lvl < RT_PWR_COUNT) ? lvl : 0];
+    return (chan >= 0 && chan < CH_COUNT) ? g_pwr_dbm[chan] : 0;
 }
 
-void rt_set_power(int chan, int level)
+int8_t rt_power_actual(int chan)
 {
-    if (chan < 0 || chan >= CH_COUNT || level < 0 || level >= RT_PWR_COUNT) {
-        return;
+    return (chan >= 0 && chan < CH_COUNT) ? s_pwr_actual[chan] : 0;
+}
+
+void rt_power_set_actual(int chan, int8_t dbm)
+{
+    if (chan >= 0 && chan < CH_COUNT) {
+        s_pwr_actual[chan] = dbm;
     }
-    g_pwr[chan] = level;
+}
+
+static void apply_one(int chan, int dbm)
+{
+    const rt_pwr_range_t *r = rt_power_range(chan);
+    if (dbm < r->min) dbm = r->min;
+    if (dbm > r->max) dbm = r->max;
+    g_pwr_dbm[chan] = (int8_t)dbm;
 
     // Only this channel's history is invalidated - the other two were not touched.
     rt_stats_reset_chan(chan);
@@ -52,9 +68,26 @@ void rt_set_power(int chan, int level)
     case CH_154:     rt_154_apply_power();  break;
     default: break;
     }
+}
 
-    printf("\n>>> tx power %s = %s (%d dBm)\n", rt_chan_name[chan], rt_pwr_name[level],
-           rt_power_dbm(chan));
+// chan == CH_COUNT means all three, each clamped to its own range.
+void rt_set_power(int chan, int dbm)
+{
+    if (chan == CH_COUNT) {
+        for (int c = 0; c < CH_COUNT; c++) {
+            apply_one(c, dbm);
+        }
+    } else if (chan >= 0 && chan < CH_COUNT) {
+        apply_one(chan, dbm);
+    } else {
+        return;
+    }
+
+    printf("\n>>> tx power:");
+    for (int c = 0; c < CH_COUNT; c++) {
+        printf("  %s=%ddBm", rt_chan_name[c], rt_power_dbm(c));
+    }
+    printf("\n");
 }
 
 typedef struct {
@@ -258,9 +291,12 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     int            n   = 0;
 
     if (n < max) {
+        // Power fields are the achieved dBm, not the requested one - the UI should show what
+        // the radio is actually doing.
         snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d", rt_node_id(),
                  (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0,
-                 g_pwr[CH_ESPNOW], g_pwr[CH_BLE_ADV], g_pwr[CH_154]);
+                 rt_power_actual(CH_ESPNOW), rt_power_actual(CH_BLE_ADV),
+                 rt_power_actual(CH_154));
     }
 
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
@@ -298,9 +334,16 @@ void rt_report(void)
     printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
            rt_wifi_active() ? "on" : "off");
+    // Asked-for versus achieved. They differ whenever the radio quantised the request, which
+    // is worth seeing rather than hiding behind the number that was typed.
     printf("  pwr: ");
     for (int c = 0; c < CH_COUNT; c++) {
-        printf("%s=%s(%ddBm)  ", rt_chan_name[c], rt_pwr_name[g_pwr[c]], rt_power_dbm(c));
+        const int8_t want = rt_power_dbm(c), got = rt_power_actual(c);
+        if (want == got) {
+            printf("%s=%ddBm  ", rt_chan_name[c], got);
+        } else {
+            printf("%s=%ddBm(asked %d)  ", rt_chan_name[c], got, want);
+        }
     }
     printf("\n");
     // "queued" is what we asked the radio to send; "ok" and "rejected" are what its own

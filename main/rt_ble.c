@@ -13,6 +13,7 @@
 
 #include <string.h>
 
+#include "esp_bt.h"   // esp_ble_tx_power_set - controller-level, works under NimBLE
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -63,9 +64,38 @@ static int8_t s_adv_power;
 // which is not something to do from the button task or a GATT write callback.
 static volatile bool s_pwr_dirty;
 
+// dBm to the controller's power index. Levels are 3dB apart from -15 (index 3) to +20
+// (index 15) - see esp_power_level_t in esp_bt.h.
+static esp_power_level_t pwr_level(int dbm)
+{
+    int idx = 3 + (dbm + 15) / 3;
+    if (idx < ESP_PWR_LVL_N15) idx = ESP_PWR_LVL_N15;
+    if (idx > ESP_PWR_LVL_P20) idx = ESP_PWR_LVL_P20;
+    return (esp_power_level_t)idx;
+}
+
 void rt_ble_apply_power(void)
 {
+    // Advertising power is a configure-time parameter of the instance, so the beacon and the
+    // phone-UI advert are rebuilt on their own cycles - flagged here, acted on there.
     s_pwr_dirty = true;
+
+    // ...but advertising is not the only thing BLE transmits. A connection transmits too, and
+    // its power comes from the controller, not from any advertising instance. Left alone it
+    // defaults to +3dBm (documented in esp_bt.h: "If none of power type is set, system will
+    // use ESP_PWR_LVL_P3"), which is neither the level asked for nor visible anywhere. That
+    // was a genuine hole: every phone connection this project has ever made ran at +3dBm
+    // regardless of what the beacon was set to.
+    //
+    // DEFAULT covers future connections; the CONN_HDL entries cover any already open. SCAN is
+    // set for completeness - scanning here is passive, so it never actually transmits.
+    const esp_power_level_t lvl = pwr_level(rt_power_dbm(CH_BLE_ADV));
+    RT_TRY(TAG, esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, lvl));
+    RT_TRY(TAG, esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, lvl));
+    RT_TRY(TAG, esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, lvl));
+    for (int h = ESP_BLE_PWR_TYPE_CONN_HDL0; h <= ESP_BLE_PWR_TYPE_CONN_HDL8; h++) {
+        esp_ble_tx_power_set((esp_ble_power_type_t)h, lvl);
+    }
 }
 static bool    s_scanning;
 static bool    s_scan_solo;   // which duty cycle s_scanning is currently running at
@@ -137,6 +167,7 @@ static int start_adv(void)
     }
 
     s_adv_power = selected_tx_power;
+    rt_power_set_actual(CH_BLE_ADV, selected_tx_power);
     ESP_LOGI(TAG, "coded-PHY adverts up, asked %d dBm, got %d dBm",
              rt_power_dbm(CH_BLE_ADV), selected_tx_power);
     return 0;
@@ -250,6 +281,12 @@ static void on_sync(void)
         ESP_LOGE(TAG, "no usable address");
         return;
     }
+    // Before anything advertises or connects. The controller's own default is +3dBm and
+    // nothing else sets it, so without this a connection would transmit at +3 no matter what
+    // the beacon was configured for - which is the state every previous build shipped in.
+    rt_ble_apply_power();
+    s_pwr_dirty = false;  // start_adv() below already picks up the current level
+
     if (start_adv() == 0) {
         s_ready = true;
     }

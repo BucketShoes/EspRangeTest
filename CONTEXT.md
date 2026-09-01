@@ -289,45 +289,84 @@ genuine antenna coupling changes ~6 dB per doubling, so 20 cm against 2 m should
 
 ## Transmit power
 
-**One level per radio, set independently at runtime, all booting at minimum.** Table is
-`s_pwr_dbm[]` in `rt_stats.c`; each radio applies its own (`rt_wifi_apply_power` /
-`rt_154_apply_power` / `rt_ble_apply_power`).
+**Raw dBm per radio, over each radio's real range, set at runtime.** Table of ranges is
+`s_range[]` in `rt_stats.c`; each radio applies and reads back its own.
 
-| level | Wi-Fi / ESP-NOW | BLE | 802.15.4 |
+| radio | range | granularity | why |
 |---|---|---|---|
-| min *(boot default)* | 2 dBm | −12 dBm | −15 dBm |
-| low | 5 dBm | −6 dBm | −6 dBm |
-| mid | 11 dBm | 3 dBm | 5 dBm |
-| max | 20 dBm | 20 dBm | 20 dBm |
+| espnow / wifi | **+2 … +20 dBm** | ~1 dB requested, hardware snaps to its own ladder | `esp_wifi_set_max_tx_power` takes 0.25 dBm units over `[8,84]`; +2 dBm really is the floor the API offers |
+| ble_adv | **−15 … +20 dBm** | 3 dB | controller levels `ESP_PWR_LVL_N15 … P20` |
+| 154 | **−15 … +20 dBm** | 3 dB | `esp_ieee802154_set_txpower` |
 
-**Per radio, not global**, because the mixed setup is the point: BLE low enough to hold a phone
-connection while 802.15.4 runs at full power is a real test, and a single level cannot express
-it. Booting at minimum keeps a whole comparison inside a room.
+**Not preset levels.** An earlier revision used named levels (`min`/`low`/`mid`/`max`) that
+mapped to *different* dBm per radio — 2/−12/−15 at "min". That makes the channels
+non-comparable by construction, which is the single thing this instrument exists to avoid. A
+number is a number: ask all three for −6 dBm and they are all at −6 dBm.
 
-**On the 9 dBm that used to be hardcoded in BLE.** It was a deliberate handicap carried from
-earlier boards, where asking for more than 9 gave distortion rather than range regardless of
-what the part claimed. It was set and left alone because power levels were not the problem at
-the time. It was never a rule, and "max" now goes to 20 on BLE specifically so the open
-question — is the C6 honest above 9? — can be answered by pressing a button. If it is, BLE has
-been winning under a handicap and should win by more.
+Settable per radio or all together (`chan == CH_COUNT`), because both are real tests: BLE held
+low enough to keep a phone connected while 802.15.4 runs flat out, or every radio matched so
+the comparison is fair. "All" clamps each radio to its own floor rather than refusing, so
+"everything to −15" leaves Wi-Fi at +2.
 
-- Every radio's power is **read back** after being set, because all three quantise the request
-  (Wi-Fi to a fixed ladder in `esp_wifi.h`, 802.15.4 to 3 dB steps, BLE to whatever the
-  controller has). The read-back value is what goes into the packet's `txdbm`, so the far end
-  records what was transmitted rather than what was asked for.
-- A power change resets **only that channel's** stats. The other two were not touched and
-  their history is still good.
-- The phone-UI advert shares the BLE level — same radio, and a fourth knob would not enable a
-  measurement that the third does not.
-- A phone already connected keeps the power it connected at until it drops: advertising power
-  is fixed when the instance is configured, and rebuilding a connectable instance mid-link
-  would open a second slot rather than change the existing one.
+**Everything is read back.** All three radios quantise. `rt_power_actual()` is what came out and
+is what goes into the packet's `txdbm`, the report and the `S` line; `rt_power_dbm()` is what
+was asked for. The report prints `asked N` when they differ.
 
-**Comparing ESP dBm with phone dBm is not like for like.** The ESP figure is conducted power at
-the pin, before the chip antenna's own loss; phone figures are usually radiated/EIRP. So an ESP
-"20 dBm" is somewhat less than 20 dBm in the air, and the gap to a phone's ~5 dBm is narrower
-than the numbers suggest. More power one way is still more power — the caveat is about reading
-absolute differences, not about the direction of the effect.
+**Boots at each radio's minimum** — the state to flash into while an antenna path is unproven.
+If RF is going somewhere it should not, minimum is where it does least harm, and a link that
+works at minimum proves the path far better than one that works at maximum.
+
+### Audit: everything that can transmit (2026-09-01)
+
+Done before enabling the RF switch, on the reasoning that a clamped path may become a wide
+open one. Two real gaps were found:
+
+1. **BLE connections were transmitting at +3 dBm, always.** `params.tx_power` on an extended
+   advertising instance sets *that instance's* power and nothing else. Connection power comes
+   from the controller, and `esp_bt.h` documents the fallback: *"If none of power type is set,
+   system will use ESP_PWR_LVL_P3 as default for ADV/SCAN/CONN0-9."* Nothing in this project
+   ever set it, so every phone connection it has ever made ran at +3 dBm regardless of the
+   beacon setting. Fixed: `rt_ble_apply_power()` now sets `ESP_BLE_PWR_TYPE_DEFAULT`, `ADV`,
+   `SCAN` and `CONN_HDL0..8`, and is called at `on_sync` before anything advertises.
+2. **A brief full-power window on every Wi-Fi start.** `esp_wifi_set_max_tx_power()` may only
+   be called *after* `esp_wifi_start()`, and until it is, the driver sits at its own default —
+   maximum — with the SoftAP already beaconing. Narrowed to the smallest possible gap by
+   calling it immediately after start, before the channel is even set. **It cannot be closed
+   entirely through this API**; a few milliseconds at up to +20 dBm on each Wi-Fi start is
+   unavoidable, including at boot.
+
+Everything else checked and clear:
+- 802.15.4 power is set in `rt_154_start()` before the transmit task exists, so no frame
+  precedes it. Frames never request an ack, and promiscuous mode leaves auto-ack off, so the
+  radio has no reason to transmit on its own.
+- The coded-PHY scanner is `passive = 1` — a passive scanner never transmits, so scan power
+  is moot (set anyway, for completeness).
+- The SoftAP's `ftm_responder = true` only replies to an FTM request, and nothing here sends
+  one; it transmits at the AP's power in any case.
+- Both advertising instances (coded beacon, phone-UI advert) take their power from the table.
+- No other component in the image drives a radio.
+
+### What RSSI to expect
+
+Free-space loss at 2.44 GHz is `20·log10(d_m) + 67.7 − 27.6` dB, so **34 dB at 0.5 m** and
+40 dB at 1 m. Add roughly 2 dB of chip-antenna loss and ~1 dB of RF-switch insertion at *each*
+end, and the rule of thumb is:
+
+> **RSSI ≈ transmit dBm − 40**, at 0.5 m, ±10 dB for multipath in a room.
+
+So at −15 dBm expect around **−55 dBm**; at +20 dBm expect around **−20 dBm**. The
+−91 dBm measured at under 1 m with the switch unpowered is about 70 dB below that, which is
+what identified the fault.
+
+**RSSI should track transmit power 1:1** — same path, so +5 dB of transmit is +5 dB of RSSI —
+inside three limits worth knowing, because each one is itself a measurement:
+- **Receiver compression.** Above roughly −20 dBm at the receiver the front end stops being
+  linear and RSSI under-reports. At close range and high power this is reachable.
+- **Transmitter honesty.** If asking for more power stops producing more RSSI, the PA is
+  saturating — which is exactly the open question about BLE above +9 dBm, and sweeping the
+  slider while watching the far end's RSSI is the test that answers it.
+- **RSSI accuracy** is typically ±6 dB and differs between radios, so compare a radio with
+  itself across power settings rather than comparing radios' absolute numbers.
 
 ## Field results so far
 

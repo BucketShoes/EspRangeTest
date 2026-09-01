@@ -145,10 +145,15 @@ static void wifi_apply(void)
     RT_TRY(TAG, esp_wifi_set_protocol(WIFI_IF_AP, proto));
 
     RT_TRY(TAG, esp_wifi_start());
-    RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
+    s_wifi_on = true;
+
+    // Immediately, before the channel or anything else: esp_wifi_set_max_tx_power() may only
+    // be called after start, and until it is, the driver is at its own default - maximum - and
+    // the SoftAP has already begun beaconing. The window cannot be closed entirely through
+    // this API, only made as short as possible.
     rt_wifi_apply_power();
 
-    s_wifi_on = true;
+    RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
     s_wifi_lr = want_lr;
     rt_espnow_resume();  // no-op until rt_espnow_start() has run
 
@@ -162,15 +167,19 @@ void rt_wifi_apply_power(void)
 {
 #if RT_STAGE >= 1
     if (!s_wifi_on) {
-        return;
+        return;  // applied by wifi_apply() when the driver next starts
     }
     RT_TRY(TAG, esp_wifi_set_max_tx_power(rt_power_dbm(CH_ESPNOW) * 4));
 
-    // Read back, because the hardware quantises the request to a fixed ladder of values (see
-    // esp_wifi.h) and the one we asked for is usually not the one we got.
-    int8_t got = 0;
-    if (esp_wifi_get_max_tx_power(&got) == ESP_OK) {
-        ESP_LOGI(TAG, "wifi tx power %d.%02ddBm", got / 4, (got % 4) * 25);
+    // Read back, because the hardware quantises the request onto a fixed ladder (see
+    // esp_wifi.h) and what we asked for is usually not what we got. Truncating the quarter-dBm
+    // toward zero is deliberate: reporting a power lower than the radio is really using would
+    // be the dangerous direction to round.
+    int8_t q = 0;
+    if (esp_wifi_get_max_tx_power(&q) == ESP_OK) {
+        rt_power_set_actual(CH_ESPNOW, (int8_t)((q + 3) / 4));
+        ESP_LOGI(TAG, "wifi tx power %d.%02d dBm (asked %d)", q / 4, (q % 4) * 25,
+                 rt_power_dbm(CH_ESPNOW));
     }
 #endif
 }

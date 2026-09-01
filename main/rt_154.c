@@ -121,7 +121,8 @@ void rt_154_apply_power(void)
     // Read back: the driver quantises to 3dB steps, and this value goes into every packet, so
     // the far end records what was actually transmitted rather than what was requested.
     s_txpower = esp_ieee802154_get_txpower();
-    ESP_LOGI(TAG, "tx power %d dBm", s_txpower);
+    rt_power_set_actual(CH_154, s_txpower);
+    ESP_LOGI(TAG, "tx power %d dBm (asked %d)", s_txpower, rt_power_dbm(CH_154));
 }
 
 static void report_tx_errors(void)

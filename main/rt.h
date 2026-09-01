@@ -106,30 +106,50 @@ void rt_set_lr(bool lr);
 // keeps working unchanged.
 #define RT_CMD_LR_OFF 0x80
 #define RT_CMD_LR_ON  0x81
+
 // ---- Transmit power ----------------------------------------------------------------------
 //
-// Per channel, independently, chosen at runtime. The point is mixed setups: BLE at a level
-// that keeps a phone connected while 802.15.4 runs at full power, and the reverse, without
-// rebuilding. A single global level cannot express the thing actually being tested.
+// Raw dBm per channel, over each radio's real range, set at runtime.
 //
-// Central table rather than four constants in four files, because until 2026-09-01 that is
-// what it was - Wi-Fi 19.5dBm, 802.15.4 20dBm, BLE 9dBm - and the numbers were never in one
-// place to be compared. The 9 was a deliberate handicap carried over from earlier boards where
-// asking for more than 9 produced distortion rather than range; whether the C6 is honest above
-// that is an open question, and "max" here goes to 20 specifically so it can be answered.
+// Not preset "levels": named levels that mapped to different dBm per radio made the channels
+// non-comparable by construction, which is the one thing this instrument exists to avoid. A
+// number is a number - ask all three for -6dBm and they are all at -6dBm.
 //
-// Levels are indices into s_pwr_dbm[] in rt_stats.c. Boards boot at "min", which keeps a whole
-// range comparison inside a room.
-#define RT_PWR_COUNT 4
-extern const char *rt_pwr_name[RT_PWR_COUNT];
+// Per channel and settable together (chan == CH_COUNT), because both are real tests: BLE held
+// low enough to keep a phone connected while 802.15.4 runs flat out, or every radio matched so
+// the comparison is fair.
+//
+// Ranges are the hardware's, not a choice:
+//   espnow/wifi   2 .. 20 dBm - esp_wifi_set_max_tx_power takes 0.25dBm units over [8,84], so
+//                               2dBm really is the floor the API offers, and the hardware
+//                               quantises further onto a fixed ladder (see esp_wifi.h).
+//   ble_adv     -15 .. 20 dBm - controller levels, 3dB steps (ESP_PWR_LVL_N15 .. P20).
+//   154         -15 .. 20 dBm - esp_ieee802154_set_txpower, 3dB steps.
+//
+// Every radio is asked, then **read back**, because all three quantise. rt_power_actual() is
+// what came out, and is what goes into the packet and the report; rt_power_dbm() is what was
+// asked for. When the two differ the radio rounded - that is information, not an error.
+//
+// Boards boot at each radio's minimum. That is the state to flash into while an antenna path
+// is unproven: if RF is going somewhere it should not, minimum is where it does least harm,
+// and a link that works at minimum proves the path far better than one that works at maximum.
+typedef struct {
+    int8_t min, max, step;  // dBm; step is the radio's own granularity
+} rt_pwr_range_t;
 
-// Command byte: base + channel*8 + level, so espnow is 0x90..0x93, ble_adv 0x98..0x9B and
-// 154 0xA0..0xA3. Spaced by 8 rather than packed so a byte is readable in hex while debugging.
-#define RT_CMD_PWR 0x90
+const rt_pwr_range_t *rt_power_range(int chan);
 
-extern volatile int g_pwr[CH_COUNT];   // level per channel
-int8_t rt_power_dbm(int chan);         // what that level means, in dBm
-void   rt_set_power(int chan, int level);
+// Two-byte command: { RT_CMD_PWR_SET + chan, (int8_t)dbm }. chan == CH_COUNT sets all three,
+// each clamped to its own range - so "everything to -15" leaves Wi-Fi at its floor of 2.
+#define RT_CMD_PWR_SET 0xB0
+
+extern volatile int8_t g_pwr_dbm[CH_COUNT];
+int8_t rt_power_dbm(int chan);      // requested
+int8_t rt_power_actual(int chan);   // what the radio reported back
+void   rt_set_power(int chan, int dbm);
+
+// Called by each radio once it has set and read back its own power.
+void rt_power_set_actual(int chan, int8_t dbm);
 
 // Applied per radio rather than centrally: each needs a different call, and the BLE ones need
 // their advertising instance reconfigured rather than a value poked, which cannot be done from
