@@ -189,18 +189,17 @@ const pdrTxt = p => p < 0 ? '–' : p + '%';
 //
 // Cards are built once and updated in place. They used to be thrown away and rebuilt on every
 // notification - and onLine() ran that per *line*, so a single report tore the whole UI down
-// four to nineteen times. Anything the operator was touching was destroyed mid-gesture and
-// replaced by one showing the board's last reported value, which made the sliders unusable.
+// four to nineteen times, destroying whatever the operator was touching.
 //
-// The rule now: the board owns every control's value, except one the operator is currently
-// working. That one is theirs until they let go and the write has had time to land.
-
-// How long a slider stays the operator's after release - long enough for the write to go out
-// and the next report to come back, so it cannot snap to a stale reading in between. It has to
-// expire on time rather than wait for the value to match, because the board clamps: ask Wi-Fi
-// for -15 and it answers 2, and 2 is the right thing to show.
-const OWN_MS = 1800;
-const owned = s => s._touching || (performance.now() - (s._wrote ?? -1e9) < OWN_MS);
+// Sliders are the operator's, full stop. A slider shows the value you set and stays there; it
+// is never moved by an incoming report. The board reports what it actually did, and when that
+// differs from the slider the difference is shown *beside* the control rather than by dragging
+// it out from under you.
+//
+// This replaced a round-trip scheme where the board's reported value drove the slider position
+// and the operator only owned it for a moment after release. That was more machinery for a
+// worse result: it still fought the user, and it left them with no reference for what they had
+// asked for once the board disagreed.
 
 function buildCard(d) {
   const el = document.createElement('div');
@@ -250,39 +249,26 @@ function buildCard(d) {
     const s = document.createElement('input');
     Object.assign(s, { type: 'range', min: range.min, max: range.max, step: range.step });
     s.value = range.min;
-    const out = Object.assign(document.createElement('b'),
-                              { className: 'pwrval', textContent: '?' });
+    const out = Object.assign(document.createElement('b'), { className: 'pwrval' });
+    const sl = { s, out, board: undefined, seeded: false };
 
-    // Ownership is explicit rather than inferred: pointer events for touch and mouse, focus
-    // for the keyboard, so arrow-key adjustment is not fought either.
-    const grab = () => { s._touching = true; };
-    const drop = () => { s._touching = false; };
-    s.addEventListener('pointerdown', grab);
-    s.addEventListener('pointerup', drop);
-    s.addEventListener('pointercancel', drop);
-    s.addEventListener('focus', grab);
-    s.addEventListener('blur', drop);
-
-    // 'input' is every pixel of the drag - show it, do not transmit it. 'change' is one event
-    // per gesture, on release, which is the one worth a GATT write.
-    s.addEventListener('input', () => {
-      out.textContent = '→ ' + s.value;
-      out.classList.add('pending');
-    });
-    s.addEventListener('change', () => { s._wrote = performance.now(); onSet(+s.value); });
+    s.addEventListener('input', () => paintSlider(sl));
+    // 'change' is one event per gesture, on release - the one worth a GATT write. 'input' is
+    // every pixel of the drag, which is only worth repainting the label for.
+    s.addEventListener('change', () => onSet(+s.value));
 
     row.appendChild(s);
     row.appendChild(out);
-    R.sliders.push({ s, out });
+    R.sliders.push(sl);
     return row;
   };
 
   PWR_CH.forEach((name, ch) =>
     pwr.appendChild(mkRow(name, PWR_RANGE[ch], v => setPwr(d, ch, v))));
 
-  // "all" is a command, not a state: it has no value of its own, so it shows the common value
-  // when the three agree and "mixed" when they do not. Its range is the widest of the three
-  // and each radio clamps itself, so dragging it to -15 leaves Wi-Fi at its floor of 2.
+  // "all" is a command, not a state. Its range is the widest of the three and each radio
+  // clamps itself, so dragging it to -15 leaves Wi-Fi at its floor of 2 - which is exactly the
+  // case the mismatch marker exists to show.
   pwr.appendChild(mkRow('all →', { min: -15, max: 20, step: 1 },
                         v => setPwr(d, PWR_CH.length, v), 'all'));
   el.appendChild(pwr);
@@ -290,6 +276,19 @@ function buildCard(d) {
   R.body = document.createElement('div');
   el.appendChild(R.body);
   return R;
+}
+
+// The slider's own number is always the headline. sl.board is what the radio last reported:
+// undefined if it has not said yet, null if this is the "all" row and the three disagree.
+// Anything other than agreement is annotated, never corrected.
+function paintSlider(sl) {
+  const v = +sl.s.value;
+  let txt = String(v), cls = '';
+  if (sl.board === undefined)   { txt += ' · ?';            cls = ' dim'; }
+  else if (sl.board === null)   { txt += ' ≠ mixed';        cls = ' pending'; }
+  else if (sl.board !== v)      { txt += ' ≠ ' + sl.board;  cls = ' pending'; }
+  sl.out.textContent = txt;
+  sl.out.className = 'pwrval' + cls;
 }
 
 function updateCard(d) {
@@ -306,18 +305,18 @@ function updateCard(d) {
   R.lr.className = d.lr ? 'on' : '';
 
   R.sliders.forEach((sl, i) => {
-    if (owned(sl.s)) return;  // hands off - the operator has this one
     const all = i >= PWR_CH.length;
-    const v = !d.pwr ? undefined
-            : all ? (d.pwr.every(p => p === d.pwr[0]) ? d.pwr[0] : undefined)
-                  : d.pwr[i];
-    sl.out.classList.remove('pending');
-    if (v === undefined) {
-      sl.out.textContent = (all && d.pwr) ? 'mixed' : '?';
-      return;
+    sl.board = !d.pwr ? undefined
+             : all ? (d.pwr.every(p => p === d.pwr[0]) ? d.pwr[0] : null)
+                   : d.pwr[i];
+    // Seeded once, so a freshly opened page starts where the board already is instead of at
+    // the bottom of the range. After that the control is the operator's and reports only
+    // annotate it.
+    if (!sl.seeded && typeof sl.board === 'number') {
+      sl.s.value = sl.board;
+      sl.seeded = true;
     }
-    sl.s.value = v;
-    sl.out.textContent = v;
+    paintSlider(sl);
   });
 
   const rows = [...d.rows.values()].sort(

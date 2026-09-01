@@ -85,6 +85,11 @@ static esp_power_level_t pwr_level(int dbm)
 
 void rt_ble_apply_power(void)
 {
+    // Same reasoning as the Wi-Fi path: report the request now, so a level chosen while
+    // advertising is stopped (LC_WIFI_UI) does not read as having been ignored. start_adv()
+    // replaces it with the controller's actual selection once it runs.
+    rt_power_set_actual(CH_BLE_ADV, rt_power_dbm(CH_BLE_ADV));
+
     // Advertising power is a configure-time parameter of the instance, so the beacon and the
     // phone-UI advert are rebuilt on their own cycles - flagged here, acted on there.
     s_pwr_dirty = true;

@@ -168,6 +168,13 @@ static void wifi_apply(void)
 void rt_wifi_apply_power(void)
 {
 #if RT_STAGE >= 1
+    // Report the request straight away, before trying to program anything. A stopped radio
+    // still has a power it *will* use - g_pwr_dbm holds it and wifi_apply() programs it on the
+    // next start - and if nothing reported that, changing Wi-Fi's power while it was stopped
+    // looked exactly like the setting being ignored. The read-back below overwrites this with
+    // the truth whenever the hardware is actually there to ask.
+    rt_power_set_actual(CH_ESPNOW, rt_power_dbm(CH_ESPNOW));
+
     if (!s_wifi_on) {
         return;  // applied by wifi_apply() when the driver next starts
     }
