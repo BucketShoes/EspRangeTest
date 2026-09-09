@@ -106,7 +106,8 @@ typedef struct {
     int32_t  rssi_n;
     int8_t   rssi_last, rssi_min, rssi_max;
     uint8_t  lqi;
-    int8_t   noise;   // RT_NOISE_NONE where the radio does not measure one
+    int8_t   noise;      // RT_NOISE_NONE where the radio does not measure one
+    int8_t   peer_txdbm; // what the far end said it transmitted at, from the packet itself
     uint32_t last_ms;
 } rt_link;
 
@@ -120,7 +121,8 @@ static uint32_t s_tx_seq[CH_COUNT];
 static uint32_t s_tx_count[CH_COUNT];
 static uint32_t s_tx_ok[CH_COUNT];
 static uint32_t s_tx_fail[CH_COUNT];
-static uint32_t s_rx_offmode[CH_COUNT];  // heard while this mode said the channel was off
+static uint32_t s_rx_offmode[CH_COUNT];     // heard while this mode said the channel was off
+static uint32_t s_rx_offmode_ms[CH_COUNT];  // and when the most recent one was
 static uint8_t  s_node_id;
 
 uint32_t rt_ms(void)
@@ -259,6 +261,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     // explains the fault. The counter is the evidence; the table stays honest.
     if (!rt_tx_enabled(chan)) {
         s_rx_offmode[chan]++;
+        s_rx_offmode_ms[chan] = rt_ms();
         return;
     }
 
@@ -313,8 +316,14 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     l->rssi_n++;
     if (rssi < l->rssi_min) l->rssi_min = rssi;
     if (rssi > l->rssi_max) l->rssi_max = rssi;
-    l->lqi     = lqi;
-    l->noise   = noise;
+    l->lqi        = lqi;
+    l->noise      = noise;
+    // The sender puts its own transmit power in every packet, and until now it was parsed and
+    // thrown away. Kept, because it turns rssi into path loss: txdbm - rssi is the whole link
+    // budget end to end, and unlike rssi it does not change when either side's power changes.
+    // That is the number to compare against free-space loss when asking how good an antenna
+    // is, and the number to watch when walking.
+    l->peer_txdbm = p.txdbm;
     l->last_ms = rt_ms();
 }
 
@@ -338,9 +347,11 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     // Per-channel transmit accounting and the off-mode fault counter, so the page can show
     // "we sent 174 and 0 were rejected" without anyone reading serial.
     for (int c = 0; c < CH_COUNT && n < max; c++) {
-        snprintf(out[n++], RT_LINE_MAX, "T,%s,%lu,%lu,%lu,%lu", rt_chan_name[c],
+        snprintf(out[n++], RT_LINE_MAX, "T,%s,%lu,%lu,%lu,%lu,%lu", rt_chan_name[c],
                  (unsigned long)s_tx_count[c], (unsigned long)s_tx_ok[c],
-                 (unsigned long)s_tx_fail[c], (unsigned long)s_rx_offmode[c]);
+                 (unsigned long)s_tx_fail[c], (unsigned long)s_rx_offmode[c],
+                 (unsigned long)(s_rx_offmode[c]
+                                 ? (now - s_rx_offmode_ms[c]) / 1000 : 0));
     }
 
     if (n < max) {
@@ -369,11 +380,12 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
 
             const int snr = (l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
 
-            snprintf(out[n++], RT_LINE_MAX, "R,%02X,%s,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu,%d",
+            snprintf(out[n++], RT_LINE_MAX,
+                     "R,%02X,%s,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu,%d,%u,%d",
                      s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
                      l->rssi_min, l->rssi_max, wpdr, tpdr,
                      (unsigned long)l->rx, (unsigned long)l->missed,
-                     (unsigned long)(now - l->last_ms), snr);
+                     (unsigned long)(now - l->last_ms), snr, l->lqi, l->peer_txdbm);
         }
     }
     return n;
@@ -430,10 +442,15 @@ void rt_report(void)
 
     // Loud, and repeated for as long as it stands. A packet arriving on a channel this mode
     // says is off is a bug, and it is spending airtime that another channel was promised.
+    // With the age of the most recent one, because a count on its own cannot say whether this
+    // is still happening or happened once during a mode switch twenty minutes ago - and those
+    // are completely different problems.
     for (int c = 0; c < CH_COUNT; c++) {
         if (s_rx_offmode[c]) {
-            printf("  !! %s: %lu packets received while this mode says it is OFF\n",
-                   rt_chan_name[c], (unsigned long)s_rx_offmode[c]);
+            printf("  !! %s: %lu packets received while this mode says it is OFF"
+                   " (most recent %lus ago)\n",
+                   rt_chan_name[c], (unsigned long)s_rx_offmode[c],
+                   (unsigned long)((now - s_rx_offmode_ms[c]) / 1000));
         }
     }
 
@@ -461,6 +478,10 @@ void rt_report(void)
                    l->rssi_min, l->rssi_max, wpdr, tpdr,
                    (unsigned long)l->rx, (unsigned long)l->missed,
                    (unsigned long)(now - l->last_ms));
+            // txdbm - rssi. Independent of either end's power setting, so it is the figure to
+            // compare against free-space loss for the distance, and the one that says whether
+            // an antenna change actually did anything.
+            printf(" loss %ddB", l->peer_txdbm - l->rssi_last);
             if (l->noise != RT_NOISE_NONE) {
                 printf(" snr %d (noise %d)", l->rssi_last - l->noise, l->noise);
             }

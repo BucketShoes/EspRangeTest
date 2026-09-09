@@ -268,7 +268,8 @@ void rt_report(void);
 // on purpose: it is the same information the serial report shows, it is readable in a BLE
 // debugging app, and it needs no decoder on the browser side.
 //   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>,<ant_external>,<up_ms>
-//   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>,<snr>
+//   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>,<snr>,
+//     <lqi>,<peer_txdbm>
 //
 // up_ms is the board's own millisecond clock at the instant the whole snapshot was taken, and
 // every age_ms in the same report is measured against it. The page needs both: the lines of
@@ -277,7 +278,7 @@ void rt_report(void);
 // the board looked". Without up_ms the two get conflated and the age jitters by however long
 // the report took to transmit. snr is rssi - noise floor, or -128 where the radio does not
 // measure one.
-//   T,<chan>,<queued>,<ok>,<rejected>,<offmode_rx>
+//   T,<chan>,<queued>,<ok>,<rejected>,<offmode_rx>,<offmode_age_s>
 //   X,<reset_reason>,<heap_free>,<heap_min>,<rx154_frames>,<rx154_ours>,<coex_refused>
 //
 // T and X carry what the serial report carries. The page has to be able to diagnose a failure

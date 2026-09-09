@@ -275,6 +275,11 @@ function onLine(d, line) {
       peer: f[1], ch: f[2], rssi: +f[3], avg: +f[4], min: +f[5], max: +f[6],
       pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
       snr: f.length > 12 ? +f[12] : -128,
+      lqi: f.length > 13 ? +f[13] : -1,
+      // The far end's own transmit power, carried in every packet. loss = ptx - rssi is the
+      // end-to-end path loss, which is what to compare against free-space for the distance -
+      // and unlike rssi it does not move when either side changes power.
+      ptx: f.length > 14 ? +f[14] : undefined,
       gen: d.gen ?? 0,
       // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
       // so its age is a straight subtraction from "now" and cannot drift with arrival times.
@@ -284,6 +289,7 @@ function onLine(d, line) {
     // T,chan,queued,ok,rejected,offmode
     (d.tx ||= new Map()).set(f[1], {
       queued: +f[2], ok: +f[3], rejected: +f[4], offmode: +f[5],
+      offmodeAge: f.length > 6 ? +f[6] : undefined,
     });
   } else if (f[0] === 'X') {
     // X,resetReason,heapFree,heapMin,rx154frames,rx154ours,coexRefused
@@ -552,7 +558,13 @@ function updateCard(d) {
       if (!t) continue;
       const bits = [`${t.ok}/${t.queued} on air`];
       if (t.rejected) bits.push(`<b class="warn">${t.rejected} rejected</b>`);
-      if (t.offmode)  bits.push(`<b class="bad">${t.offmode} RX WHILE OFF</b>`);
+      // A count alone cannot say whether this is ongoing or was one straggler during a mode
+      // switch, and those are completely different problems - so it carries its age.
+      if (t.offmode) {
+        const stale = t.offmodeAge !== undefined && t.offmodeAge > 30;
+        bits.push(`<b class="${stale ? 'warn' : 'bad'}">${t.offmode} rx while off` +
+                  (t.offmodeAge === undefined ? '' : `, last ${t.offmodeAge}s ago`) + '</b>');
+      }
       diag.push(`<span class="ch">${name}</span> ${bits.join(' · ')}`);
     }
   }
@@ -578,20 +590,26 @@ function updateCard(d) {
   // is the only thing that touches them until the next rebuild - so they can tick smoothly
   // without the rest of the card being redrawn underneath the operator.
   R.body.innerHTML =
-    '<table><tr><th>peer / radio</th><th>rssi</th><th>snr</th><th>avg</th>' +
+    '<table><tr><th>peer / radio</th><th>rssi</th><th>loss</th><th>q</th><th>avg</th>' +
     '<th>pdr</th><th>all</th><th>miss</th><th>last</th></tr>' +
-    rows.map(r =>
-      `<tr data-abs="${r.abs}">` +
-      `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
-      `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
-      // Only ESP-NOW measures a noise floor; the others say so rather than showing a number
-      // that would invite comparison across radios that did not measure the same thing.
-      `<td class="dim">${r.snr === -128 ? '–' : r.snr}</td>` +
-      `<td class="dim">${r.avg}</td>` +
-      `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
-      `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
-      `<td class="dim">${r.miss}</td>` +
-      `<td class="dim">–</td></tr>`).join('') +
+    rows.map(r => {
+      // Quality: SNR where a radio measures a noise floor (ESP-NOW alone), LQI where the
+      // standard defines one (802.15.4), nothing where neither exists (BLE). One column
+      // because they answer the same question, labelled per row so they are not confused.
+      const q = r.snr !== -128 ? `${r.snr}<span class="dim">dB</span>`
+              : r.lqi >= 0    ? `${r.lqi}<span class="dim">lqi</span>`
+              : '–';
+      return `<tr data-abs="${r.abs}">` +
+        `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
+        `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
+        `<td class="dim">${r.ptx === undefined ? '–' : (r.ptx - r.rssi) + 'dB'}</td>` +
+        `<td class="dim">${q}</td>` +
+        `<td class="dim">${r.avg}</td>` +
+        `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
+        `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
+        `<td class="dim">${r.miss}</td>` +
+        `<td class="dim">–</td></tr>`;
+    }).join('') +
     '</table>';
 
   R.ageEls = [...R.body.querySelectorAll('tr[data-abs]')].map(tr => ({
