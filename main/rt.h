@@ -106,6 +106,25 @@ void rt_set_lr(bool lr);
 // keeps working unchanged.
 #define RT_CMD_LR_OFF 0x80
 #define RT_CMD_LR_ON  0x81
+#define RT_CMD_ANT_INT 0x82
+#define RT_CMD_ANT_EXT 0x83
+
+// ---- Antenna selection -------------------------------------------------------------------
+//
+// The XIAO's RF switch has two ports: RF1 is the onboard ceramic chip antenna, RF2 is the U.FL
+// connector. GPIO14 drives the switch's VCTL - low selects RF1, high RF2 - and GPIO3 powers
+// the switch at all (see main.c).
+//
+// Always internal at boot, never remembered. Selecting an antenna that is not fitted takes the
+// radio off the air completely, and that is not a state to wake up in: it would kill every
+// control path at once, leaving only the button. Boot-to-internal means the worst a bad
+// selection can cost is a power cycle.
+//
+// This is a UI command rather than a button gesture on purpose. The button has exactly two
+// gestures - tap for the next mode, hold to restore - and a third would turn the hold into a
+// timed window, which is precisely what the recovery gesture must never be.
+extern volatile bool g_ant_ext;
+void rt_set_antenna(bool external);
 
 // ---- Transmit power ----------------------------------------------------------------------
 //
@@ -214,7 +233,7 @@ void rt_report(void);
 // Current state as short CSV text lines, for the web UI. Text rather than a binary format
 // on purpose: it is the same information the serial report shows, it is readable in a BLE
 // debugging app, and it needs no decoder on the browser side.
-//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>
+//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>,<ant_external>
 //   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
 #define RT_LINE_MAX 72
 int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);

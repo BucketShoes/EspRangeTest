@@ -49,13 +49,15 @@ static const char *TAG = "rt";
 // So this is not an optimisation or a board variant to support politely. Without it the
 // hardware does not radiate, and every radio on the chip is equally affected.
 //
-// GPIO14 (VCTL, port select) is deliberately NOT touched. R24 holds it at ground, selecting
-// RF1 = the onboard ceramic antenna, which is the one fitted - there is no IPEX on these
-// boards. Driving it would be the only way to select an antenna that is not there.
+// GPIO14 is VCTL, the port select: low picks RF1 (the onboard ceramic antenna), high picks RF2
+// (the U.FL connector). R24 holds it low, so the internal antenna is the powered-up default
+// even with nothing driving it - but it is now driven explicitly rather than left to the
+// pulldown, so the selection is a known state rather than an assumed one.
 //
 // Harmless on the DevKitC/DevKitM, where GPIO3 is an ordinary unused pin - and GPIO3 is not a
 // strapping pin on the C6 (those are 8, 9 and 15), so driving it out of reset is safe.
 #define ANT_PWR_GPIO    3
+#define ANT_SEL_GPIO    14    // VCTL: 0 = RF1 = chip antenna, 1 = RF2 = U.FL
 #define ANT_SETTLE_MS   100   // the vendor example waits before using the switch; so do we
 #define ANT_PWR_WAIT_MS 3000  // backstop on waiting for BLE to report its power
 
@@ -314,6 +316,41 @@ static void wifi_start(void)
 //
 // GPIO14 (port select) is still never touched: R24 holds it at ground for RF1, the onboard
 // ceramic antenna, which is the only one fitted.
+// Always false at boot and never persisted - see the note in rt.h.
+volatile bool g_ant_ext;
+
+// Set once the pin has been configured, so a command arriving before the switch is up cannot
+// drive a pin that is still an input.
+static bool s_ant_ready;
+
+// settle: only at boot, where the switch has just been given power and the vendor's own
+// sequence waits before using it. A later port change does not need it - the switch itself
+// settles in microseconds - and rt_set_antenna() runs on the NimBLE host task, which should
+// not be blocked for 100ms in the middle of a GATT write.
+static void apply_antenna(bool settle)
+{
+    if (!s_ant_ready) {
+        return;
+    }
+    gpio_set_level(ANT_SEL_GPIO, g_ant_ext ? 1 : 0);
+    if (settle) {
+        vTaskDelay(pdMS_TO_TICKS(ANT_SETTLE_MS));
+    }
+    ESP_LOGI(TAG, "antenna: %s", g_ant_ext ? "external (U.FL)" : "internal (chip)");
+}
+
+void rt_set_antenna(bool external)
+{
+    if (external == g_ant_ext) {
+        return;
+    }
+    g_ant_ext = external;
+    apply_antenna(false);
+    // A different antenna is a different link: gain, pattern and match all change, so nothing
+    // measured before this is comparable with what follows.
+    rt_stats_reset();
+}
+
 static void antenna_switch_on(void)
 {
     const uint32_t deadline = rt_ms() + ANT_PWR_WAIT_MS;
@@ -334,6 +371,21 @@ static void antenna_switch_on(void)
     gpio_config(&ant);
     gpio_set_level(ANT_PWR_GPIO, 0);
     vTaskDelay(pdMS_TO_TICKS(ANT_SETTLE_MS));
+
+    // Port select after the switch has power, matching the vendor's own sequence. VCTL is a
+    // logic input on a part whose supply has only just come up, and driving an input of an
+    // unpowered device is the kind of thing that is usually fine and occasionally is not.
+    // R24 holds it low meanwhile, so the switch powers into the internal antenna regardless.
+    const gpio_config_t sel = {
+        .pin_bit_mask = 1ULL << ANT_SEL_GPIO,
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&sel);
+    s_ant_ready = true;
+    apply_antenna(true);
 
     ESP_LOGI(TAG, "RF switch powered (GPIO%d low), tx power already set: "
                   "espnow %ddBm, ble %ddBm, 154 %ddBm", ANT_PWR_GPIO,

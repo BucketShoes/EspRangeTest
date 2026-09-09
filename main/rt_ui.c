@@ -176,6 +176,8 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
 
     if (b[0] == RT_CMD_LR_OFF || b[0] == RT_CMD_LR_ON) {
         rt_set_lr(b[0] == RT_CMD_LR_ON);
+    } else if (b[0] == RT_CMD_ANT_INT || b[0] == RT_CMD_ANT_EXT) {
+        rt_set_antenna(b[0] == RT_CMD_ANT_EXT);
     } else if (b[0] >= RT_CMD_PWR_SET && b[0] <= RT_CMD_PWR_SET + CH_COUNT) {
         if (len < 2) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;

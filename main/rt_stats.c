@@ -312,10 +312,10 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     if (n < max) {
         // Power fields are the achieved dBm, not the requested one - the UI should show what
         // the radio is actually doing.
-        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d", rt_node_id(),
+        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d,%d", rt_node_id(),
                  (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0,
                  rt_power_actual(CH_ESPNOW), rt_power_actual(CH_BLE_ADV),
-                 rt_power_actual(CH_154));
+                 rt_power_actual(CH_154), g_ant_ext ? 1 : 0);
     }
 
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
@@ -350,9 +350,9 @@ void rt_report(void)
     // wifi= is the Wi-Fi *driver*, not the ESP-NOW tx gate on the line below. The two are
     // separate on purpose: a mode that mutes ESP-NOW while leaving the driver up is the exact
     // failure this rig kept measuring, so the report has to be able to show that state.
-    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s ==\n", rt_node_id(),
+    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
-           rt_wifi_active() ? "on" : "off");
+           rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int");
     // Asked-for versus achieved. They differ whenever the radio quantised the request, which
     // is worth seeing rather than hiding behind the number that was typed.
     printf("  pwr: ");

@@ -80,6 +80,15 @@ const LC = ['all', 'espnow', 'ble_adv', '154', 'wifi'];
 // is down to tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
 const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 
+// Antenna port. The board always boots on the internal chip antenna and never remembers this,
+// because selecting a connector with nothing on it takes the radio off the air entirely - and
+// that would kill every control path at once, leaving only the button. A power cycle is the
+// guaranteed way back.
+//
+// It lives here rather than on the board's button for the same reason LR does: the button has
+// exactly two gestures, tap and hold, and hold has to stay the restore.
+const CMD_ANT_INT = 0x82, CMD_ANT_EXT = 0x83;
+
 // Transmit power in dBm, per radio. Two-byte write: [0xB0 + channel, dbm]; channel 3 sets all
 // three at once. Must match RT_CMD_PWR_SET and s_range[] in the firmware. Ranges are the
 // hardware's - Wi-Fi cannot go below +2dBm, the other two reach -15 - so "all" clamps each
@@ -164,6 +173,9 @@ function onLine(d, line) {
     // Achieved dBm per radio, in CH_ order - what the radio reported back, not what was asked
     // for. Absent on firmware older than the power work; left undefined rather than defaulted.
     if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
+    // Absent on firmware older than the antenna work; undefined rather than assumed internal,
+    // since "we do not know which antenna this reading came through" is worth showing.
+    if (f.length > 8) d.ant = +f[8];
   } else if (f[0] === 'R') {
     // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
     d.rows.set(f[1] + '/' + f[2], {
@@ -230,6 +242,13 @@ function buildCard(d) {
                'cannot see the board’s AP while it is on.';
   R.lr.onclick = () => cmd(d, d.lr ? CMD_LR_OFF : CMD_LR_ON);
   modes.appendChild(R.lr);
+
+  R.ant = document.createElement('button');
+  R.ant.title = 'RF switch port. Internal is the onboard ceramic antenna; external is the ' +
+                'U.FL connector. Selecting external with nothing fitted takes the board off ' +
+                'the air - power cycle to get back to internal.';
+  R.ant.onclick = () => cmd(d, d.ant ? CMD_ANT_INT : CMD_ANT_EXT);
+  modes.appendChild(R.ant);
 
   const disc = document.createElement('button');
   disc.textContent = 'Disconnect';
@@ -331,6 +350,10 @@ function updateCard(d) {
   R.modes.forEach((b, i) => { b.className = d.lc === i ? 'on' : ''; });
   R.lr.textContent = d.lr ? 'LR on' : 'LR off';
   R.lr.className = d.lr ? 'on' : '';
+
+  R.ant.textContent = d.ant === undefined ? 'ant ?'
+                    : d.ant ? 'ant external' : 'ant internal';
+  R.ant.className = d.ant ? 'on' : '';
 
   R.sliders.forEach((sl, i) => {
     const all = i >= PWR_CH.length;
