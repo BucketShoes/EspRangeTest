@@ -204,7 +204,7 @@ static void handle_adv_report(const struct ble_gap_ext_disc_desc *d)
         // everywhere and vary in size; insisting on the one length we emit throws away almost
         // all of them before the magic is even looked at.
         if (type == 0xFF && len - 1 == (int)sizeof(rt_pkt_t)) {
-            rt_rx(&p[2], len - 1, CH_BLE_ADV, d->rssi, 0);
+            rt_rx(&p[2], len - 1, CH_BLE_ADV, d->rssi, 0, RT_NOISE_NONE);  // no noise floor
             return;
         }
         p   += len + 1;

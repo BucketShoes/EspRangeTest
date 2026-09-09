@@ -24,7 +24,8 @@ static bool s_inited;
 
 static void on_rx(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
-    rt_rx(data, len, CH_ESPNOW, info->rx_ctrl->rssi, 0);
+    // The only radio here that measures a noise floor, so the only one with a real SNR.
+    rt_rx(data, len, CH_ESPNOW, info->rx_ctrl->rssi, 0, info->rx_ctrl->noise_floor);
 }
 
 // esp_now_send() returning ESP_OK only means the driver queued the frame, not that it went

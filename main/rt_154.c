@@ -305,7 +305,10 @@ void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *in
     s_rx_frames++;
     if (frame_is_ours(f, psdu)) {
         s_rx_ours++;
-        rt_rx(&f[HDR_LEN], psdu - HDR_LEN - FCS_LEN, CH_154, info->rssi, info->lqi);
+        // esp_ieee802154_frame_info_t has rssi and lqi but no noise floor; lqi is the
+        // standard's own link-quality figure and is reported instead.
+        rt_rx(&f[HDR_LEN], psdu - HDR_LEN - FCS_LEN, CH_154, info->rssi, info->lqi,
+              RT_NOISE_NONE);
     }
     esp_ieee802154_receive_handle_done(frame);
 }

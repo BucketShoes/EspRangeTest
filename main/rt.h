@@ -245,8 +245,16 @@ void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
 void rt_tx_ok(int chan);
 void rt_tx_failed(int chan);
 
+// Noise floor is only reported by one of the three radios, so the others say so rather than
+// pretending. ESP-NOW's rx_ctrl carries a measured noise_floor in dBm, which makes SNR real:
+// rssi - noise. 802.15.4's frame info has rssi and lqi but no noise floor - lqi is the
+// standard's own link-quality metric and is already reported. NimBLE's advert reports give
+// rssi alone. Inventing a number for the two that do not measure it would make the columns
+// look comparable when they are not.
+#define RT_NOISE_NONE 127
+
 // Record a reception. Ignores anything that is not ours.
-void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi);
+void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t noise);
 
 // Why the board last reset, as a short word ("power-on", "BROWNOUT", "PANIC"...). Printed in
 // every report, not once at boot: a board that resets mid-walk scrolls its startup banner past
@@ -259,8 +267,16 @@ void rt_report(void);
 // Current state as short CSV text lines, for the web UI. Text rather than a binary format
 // on purpose: it is the same information the serial report shows, it is readable in a BLE
 // debugging app, and it needs no decoder on the browser side.
-//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>,<ant_external>
-//   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
+//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>,<ant_external>,<up_ms>
+//   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>,<snr>
+//
+// up_ms is the board's own millisecond clock at the instant the whole snapshot was taken, and
+// every age_ms in the same report is measured against it. The page needs both: the lines of
+// one report do not arrive together - they are spread over as many connection events as it
+// takes - so "how long since this arrived" is not the same question as "how old was it when
+// the board looked". Without up_ms the two get conflated and the age jitters by however long
+// the report took to transmit. snr is rssi - noise floor, or -128 where the radio does not
+// measure one.
 //   T,<chan>,<queued>,<ok>,<rejected>,<offmode_rx>
 //   X,<reset_reason>,<heap_free>,<heap_min>,<rx154_frames>,<rx154_ours>,<coex_refused>
 //

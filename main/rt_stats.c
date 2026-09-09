@@ -106,6 +106,7 @@ typedef struct {
     int32_t  rssi_n;
     int8_t   rssi_last, rssi_min, rssi_max;
     uint8_t  lqi;
+    int8_t   noise;   // RT_NOISE_NONE where the radio does not measure one
     uint32_t last_ms;
 } rt_link;
 
@@ -241,7 +242,7 @@ void rt_tx_failed(int chan)
     }
 }
 
-void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
+void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t noise)
 {
     // Exact length, on every channel. Our packets are always exactly this size, so anything
     // else is somebody else's - one more filter applied before the magic, for free.
@@ -313,6 +314,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
     if (rssi < l->rssi_min) l->rssi_min = rssi;
     if (rssi > l->rssi_max) l->rssi_max = rssi;
     l->lqi     = lqi;
+    l->noise   = noise;
     l->last_ms = rt_ms();
 }
 
@@ -324,10 +326,13 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
     if (n < max) {
         // Power fields are the achieved dBm, not the requested one - the UI should show what
         // the radio is actually doing.
-        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d,%d", rt_node_id(),
+        // now is captured once, at the top of this function, and every age below is measured
+        // against it - so shipping it lets the page reconstruct exactly when the snapshot was
+        // taken rather than guessing from when the line happened to arrive.
+        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d,%d,%lu", rt_node_id(),
                  (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0,
                  rt_power_actual(CH_ESPNOW), rt_power_actual(CH_BLE_ADV),
-                 rt_power_actual(CH_154), g_ant_ext ? 1 : 0);
+                 rt_power_actual(CH_154), g_ant_ext ? 1 : 0, (unsigned long)now);
     }
 
     // Per-channel transmit accounting and the off-mode fault counter, so the page can show
@@ -362,11 +367,13 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
             const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
             const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
 
-            snprintf(out[n++], RT_LINE_MAX, "R,%02X,%s,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu",
+            const int snr = (l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
+
+            snprintf(out[n++], RT_LINE_MAX, "R,%02X,%s,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu,%d",
                      s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
                      l->rssi_min, l->rssi_max, wpdr, tpdr,
                      (unsigned long)l->rx, (unsigned long)l->missed,
-                     (unsigned long)(now - l->last_ms));
+                     (unsigned long)(now - l->last_ms), snr);
         }
     }
     return n;
@@ -454,6 +461,9 @@ void rt_report(void)
                    l->rssi_min, l->rssi_max, wpdr, tpdr,
                    (unsigned long)l->rx, (unsigned long)l->missed,
                    (unsigned long)(now - l->last_ms));
+            if (l->noise != RT_NOISE_NONE) {
+                printf(" snr %d (noise %d)", l->rssi_last - l->noise, l->noise);
+            }
             if (c == CH_154) {
                 printf(" lqi %u", l->lqi);
             }

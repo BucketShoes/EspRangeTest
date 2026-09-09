@@ -237,6 +237,7 @@ function onLine(d, line) {
              (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
       d.rebootAt = Date.now();
       d.reboots = (d.reboots ?? 0) + 1;
+      d.offset = undefined;   // board clock restarted; re-learn it
       // Force the reset reason to be re-logged: it is the single most useful thing to know
       // right now, and it may well have changed.
       d.diag = undefined;
@@ -247,6 +248,22 @@ function onLine(d, line) {
     }
 
     d.node = f[1]; d.uptime = up; d.lc = +f[3]; d.lr = +f[4];
+
+    // The board's own millisecond clock at the instant it took this snapshot. Every age in
+    // this report is measured against it, so keeping it lets ages be computed on the board's
+    // timebase rather than on arrival times.
+    //
+    // offset converts board time to browser time. It is a running *minimum* because transit
+    // delay is always positive and never negative: the smallest (arrival - boardMs) ever seen
+    // is the one with the least delay, and therefore the best estimate. Taking the latest
+    // instead would make every age jitter by however long that particular report took to
+    // cross - which, spread over several connection events at 350-500ms each, is the seconds
+    // of wander that made the ticking uneven.
+    if (f.length > 9) {
+      d.boardMs = +f[9];
+      const candidate = Date.now() - d.boardMs;
+      d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
+    }
     // Achieved dBm per radio, in CH_ order - what the radio reported back, not what was asked
     // for. Absent on firmware older than the power work; left undefined rather than defaulted.
     if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
@@ -257,7 +274,11 @@ function onLine(d, line) {
     d.rows.set(f[1] + '/' + f[2], {
       peer: f[1], ch: f[2], rssi: +f[3], avg: +f[4], min: +f[5], max: +f[6],
       pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
+      snr: f.length > 12 ? +f[12] : -128,
       gen: d.gen ?? 0,
+      // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
+      // so its age is a straight subtraction from "now" and cannot drift with arrival times.
+      abs: (d.boardMs ?? 0) - (+f[11]),
     });
   } else if (f[0] === 'T') {
     // T,chan,queued,ok,rejected,offmode
@@ -437,19 +458,48 @@ const ROW_STALE_MS = 1500;
 // periods: one missed could be timing, two is the link.
 const LINK_STALE_MS = 2500;
 
+// Board time now, in the board's own milliseconds. undefined until an S line has taught us the
+// offset. Everything time-related is computed on this rather than on when a line arrived.
+const boardNow = d => (d.offset === undefined ? undefined : Date.now() - d.offset);
+
+// The ages tick on their own, ~20fps, without touching anything else on the card. Rebuilding
+// the whole card at that rate would be wasteful and would fight the sliders; rebuilding it at
+// 2Hz, which is what happened before, is what made the counters stutter.
+function tickAges() {
+  const wall = Date.now();
+  for (const d of devs.values()) {
+    const R = d.ui;
+    if (!R) continue;
+
+    const bn = boardNow(d);
+    for (const a of R.ageEls || []) {
+      if (bn === undefined) continue;
+      const age = bn - a.abs;
+      a.cell.textContent = (age / 1000).toFixed(1) + 's';
+      a.tr.classList.toggle('stale', age > ROW_STALE_MS);
+    }
+
+    // Freshness of the link itself, which is a different question from row age: rows go quiet
+    // when the peer stops being heard, this goes quiet when *this* board stops reporting.
+    if (R.fresh) {
+      const since = wall - (d.seen ?? wall);
+      const stale = since > LINK_STALE_MS;
+      R.fresh.textContent = stale
+        ? `none for ${(since / 1000).toFixed(0)}s`
+        : `${(since / 1000).toFixed(1)}s ago`;
+      R.fresh.className = stale ? 'bad' : 'dim';
+    }
+  }
+}
+
 function updateCard(d) {
   const R = d.ui;
   const now = Date.now();
-  // How long since this board last said anything. Every age below is the board's own figure
-  // plus this, so the numbers keep moving between reports instead of freezing at whatever the
-  // last packet said - a frozen age reads as a live one.
-  const drift = now - (d.seen ?? now);
 
   R.nm.textContent = d.name || '?';
   R.st.textContent = d.live ? 'connected' : 'reconnecting…';
   R.st.className = d.live ? 'ok' : 'bad';
 
-  const linkStale = drift > LINK_STALE_MS;
   // Sticks around for a while after the event, so a reboot that happened while you were
   // looking at the other board is still visible when you look back.
   const rebooted = d.rebootAt && now - d.rebootAt < 30000;
@@ -461,9 +511,8 @@ function updateCard(d) {
     (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
     `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
-    `report <b class="${linkStale ? 'bad' : 'dim'}">` +
-    `${linkStale ? 'none for ' + (drift / 1000).toFixed(0) + 's' : (drift / 1000).toFixed(1) + 's ago'}` +
-    `</b>`;
+    'report <b class="fresh"></b>';
+  R.fresh = R.meta.querySelector('.fresh');
 
   R.modes.forEach((b, i) => { b.className = d.lc === i ? 'on' : ''; });
   R.lr.textContent = d.lr ? 'LR on' : 'LR off';
@@ -522,26 +571,33 @@ function updateCard(d) {
   if (!rows.length) {
     R.body.innerHTML =
       '<div class="hint">Nothing heard yet. Is the other board powered up?</div>';
+    R.ageEls = [];   // otherwise tickAges keeps writing into cells that are gone
     return;
   }
-  // Nothing in here is interactive, so rebuilding it wholesale costs nothing.
+  // Rebuilt only when a report arrives. The "last" cells are then handed to tickAges(), which
+  // is the only thing that touches them until the next rebuild - so they can tick smoothly
+  // without the rest of the card being redrawn underneath the operator.
   R.body.innerHTML =
-    '<table><tr><th>peer / radio</th><th>rssi</th><th>avg</th>' +
+    '<table><tr><th>peer / radio</th><th>rssi</th><th>snr</th><th>avg</th>' +
     '<th>pdr</th><th>all</th><th>miss</th><th>last</th></tr>' +
-    rows.map(r => {
-      const age = r.age + drift;
-      // Dim a row that has gone quiet - on a walk, silence is the result, and it should be
-      // visible the moment it starts rather than five seconds later.
-      return `<tr class="${age > ROW_STALE_MS ? 'stale' : ''}">` +
-        `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
-        `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
-        `<td class="dim">${r.avg}</td>` +
-        `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
-        `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
-        `<td class="dim">${r.miss}</td>` +
-        `<td class="dim">${(age / 1000).toFixed(1)}s</td></tr>`;
-    }).join('') +
+    rows.map(r =>
+      `<tr data-abs="${r.abs}">` +
+      `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
+      `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
+      // Only ESP-NOW measures a noise floor; the others say so rather than showing a number
+      // that would invite comparison across radios that did not measure the same thing.
+      `<td class="dim">${r.snr === -128 ? '–' : r.snr}</td>` +
+      `<td class="dim">${r.avg}</td>` +
+      `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
+      `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
+      `<td class="dim">${r.miss}</td>` +
+      `<td class="dim">–</td></tr>`).join('') +
     '</table>';
+
+  R.ageEls = [...R.body.querySelectorAll('tr[data-abs]')].map(tr => ({
+    tr, cell: tr.lastElementChild, abs: +tr.dataset.abs,
+  }));
+  tickAges();
 }
 
 function render() {
@@ -572,7 +628,9 @@ document.getElementById('wake').onclick = async function () {
   } catch (e) { fail('Screen wake lock unavailable: ' + e.message); }
 };
 
-setInterval(scheduleRender, 400);  // ages and stale styling keep moving between reports
+// 20fps. Only the age cells and the link-freshness text move here; everything else waits for
+// a report. Slow ticking read as the numbers themselves being unreliable.
+setInterval(tickAges, 50);
 </script>
 </body>
 </html>
