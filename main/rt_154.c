@@ -267,7 +267,7 @@ static void tx_task(void *pv)
 // that as well as the magic.
 static bool frame_is_ours(const uint8_t *f, int psdu)
 {
-    if (psdu < HDR_LEN + (int)sizeof(rt_pkt_t) + FCS_LEN) {
+    if (psdu != HDR_LEN + (int)sizeof(rt_pkt_t) + FCS_LEN) {
         return false;
     }
     // FCF: type = data, PAN ID compression set.

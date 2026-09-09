@@ -238,7 +238,9 @@ void rt_tx_failed(int chan)
 
 void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
 {
-    if (len < (int)sizeof(rt_pkt_t) || chan < 0 || chan >= CH_COUNT) {
+    // Exact length, on every channel. Our packets are always exactly this size, so anything
+    // else is somebody else's - one more filter applied before the magic, for free.
+    if (len != (int)sizeof(rt_pkt_t) || chan < 0 || chan >= CH_COUNT) {
         return;
     }
     // A channel this mode is not measuring does not belong in the table, even if the far end is

@@ -200,7 +200,10 @@ static void handle_adv_report(const struct ble_gap_ext_disc_desc *d)
         if (len < 1 || len > rem - 1) {
             return;
         }
-        if (type == 0xFF && len - 1 >= (int)sizeof(rt_pkt_t)) {
+        // Exactly our length, not merely long enough. Manufacturer-specific adverts are
+        // everywhere and vary in size; insisting on the one length we emit throws away almost
+        // all of them before the magic is even looked at.
+        if (type == 0xFF && len - 1 == (int)sizeof(rt_pkt_t)) {
             rt_rx(&p[2], len - 1, CH_BLE_ADV, d->rssi, 0);
             return;
         }

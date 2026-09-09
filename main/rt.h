@@ -52,13 +52,29 @@ extern const char *rt_chan_name[CH_COUNT];
 #define LC_WIFI_UI (CH_COUNT + 1)
 #define LC_COUNT   (CH_COUNT + 2)  // total states the button cycles through
 
-#define RT_MAGIC     0x5254
+// 32 bits, not 16.
+//
+// Every channel here is promiscuous by necessity - a BLE scanner sees every advert in the
+// room, ESP-NOW sees every ESP-NOW frame, and 802.15.4 sees whatever is on channel 26 - so the
+// magic is the only thing separating a measurement from somebody else's traffic. At 16 bits
+// that is one chance in 65536 per foreign packet, which sounds small until you are parked in a
+// room full of beacons for an hour: the false positives arrive at a steady trickle, they get
+// counted as receptions, and a channel that is actually out of range reports that it is not.
+//
+// That is not a hypothetical. BLE was the channel that consistently "won" earlier range tests,
+// and BLE is also the channel most exposed to it, because phones and fitness trackers emit
+// manufacturer-specific adverts constantly. Any of those, of the right length, with the right
+// two bytes, was recorded as a packet from a peer that does not exist.
+//
+// At 32 bits it is one in four billion, and combined with the exact-length check in rt_ble.c
+// the false-accept rate stops being something that needs thinking about.
+#define RT_MAGIC     0x9C7A5254u
 #define RT_MAX_PEERS 6
 
 // 8 bytes. All nodes are little-endian ESP32s, so a packed struct straight onto the wire is
 // fine - no hand serialisation needed.
 typedef struct __attribute__((packed)) {
-    uint16_t magic;
+    uint32_t magic;
     uint8_t  node;   // low byte of the sender's MAC
     int8_t   txdbm;
     uint32_t seq;    // per (sender, channel)

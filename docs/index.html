@@ -31,7 +31,12 @@
   .big{font-size:17px;font-weight:700}
   .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.dim{color:var(--dim)}
   .stale{opacity:.4}
-  #err{color:var(--bad);font-size:13px;min-height:18px;margin-bottom:8px}
+  #err{font-size:12px;margin-bottom:8px;font-variant-numeric:tabular-nums;
+       max-height:150px;overflow-y:auto}
+  #err div{padding:1px 0}
+  .logtop{display:flex;justify-content:space-between;align-items:center;
+          color:var(--dim);margin-bottom:2px}
+  .logtop button{padding:2px 8px;font-size:12px;border-radius:6px}
   .hint{color:var(--dim);font-size:13px;line-height:1.5}
   .pwr{border-top:1px solid var(--line);margin:2px 0 10px;padding-top:8px}
   .pwrhead{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);
@@ -102,15 +107,48 @@ const PWR_CH = ['espnow', 'ble_adv', '154'];  // CH_ order, matches the S line p
 // clamps and quantises whatever it is sent, and the mismatch marker says so - asking Wi-Fi for
 // -15 and being told 2 is information, not an error.
 const PWR_SPAN = { min: -15, max: 20, step: 1 };
-
-const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen}
+const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen, want}
 const $err = document.getElementById('err');
 const $devs = document.getElementById('devs');
 
-const fail = m => { $err.textContent = m; };
+// ---- event log ---------------------------------------------------------------------------
+//
+// A single line of error text that never went away could not answer the only question worth
+// asking of it: is this still happening, or did it happen once ten minutes ago? Entries are
+// timestamped, the newest is on top, and there is a clear button.
+const LOG_MAX = 12;
+const logLines = [];
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function logMsg(m, bad) {
+  const prev = logLines[0];
+  // Identical consecutive messages count up rather than filling the log - a retry loop failing
+  // the same way forty times is one fact, and it should not push everything else off the list.
+  if (prev && prev.m === m && prev.bad === bad) {
+    prev.n++;
+    prev.t = new Date();
+  } else {
+    logLines.unshift({ t: new Date(), m, bad, n: 1 });
+    if (logLines.length > LOG_MAX) logLines.length = LOG_MAX;
+  }
+  paintLog();
+}
+
+function paintLog() {
+  if (!logLines.length) { $err.innerHTML = ''; return; }
+  $err.innerHTML =
+    '<div class="logtop"><b>log</b><button id="logclear">clear</button></div>' +
+    logLines.map(e =>
+      `<div class="${e.bad ? 'bad' : 'dim'}">` +
+      `${e.t.toTimeString().slice(0, 8)} ${esc(e.m)}` +
+      `${e.n > 1 ? ` <b>&times;${e.n}</b>` : ''}</div>`).join('');
+  document.getElementById('logclear').onclick = () => { logLines.length = 0; paintLog(); };
+}
+
+const fail = m => logMsg(m, true);
 
 document.getElementById('add').onclick = async () => {
-  $err.textContent = '';
+  logLines.length = 0; paintLog();
   if (!navigator.bluetooth) {
     return fail('No Web Bluetooth here. Chrome on Android or desktop, over https:// or localhost.');
   }
@@ -145,6 +183,7 @@ async function connect(dev) {
     d.live = false;
     render();
     if (d.userDisconnected) return;  // deliberate - do not fight the operator
+    logMsg(`${d.name}: link dropped, retrying`);
     // Otherwise the board is very likely just out of range rather than gone, which on a
     // range walk is the normal case - so keep retrying instead of making the operator re-pair.
     const retry = () => dev.gatt.connected || d.userDisconnected
@@ -155,6 +194,12 @@ async function connect(dev) {
 
   document.getElementById('hint').style.display = 'none';
   render();
+
+  // A reconnect lands here as well as a first connect. If this page had already set the board
+  // up, put it back - the board may have reset while it was away, and a silent reversion to
+  // defaults mid-walk is exactly what makes the numbers stop adding up.
+  logMsg(`${d.name}: connected`);
+  resync(d, 'reconnected');
 }
 
 function disconnect(dev, d) {
@@ -169,7 +214,15 @@ function onLine(d, line) {
   if (f[0] === 'S') {
     // f[5] (power) is absent from firmware older than the power-level work; leave d.pwr
     // undefined in that case rather than showing "min", which would be a guess.
-    d.node = f[1]; d.uptime = +f[2]; d.lc = +f[3]; d.lr = +f[4];
+    const up = +f[2];
+    // Uptime going backwards is the only reliable sign a board reset - it comes back on its
+    // own, reconnects on its own, and otherwise says nothing about having lost everything.
+    if (d.uptime !== undefined && up < d.uptime) {
+      logMsg(`${d.name}: rebooted (uptime ${d.uptime}s to ${up}s) - back on defaults`, true);
+      d.rebootAt = Date.now();
+      resync(d, 'rebooted');
+    }
+    d.node = f[1]; d.uptime = up; d.lc = +f[3]; d.lr = +f[4];
     // Achieved dBm per radio, in CH_ order - what the radio reported back, not what was asked
     // for. Absent on firmware older than the power work; left undefined rather than defaulted.
     if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
@@ -194,6 +247,41 @@ async function cmd(d, ...v) {
 // dbm may be negative; Uint8Array wraps it to two's complement, which is what the firmware
 // reads it back as.
 const setPwr = (d, ch, dbm) => cmd(d, CMD_PWR_SET + ch, dbm & 0xff);
+
+// ---- desired state -----------------------------------------------------------------------
+//
+// What this page has asked a board for, kept apart from what the board last reported.
+//
+// A board comes up in its defaults after a reset, which is the right behaviour and is the
+// recovery path: whatever mode you got yourself stuck in, the reset button undoes it. But that
+// same reset silently undoes a setting you made two minutes ago, and mid-walk the first sign
+// of it is numbers that stop making sense.
+//
+// So: notice the reboot, say so in the log, and put the board back where it was. Restoring is
+// safe precisely because it can only happen over a working control channel - if the write
+// lands, control is working, and if it does not there was nothing to restore anyway. Nothing
+// is persisted here; reloading the page forgets it, which is how you stop it.
+const want = d => (d.want ||= {});
+
+async function resync(d, why) {
+  const w = d.want;
+  if (!w || !d.cmd) return;
+  logMsg(`${d.name}: ${why}, restoring settings`);
+  try {
+    // Power and antenna first, mode last: the mode may be the one that takes BLE off the air
+    // (wifi+phone), so everything else needs to have landed before that can happen.
+    if (w.pwr) {
+      for (let ch = 0; ch < PWR_CH.length; ch++) {
+        if (w.pwr[ch] !== undefined) await setPwr(d, ch, w.pwr[ch]);
+      }
+    }
+    if (w.ant !== undefined) await cmd(d, w.ant ? CMD_ANT_EXT : CMD_ANT_INT);
+    if (w.lr  !== undefined) await cmd(d, w.lr ? CMD_LR_ON : CMD_LR_OFF);
+    if (w.lc  !== undefined) await cmd(d, w.lc);
+  } catch (e) {
+    fail(`${d.name}: restore failed - ${e.message}`);
+  }
+}
 
 const pdrClass = p => p < 0 ? 'dim' : p >= 90 ? 'ok' : p >= 50 ? 'warn' : 'bad';
 const rssiClass = r => r >= -70 ? 'ok' : r >= -90 ? 'warn' : 'bad';
@@ -229,7 +317,7 @@ function buildCard(d) {
   LC.forEach((label, i) => {
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = () => cmd(d, i);
+    b.onclick = () => { want(d).lc = i; cmd(d, i); };
     modes.appendChild(b);
     R.modes.push(b);
   });
@@ -240,14 +328,22 @@ function buildCard(d) {
   R.lr = document.createElement('button');
   R.lr.title = 'Long-range PHY for Wi-Fi and ESP-NOW. Non-ESP devices, including this phone, ' +
                'cannot see the board’s AP while it is on.';
-  R.lr.onclick = () => cmd(d, d.lr ? CMD_LR_OFF : CMD_LR_ON);
+  R.lr.onclick = () => {
+    const on = !d.lr;
+    want(d).lr = on;
+    cmd(d, on ? CMD_LR_ON : CMD_LR_OFF);
+  };
   modes.appendChild(R.lr);
 
   R.ant = document.createElement('button');
   R.ant.title = 'RF switch port. Internal is the onboard ceramic antenna; external is the ' +
                 'U.FL connector. Selecting external with nothing fitted takes the board off ' +
                 'the air - power cycle to get back to internal.';
-  R.ant.onclick = () => cmd(d, d.ant ? CMD_ANT_INT : CMD_ANT_EXT);
+  R.ant.onclick = () => {
+    const ext = !d.ant;
+    want(d).ant = ext;
+    cmd(d, ext ? CMD_ANT_EXT : CMD_ANT_INT);
+  };
   modes.appendChild(R.ant);
 
   const disc = document.createElement('button');
@@ -284,8 +380,10 @@ function buildCard(d) {
     return row;
   };
 
+  const setWantPwr = (ch, v) => { (want(d).pwr ||= [])[ch] = v; setPwr(d, ch, v); };
+
   PWR_CH.forEach((name, ch) =>
-    pwr.appendChild(mkRow(name, PWR_SPAN, v => setPwr(d, ch, v))));
+    pwr.appendChild(mkRow(name, PWR_SPAN, v => setWantPwr(ch, v))));
 
   // "all" is a command, not a state, so it has nothing of its own to report. Moving it drives
   // the three radio sliders locally and immediately - no round trip. The board is told
@@ -297,6 +395,9 @@ function buildCard(d) {
       sl.s.value = v;
       paintSlider(sl);
     });
+    // Recorded per radio, not as an "all" of its own, so a restore replays it the same way -
+    // and each radio still clamps to its own limits on the board.
+    want(d).pwr = PWR_CH.map(() => v);
     setPwr(d, PWR_CH.length, v);
   }, 'all'));
   el.appendChild(pwr);
@@ -340,7 +441,11 @@ function updateCard(d) {
   R.st.className = d.live ? 'ok' : 'bad';
 
   const linkStale = drift > LINK_STALE_MS;
+  // Sticks around for a while after the event, so a reboot that happened while you were
+  // looking at the other board is still visible when you look back.
+  const rebooted = d.rebootAt && now - d.rebootAt < 30000;
   R.meta.innerHTML =
+    (rebooted ? '<b class="bad">REBOOTED</b> · ' : '') +
     `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
     `report <b class="${linkStale ? 'bad' : 'dim'}">` +
