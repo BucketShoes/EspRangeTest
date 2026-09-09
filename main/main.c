@@ -87,6 +87,14 @@ static const char *TAG = "rt";
 // just tracks the flag and rt_wifi_active is always false.
 volatile bool g_lr;
 
+// Set once at boot and then reported in every periodic report, not just the startup banner.
+static const char *s_reset_reason = "?";
+
+const char *rt_reset_reason(void)
+{
+    return s_reset_reason;
+}
+
 #if RT_STAGE >= 1
 // 11b and nothing else.
 //
@@ -459,26 +467,20 @@ void app_main(void)
     // reset at maximum transmit power", and it is a question guessing cannot settle: a
     // transmit-current brownout, a watchdog and a crash all present the same way.
     const esp_reset_reason_t why = esp_reset_reason();
-    const char *why_txt;
     switch (why) {
-    case ESP_RST_POWERON:  why_txt = "power-on";                        break;
-    case ESP_RST_SW:       why_txt = "software restart";                break;
-    case ESP_RST_PANIC:    why_txt = "PANIC (crash)";                   break;
-    case ESP_RST_INT_WDT:  why_txt = "interrupt watchdog";              break;
-    case ESP_RST_TASK_WDT: why_txt = "task watchdog";                   break;
-    case ESP_RST_WDT:      why_txt = "other watchdog";                  break;
-    case ESP_RST_BROWNOUT: why_txt = "BROWNOUT (supply sagged)";        break;
-    case ESP_RST_EXT:      why_txt = "external reset pin";              break;
-    case ESP_RST_DEEPSLEEP:why_txt = "deep sleep wake";                 break;
-    case ESP_RST_USB:      why_txt = "USB peripheral reset";            break;
-    default:               why_txt = "unknown";                         break;
+    case ESP_RST_POWERON:   s_reset_reason = "power-on";   break;
+    case ESP_RST_SW:        s_reset_reason = "sw-restart"; break;
+    case ESP_RST_PANIC:     s_reset_reason = "PANIC";      break;
+    case ESP_RST_INT_WDT:   s_reset_reason = "INT-WDT";    break;
+    case ESP_RST_TASK_WDT:  s_reset_reason = "TASK-WDT";   break;
+    case ESP_RST_WDT:       s_reset_reason = "WDT";        break;
+    case ESP_RST_BROWNOUT:  s_reset_reason = "BROWNOUT";   break;
+    case ESP_RST_EXT:       s_reset_reason = "ext-pin";    break;
+    case ESP_RST_DEEPSLEEP: s_reset_reason = "deepsleep";  break;
+    case ESP_RST_USB:       s_reset_reason = "usb";        break;
+    default:                s_reset_reason = "unknown";    break;
     }
-    if (why == ESP_RST_BROWNOUT || why == ESP_RST_PANIC ||
-        why == ESP_RST_INT_WDT || why == ESP_RST_TASK_WDT || why == ESP_RST_WDT) {
-        ESP_LOGE(TAG, "last reset: %s (%d)", why_txt, (int)why);
-    } else {
-        ESP_LOGI(TAG, "last reset: %s (%d)", why_txt, (int)why);
-    }
+    ESP_LOGW(TAG, "last reset: %s (%d)", s_reset_reason, (int)why);
 
     ESP_LOGI(TAG, "stage %d (raise RT_STAGE in platformio.ini to add radios)", RT_STAGE);
 

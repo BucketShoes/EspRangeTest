@@ -6,6 +6,7 @@
 #include "sdkconfig.h"
 
 #include "esp_mac.h"
+#include "esp_system.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 
@@ -118,6 +119,7 @@ static uint32_t s_tx_seq[CH_COUNT];
 static uint32_t s_tx_count[CH_COUNT];
 static uint32_t s_tx_ok[CH_COUNT];
 static uint32_t s_tx_fail[CH_COUNT];
+static uint32_t s_rx_offmode[CH_COUNT];  // heard while this mode said the channel was off
 static uint8_t  s_node_id;
 
 uint32_t rt_ms(void)
@@ -181,6 +183,9 @@ void rt_stats_reset_chan(int chan)
     s_tx_count[chan] = 0;
     s_tx_ok[chan]    = 0;
     s_tx_fail[chan]  = 0;
+    // s_rx_offmode is deliberately NOT cleared here. It counts a fault, not a measurement, and
+    // a mode change is exactly when the fault happens - clearing it on every mode change would
+    // erase the evidence at the moment it was collected.
 }
 
 void rt_stats_reset(void)
@@ -243,11 +248,16 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi)
     if (len != (int)sizeof(rt_pkt_t) || chan < 0 || chan >= CH_COUNT) {
         return;
     }
-    // A channel this mode is not measuring does not belong in the table, even if the far end is
-    // still transmitting it and even if our own radio has not finished stopping. rt_tx_enabled()
-    // is the same set of channels the mode cares about, applied to the receive side: without
-    // this, the ordering above only narrows the window rather than closing it.
+    // A reception on a channel this mode is not measuring is a bug caught red-handed, not
+    // noise to be swallowed. We asked for that radio to be off; if a packet arrived anyway,
+    // either it is not off or the mode is not what the report says - and either way it is
+    // spending airtime that something else was promised.
+    //
+    // So it is counted and reported loudly, but deliberately not entered in the results table:
+    // a row for a channel the header says is silent would corrupt the measurement while it
+    // explains the fault. The counter is the evidence; the table stays honest.
     if (!rt_tx_enabled(chan)) {
+        s_rx_offmode[chan]++;
         return;
     }
 
@@ -320,6 +330,23 @@ int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
                  rt_power_actual(CH_154), g_ant_ext ? 1 : 0);
     }
 
+    // Per-channel transmit accounting and the off-mode fault counter, so the page can show
+    // "we sent 174 and 0 were rejected" without anyone reading serial.
+    for (int c = 0; c < CH_COUNT && n < max; c++) {
+        snprintf(out[n++], RT_LINE_MAX, "T,%s,%lu,%lu,%lu,%lu", rt_chan_name[c],
+                 (unsigned long)s_tx_count[c], (unsigned long)s_tx_ok[c],
+                 (unsigned long)s_tx_fail[c], (unsigned long)s_rx_offmode[c]);
+    }
+
+    if (n < max) {
+        uint32_t f154 = 0, o154 = 0, coex = 0;
+        rt_154_counters(&f154, &o154, &coex);
+        snprintf(out[n++], RT_LINE_MAX, "X,%s,%lu,%lu,%lu,%lu,%lu", rt_reset_reason(),
+                 (unsigned long)esp_get_free_heap_size(),
+                 (unsigned long)esp_get_minimum_free_heap_size(),
+                 (unsigned long)f154, (unsigned long)o154, (unsigned long)coex);
+    }
+
     for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
         if (!s_peers[i].used) {
             continue;
@@ -352,9 +379,15 @@ void rt_report(void)
     // wifi= is the Wi-Fi *driver*, not the ESP-NOW tx gate on the line below. The two are
     // separate on purpose: a mode that mutes ESP-NOW while leaving the driver up is the exact
     // failure this rig kept measuring, so the report has to be able to show that state.
-    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s ==\n", rt_node_id(),
+    uint32_t f154 = 0, o154 = 0, coex = 0;
+    rt_154_counters(&f154, &o154, &coex);
+
+    // Everything that matters, every report. A one-off startup banner is invisible to anyone
+    // who was not watching at the moment it scrolled past - and the moment worth watching is
+    // always the one after something went wrong, by which time the banner is long gone.
+    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s  rst=%s ==\n", rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
-           rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int");
+           rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int", rt_reset_reason());
     // Asked-for versus achieved. They differ whenever the radio quantised the request, which
     // is worth seeing rather than hiding behind the number that was typed.
     printf("  pwr: ");
@@ -381,6 +414,21 @@ void rt_report(void)
         printf("  ");
     }
     printf("\n");
+
+    printf("  154 rx: %lu frames, %lu ours, %lu coex-refused tx\n",
+           (unsigned long)f154, (unsigned long)o154, (unsigned long)coex);
+    printf("  heap: %lu free, %lu min\n",
+           (unsigned long)esp_get_free_heap_size(),
+           (unsigned long)esp_get_minimum_free_heap_size());
+
+    // Loud, and repeated for as long as it stands. A packet arriving on a channel this mode
+    // says is off is a bug, and it is spending airtime that another channel was promised.
+    for (int c = 0; c < CH_COUNT; c++) {
+        if (s_rx_offmode[c]) {
+            printf("  !! %s: %lu packets received while this mode says it is OFF\n",
+                   rt_chan_name[c], (unsigned long)s_rx_offmode[c]);
+        }
+    }
 
     bool any = false;
     for (int i = 0; i < RT_MAX_PEERS; i++) {

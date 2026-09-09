@@ -115,6 +115,13 @@ static volatile uint32_t s_tx_err_n[TX_ERR_N];    // ISR writes, tx_task reads
 static uint32_t          s_tx_err_shown[TX_ERR_N];
 static uint32_t          s_err_next_ms;
 
+void rt_154_counters(uint32_t *frames, uint32_t *ours, uint32_t *coex)
+{
+    *frames = s_rx_frames;
+    *ours   = s_rx_ours;
+    *coex   = s_tx_err_n[ESP_IEEE802154_TX_ERR_COEXIST];
+}
+
 void rt_154_apply_power(void)
 {
     RT_TRY(TAG, esp_ieee802154_set_txpower(rt_power_dbm(CH_154)));
@@ -354,5 +361,9 @@ void rt_154_start(void)
 
 void rt_154_start(void) {}
 void rt_154_apply_power(void) {}
+void rt_154_counters(uint32_t *frames, uint32_t *ours, uint32_t *coex)
+{
+    *frames = 0; *ours = 0; *coex = 0;
+}
 
 #endif

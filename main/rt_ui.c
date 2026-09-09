@@ -402,7 +402,10 @@ void rt_ui_notify(void)
         return;
     }
 
-    static char lines[1 + RT_MAX_PEERS * CH_COUNT][RT_LINE_MAX];
+    // S + one T per channel + X + one R per (peer, channel). Undersizing this does not fail
+    // loudly - rt_snapshot_lines() just stops early and the peer rows quietly vanish - so it
+    // is spelled out rather than approximated.
+    static char lines[1 + CH_COUNT + 1 + RT_MAX_PEERS * CH_COUNT][RT_LINE_MAX];
     const int   n = rt_snapshot_lines(lines, (int)(sizeof(lines) / sizeof(lines[0])));
 
     for (int i = 0; i < n; i++) {

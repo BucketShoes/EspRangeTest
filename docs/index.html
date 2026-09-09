@@ -50,6 +50,11 @@
   .pwrval{width:62px;flex:none;text-align:right;font-variant-numeric:tabular-nums;
           font-size:13px}
   .pwrval.pending{color:var(--warn)}
+  .diag{border-top:1px solid var(--line);margin-top:10px;padding-top:7px;
+        font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .diag div{padding:1px 0}
+  .diaghead{font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+            font-weight:600;margin-bottom:3px}
   code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12px}
 </style>
 </head>
@@ -228,8 +233,13 @@ function onLine(d, line) {
     // Uptime going backwards is the only reliable sign a board reset - it comes back on its
     // own, reconnects on its own, and otherwise says nothing about having lost everything.
     if (d.uptime !== undefined && up < d.uptime) {
-      logMsg(`${d.name}: rebooted (uptime ${d.uptime}s to ${up}s) - back on defaults`, true);
+      logMsg(`${d.name}: REBOOTED after ${d.uptime}s` +
+             (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
       d.rebootAt = Date.now();
+      d.reboots = (d.reboots ?? 0) + 1;
+      // Force the reset reason to be re-logged: it is the single most useful thing to know
+      // right now, and it may well have changed.
+      d.diag = undefined;
     }
     d.gen = (d.gen ?? 0) + 1;
     for (const [k, r] of d.rows) {
@@ -249,6 +259,24 @@ function onLine(d, line) {
       pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
       gen: d.gen ?? 0,
     });
+  } else if (f[0] === 'T') {
+    // T,chan,queued,ok,rejected,offmode
+    (d.tx ||= new Map()).set(f[1], {
+      queued: +f[2], ok: +f[3], rejected: +f[4], offmode: +f[5],
+    });
+  } else if (f[0] === 'X') {
+    // X,resetReason,heapFree,heapMin,rx154frames,rx154ours,coexRefused
+    const prev = d.diag;
+    d.diag = {
+      rst: f[1], heap: +f[2], heapMin: +f[3],
+      frames: +f[4], ours: +f[5], coex: +f[6],
+    };
+    // The board reports why it last reset in every report, so the page learns it the moment it
+    // connects - no need to have been watching serial when it booted.
+    if (!prev || prev.rst !== d.diag.rst) {
+      logMsg(`${d.name}: last reset was ${d.diag.rst}`,
+             /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
+    }
   }
   scheduleRender();
 }
@@ -262,47 +290,16 @@ async function cmd(d, ...v) {
 // reads it back as.
 const setPwr = (d, ch, dbm) => cmd(d, CMD_PWR_SET + ch, dbm & 0xff);
 
-// ---- desired state -----------------------------------------------------------------------
+// ---- no desired state ---------------------------------------------------------------------
 //
-// What this page has asked a board for, kept apart from what the board last reported.
+// This page does not restore anything, and does not remember what it asked for in order to
+// re-apply it later. An earlier revision did both, on reconnect, and it was wrong twice over:
+// re-applying a setting that had just caused a reset is a loop, and more importantly it hides
+// the event. The board does whatever it does - including coming up on defaults after a reset -
+// and the page's job is to show what actually happened, not to paper over it.
 //
-// A board comes up in its defaults after a reset, which is the right behaviour and is the
-// recovery path: whatever mode you got yourself stuck in, the reset button undoes it. But that
-// same reset silently undoes a setting you made two minutes ago, and mid-walk the first sign
-// of it is numbers that stop making sense.
-//
-// So: notice the reboot and say so, loudly, in the log and on the card.
-//
-// But restore only when asked. Doing it automatically on reconnect is a trap when the reboot
-// was *caused* by a setting - a board that browns out at maximum transmit power would be
-// handed maximum transmit power again the moment it came back, and again, and again. The
-// operator gets a button; the page never decides on its own.
-//
-// Nothing is persisted: reloading the page forgets what it knew.
-const want = d => (d.want ||= {});
-const hasWant = d => d.want && Object.keys(d.want).length > 0;
-
-async function resync(d, why) {
-  const w = d.want;
-  if (!w || !d.cmd) return;
-  logMsg(`${d.name}: ${why}, restoring settings`);
-  try {
-    // All of this is a sequence of ordinary commands from this page over BLE - the board does
-    // not restore anything of its own, ever, and always boots into normal mode. Power and
-    // antenna go first and mode last, because the mode may be the one that takes BLE off the
-    // air (wifi+phone), and everything else needs to have landed before that can happen.
-    if (w.pwr) {
-      for (let ch = 0; ch < PWR_CH.length; ch++) {
-        if (w.pwr[ch] !== undefined) await setPwr(d, ch, w.pwr[ch]);
-      }
-    }
-    if (w.ant !== undefined) await cmd(d, w.ant ? CMD_ANT_EXT : CMD_ANT_INT);
-    if (w.lr  !== undefined) await cmd(d, w.lr ? CMD_LR_ON : CMD_LR_OFF);
-    if (w.lc  !== undefined) await cmd(d, w.lc);
-  } catch (e) {
-    fail(`${d.name}: restore failed - ${e.message}`);
-  }
-}
+// The sliders still hold the number you set, so after a reset they read "20 ≠ -15": that is
+// the board telling you it reverted, in the one place you were already looking.
 
 const pdrClass = p => p < 0 ? 'dim' : p >= 90 ? 'ok' : p >= 50 ? 'warn' : 'bad';
 const rssiClass = r => r >= -70 ? 'ok' : r >= -90 ? 'warn' : 'bad';
@@ -338,7 +335,7 @@ function buildCard(d) {
   LC.forEach((label, i) => {
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = () => { want(d).lc = i; cmd(d, i); };
+    b.onclick = () => cmd(d, i);
     modes.appendChild(b);
     R.modes.push(b);
   });
@@ -349,32 +346,15 @@ function buildCard(d) {
   R.lr = document.createElement('button');
   R.lr.title = 'Long-range PHY for Wi-Fi and ESP-NOW. Non-ESP devices, including this phone, ' +
                'cannot see the board’s AP while it is on.';
-  R.lr.onclick = () => {
-    const on = !d.lr;
-    want(d).lr = on;
-    cmd(d, on ? CMD_LR_ON : CMD_LR_OFF);
-  };
+  R.lr.onclick = () => cmd(d, d.lr ? CMD_LR_OFF : CMD_LR_ON);
   modes.appendChild(R.lr);
 
   R.ant = document.createElement('button');
   R.ant.title = 'RF switch port. Internal is the onboard ceramic antenna; external is the ' +
                 'U.FL connector. Selecting external with nothing fitted takes the board off ' +
                 'the air - power cycle to get back to internal.';
-  R.ant.onclick = () => {
-    const ext = !d.ant;
-    want(d).ant = ext;
-    cmd(d, ext ? CMD_ANT_EXT : CMD_ANT_INT);
-  };
+  R.ant.onclick = () => cmd(d, d.ant ? CMD_ANT_INT : CMD_ANT_EXT);
   modes.appendChild(R.ant);
-
-  // Operator-triggered, never automatic - see the note on resync().
-  R.restore = document.createElement('button');
-  R.restore.textContent = 'restore';
-  R.restore.title = 'Re-send the mode, antenna, LR and power this page last set. Useful after '
-                  + 'the board has reset; deliberately manual, so a setting that causes a '
-                  + 'reset cannot be re-applied in a loop.';
-  R.restore.onclick = () => resync(d, 'restore requested');
-  modes.appendChild(R.restore);
 
   const disc = document.createElement('button');
   disc.textContent = 'Disconnect';
@@ -410,10 +390,8 @@ function buildCard(d) {
     return row;
   };
 
-  const setWantPwr = (ch, v) => { (want(d).pwr ||= [])[ch] = v; setPwr(d, ch, v); };
-
   PWR_CH.forEach((name, ch) =>
-    pwr.appendChild(mkRow(name, PWR_SPAN, v => setWantPwr(ch, v))));
+    pwr.appendChild(mkRow(name, PWR_SPAN, v => setPwr(d, ch, v))));
 
   // "all" is a command, not a state, so it has nothing of its own to report. Moving it drives
   // the three radio sliders locally and immediately - no round trip. The board is told
@@ -425,15 +403,16 @@ function buildCard(d) {
       sl.s.value = v;
       paintSlider(sl);
     });
-    // Recorded per radio, not as an "all" of its own, so a restore replays it the same way -
-    // and each radio still clamps to its own limits on the board.
-    want(d).pwr = PWR_CH.map(() => v);
     setPwr(d, PWR_CH.length, v);
   }, 'all'));
   el.appendChild(pwr);
 
   R.body = document.createElement('div');
   el.appendChild(R.body);
+
+  R.diag = document.createElement('div');
+  R.diag.className = 'diag';
+  el.appendChild(R.diag);
   return R;
 }
 
@@ -474,8 +453,12 @@ function updateCard(d) {
   // Sticks around for a while after the event, so a reboot that happened while you were
   // looking at the other board is still visible when you look back.
   const rebooted = d.rebootAt && now - d.rebootAt < 30000;
+  const rst = d.diag && d.diag.rst;
+  const rstBad = rst && /PANIC|WDT|BROWNOUT/.test(rst);
   R.meta.innerHTML =
     (rebooted ? '<b class="bad">REBOOTED</b> · ' : '') +
+    (d.reboots ? `<b class="bad">${d.reboots} reset${d.reboots > 1 ? 's' : ''}</b> · ` : '') +
+    (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
     `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
     `report <b class="${linkStale ? 'bad' : 'dim'}">` +
@@ -490,8 +473,6 @@ function updateCard(d) {
                     : d.ant ? 'ant external' : 'ant internal';
   R.ant.className = d.ant ? 'on' : '';
 
-  R.restore.disabled = !hasWant(d);
-  R.restore.className = rebooted && hasWant(d) ? 'pri' : '';
 
   R.sliders.forEach((sl, i) => {
     const all = i >= PWR_CH.length;
@@ -510,6 +491,33 @@ function updateCard(d) {
 
   const rows = [...d.rows.values()].sort(
     (a, b) => (a.peer + a.ch).localeCompare(b.peer + b.ch));
+
+  // Transmit accounting and faults, always shown - not folded away behind "everything looks
+  // fine", because the whole problem with this rig has been failures that leave no trace on
+  // the page. If a channel is transmitting and nothing is coming back, that is the difference
+  // between "out of range" and "not actually transmitting", and it belongs on screen.
+  const diag = [];
+  if (d.tx) {
+    for (const name of PWR_CH) {
+      const t = d.tx.get(name);
+      if (!t) continue;
+      const bits = [`${t.ok}/${t.queued} on air`];
+      if (t.rejected) bits.push(`<b class="warn">${t.rejected} rejected</b>`);
+      if (t.offmode)  bits.push(`<b class="bad">${t.offmode} RX WHILE OFF</b>`);
+      diag.push(`<span class="ch">${name}</span> ${bits.join(' · ')}`);
+    }
+  }
+  if (d.diag) {
+    const x = d.diag;
+    diag.push(`<span class="ch">154 rx</span> ${x.ours}/${x.frames} ours` +
+              (x.coex ? ` · <b class="warn">${x.coex} coex-refused</b>` : ''));
+    diag.push(`<span class="ch">heap</span> ${(x.heap / 1024).toFixed(0)}k free, ` +
+              `${(x.heapMin / 1024).toFixed(0)}k min`);
+  }
+  R.diag.innerHTML = diag.length
+    ? '<div class="diaghead">diagnostics</div>' +
+      diag.map(s => `<div>${s}</div>`).join('')
+    : '';
 
   if (!rows.length) {
     R.body.innerHTML =

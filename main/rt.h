@@ -191,6 +191,11 @@ void rt_power_set_actual(int chan, int8_t dbm);
 // the button task. Those two just mark themselves dirty and pick it up on their own cycle.
 void rt_wifi_apply_power(void);
 void rt_154_apply_power(void);
+
+// 802.15.4's own counters, for the periodic report. frames = everything the radio handed up,
+// ours = what survived validation, coex = transmits the arbiter refused. Zeroed on targets
+// without the radio.
+void rt_154_counters(uint32_t *frames, uint32_t *ours, uint32_t *coex);
 void rt_ble_apply_power(void);
 
 // True once BLE's transmit power has actually been programmed, or if BLE is not running at
@@ -243,6 +248,11 @@ void rt_tx_failed(int chan);
 // Record a reception. Ignores anything that is not ours.
 void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi);
 
+// Why the board last reset, as a short word ("power-on", "BROWNOUT", "PANIC"...). Printed in
+// every report, not once at boot: a board that resets mid-walk scrolls its startup banner past
+// long before anyone looks, and "it came back on defaults" is not a diagnosis.
+const char *rt_reset_reason(void);
+
 // Print the whole table.
 void rt_report(void);
 
@@ -251,7 +261,16 @@ void rt_report(void);
 // debugging app, and it needs no decoder on the browser side.
 //   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>,<ant_external>
 //   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>
-#define RT_LINE_MAX 72
+//   T,<chan>,<queued>,<ok>,<rejected>,<offmode_rx>
+//   X,<reset_reason>,<heap_free>,<heap_min>,<rx154_frames>,<rx154_ours>,<coex_refused>
+//
+// T and X carry what the serial report carries. The page has to be able to diagnose a failure
+// on its own: the operator is not next to a terminal on a range walk, and by the time they
+// are, the interesting lines have scrolled away.
+// Longest is the X line with six wide counters. 72 was enough before T and X existed and is
+// not now; truncation here would be silent, and a silently truncated diagnostic is worse than
+// no diagnostic at all.
+#define RT_LINE_MAX 96
 int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);
 
 void rt_espnow_start(void);
