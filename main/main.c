@@ -13,6 +13,7 @@
 
 #include "driver/gpio.h"
 #include "esp_chip_info.h"
+#include "esp_system.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -449,6 +450,35 @@ void app_main(void)
     esp_chip_info(&info);
     ESP_LOGI(TAG, "%s rev v%d.%d, node %02X", CONFIG_IDF_TARGET,
              info.revision / 100, info.revision % 100, rt_node_id());
+
+    // Why the last reset happened, printed before anything else can obscure it.
+    //
+    // A board that resets mid-test looks identical from the outside whatever the cause - the
+    // link drops, it comes back on defaults, and the numbers stop making sense. This is the
+    // one place that says which it was. BROWNOUT in particular is the answer to "does it
+    // reset at maximum transmit power", and it is a question guessing cannot settle: a
+    // transmit-current brownout, a watchdog and a crash all present the same way.
+    const esp_reset_reason_t why = esp_reset_reason();
+    const char *why_txt;
+    switch (why) {
+    case ESP_RST_POWERON:  why_txt = "power-on";                        break;
+    case ESP_RST_SW:       why_txt = "software restart";                break;
+    case ESP_RST_PANIC:    why_txt = "PANIC (crash)";                   break;
+    case ESP_RST_INT_WDT:  why_txt = "interrupt watchdog";              break;
+    case ESP_RST_TASK_WDT: why_txt = "task watchdog";                   break;
+    case ESP_RST_WDT:      why_txt = "other watchdog";                  break;
+    case ESP_RST_BROWNOUT: why_txt = "BROWNOUT (supply sagged)";        break;
+    case ESP_RST_EXT:      why_txt = "external reset pin";              break;
+    case ESP_RST_DEEPSLEEP:why_txt = "deep sleep wake";                 break;
+    case ESP_RST_USB:      why_txt = "USB peripheral reset";            break;
+    default:               why_txt = "unknown";                         break;
+    }
+    if (why == ESP_RST_BROWNOUT || why == ESP_RST_PANIC ||
+        why == ESP_RST_INT_WDT || why == ESP_RST_TASK_WDT || why == ESP_RST_WDT) {
+        ESP_LOGE(TAG, "last reset: %s (%d)", why_txt, (int)why);
+    } else {
+        ESP_LOGI(TAG, "last reset: %s (%d)", why_txt, (int)why);
+    }
 
     ESP_LOGI(TAG, "stage %d (raise RT_STAGE in platformio.ini to add radios)", RT_STAGE);
 

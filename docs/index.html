@@ -14,6 +14,7 @@
   button{background:var(--card);color:var(--fg);border:1px solid var(--line);
          border-radius:9px;padding:11px 14px;font-size:15px;cursor:pointer}
   button:active{background:#262b36}
+  button:disabled{opacity:.35;cursor:default}
   button.pri{background:var(--acc);color:#06121f;border-color:var(--acc);font-weight:600}
   button.on{background:var(--acc);color:#06121f;border-color:var(--acc)}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
@@ -195,11 +196,7 @@ async function connect(dev) {
   document.getElementById('hint').style.display = 'none';
   render();
 
-  // A reconnect lands here as well as a first connect. If this page had already set the board
-  // up, put it back - the board may have reset while it was away, and a silent reversion to
-  // defaults mid-walk is exactly what makes the numbers stop adding up.
   logMsg(`${d.name}: connected`);
-  resync(d, 'reconnected');
 }
 
 function disconnect(dev, d) {
@@ -207,33 +204,50 @@ function disconnect(dev, d) {
   if (dev.gatt.connected) dev.gatt.disconnect();
 }
 
+// Each report is a complete snapshot: one S line, then one R line per (peer, channel) the
+// board is still tracking. The board drops a row entirely once it stops tracking it - a mode
+// change wipes the table, so the channels that mode is not measuring simply stop being
+// reported.
+//
+// That matters because this page used to accumulate rows into a Map and never remove them. A
+// row the board had stopped sending stayed on screen forever, frozen at whatever it last said,
+// and its displayed age was the board's frozen age plus time-since-last-report - which resets
+// every report. So it hovered instead of growing, never reached zero, and looked exactly like
+// a channel receiving packets that could not possibly exist: the board was silent about it and
+// the screen kept showing it.
+//
+// The S line is the frame marker, so it bumps a generation counter. Rows carry the generation
+// they arrived in, and anything older than the previous complete report is dropped. One
+// report's grace, so a row is not flickered out while its own report is still arriving.
 function onLine(d, line) {
   const f = line.trim().split(',');
   d.seen = Date.now();
 
   if (f[0] === 'S') {
-    // f[5] (power) is absent from firmware older than the power-level work; leave d.pwr
-    // undefined in that case rather than showing "min", which would be a guess.
     const up = +f[2];
     // Uptime going backwards is the only reliable sign a board reset - it comes back on its
     // own, reconnects on its own, and otherwise says nothing about having lost everything.
     if (d.uptime !== undefined && up < d.uptime) {
       logMsg(`${d.name}: rebooted (uptime ${d.uptime}s to ${up}s) - back on defaults`, true);
       d.rebootAt = Date.now();
-      resync(d, 'rebooted');
     }
+    d.gen = (d.gen ?? 0) + 1;
+    for (const [k, r] of d.rows) {
+      if (r.gen < d.gen - 1) d.rows.delete(k);
+    }
+
     d.node = f[1]; d.uptime = up; d.lc = +f[3]; d.lr = +f[4];
     // Achieved dBm per radio, in CH_ order - what the radio reported back, not what was asked
     // for. Absent on firmware older than the power work; left undefined rather than defaulted.
     if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
-    // Absent on firmware older than the antenna work; undefined rather than assumed internal,
-    // since "we do not know which antenna this reading came through" is worth showing.
+    // Absent on firmware older than the antenna work; undefined rather than assumed internal.
     if (f.length > 8) d.ant = +f[8];
   } else if (f[0] === 'R') {
     // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
     d.rows.set(f[1] + '/' + f[2], {
       peer: f[1], ch: f[2], rssi: +f[3], avg: +f[4], min: +f[5], max: +f[6],
       pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
+      gen: d.gen ?? 0,
     });
   }
   scheduleRender();
@@ -257,19 +271,26 @@ const setPwr = (d, ch, dbm) => cmd(d, CMD_PWR_SET + ch, dbm & 0xff);
 // same reset silently undoes a setting you made two minutes ago, and mid-walk the first sign
 // of it is numbers that stop making sense.
 //
-// So: notice the reboot, say so in the log, and put the board back where it was. Restoring is
-// safe precisely because it can only happen over a working control channel - if the write
-// lands, control is working, and if it does not there was nothing to restore anyway. Nothing
-// is persisted here; reloading the page forgets it, which is how you stop it.
+// So: notice the reboot and say so, loudly, in the log and on the card.
+//
+// But restore only when asked. Doing it automatically on reconnect is a trap when the reboot
+// was *caused* by a setting - a board that browns out at maximum transmit power would be
+// handed maximum transmit power again the moment it came back, and again, and again. The
+// operator gets a button; the page never decides on its own.
+//
+// Nothing is persisted: reloading the page forgets what it knew.
 const want = d => (d.want ||= {});
+const hasWant = d => d.want && Object.keys(d.want).length > 0;
 
 async function resync(d, why) {
   const w = d.want;
   if (!w || !d.cmd) return;
   logMsg(`${d.name}: ${why}, restoring settings`);
   try {
-    // Power and antenna first, mode last: the mode may be the one that takes BLE off the air
-    // (wifi+phone), so everything else needs to have landed before that can happen.
+    // All of this is a sequence of ordinary commands from this page over BLE - the board does
+    // not restore anything of its own, ever, and always boots into normal mode. Power and
+    // antenna go first and mode last, because the mode may be the one that takes BLE off the
+    // air (wifi+phone), and everything else needs to have landed before that can happen.
     if (w.pwr) {
       for (let ch = 0; ch < PWR_CH.length; ch++) {
         if (w.pwr[ch] !== undefined) await setPwr(d, ch, w.pwr[ch]);
@@ -345,6 +366,15 @@ function buildCard(d) {
     cmd(d, ext ? CMD_ANT_EXT : CMD_ANT_INT);
   };
   modes.appendChild(R.ant);
+
+  // Operator-triggered, never automatic - see the note on resync().
+  R.restore = document.createElement('button');
+  R.restore.textContent = 'restore';
+  R.restore.title = 'Re-send the mode, antenna, LR and power this page last set. Useful after '
+                  + 'the board has reset; deliberately manual, so a setting that causes a '
+                  + 'reset cannot be re-applied in a loop.';
+  R.restore.onclick = () => resync(d, 'restore requested');
+  modes.appendChild(R.restore);
 
   const disc = document.createElement('button');
   disc.textContent = 'Disconnect';
@@ -459,6 +489,9 @@ function updateCard(d) {
   R.ant.textContent = d.ant === undefined ? 'ant ?'
                     : d.ant ? 'ant external' : 'ant internal';
   R.ant.className = d.ant ? 'on' : '';
+
+  R.restore.disabled = !hasWant(d);
+  R.restore.className = rebooted && hasWant(d) ? 'pri' : '';
 
   R.sliders.forEach((sl, i) => {
     const all = i >= PWR_CH.length;
