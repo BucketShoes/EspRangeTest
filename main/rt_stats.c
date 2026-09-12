@@ -12,6 +12,10 @@
 
 #include "rt.h"
 
+// The table itself prints with printf; this is only for the format-integrity complaint in
+// rt_snapshot_chunk(), which has to be a log line so it cannot be mistaken for report output.
+static const char *TAG = "stats";
+
 const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
 volatile int g_lc = 0;
@@ -327,68 +331,201 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     l->last_ms = rt_ms();
 }
 
-int rt_snapshot_lines(char out[][RT_LINE_MAX], int max)
+// ---- packed report -------------------------------------------------------------------------
+//
+// Hand-serialised, little-endian, one field at a time. Deliberately not a memcpy of a packed
+// struct: the other end of this wire is a JavaScript DataView, and the only way to be certain
+// the two agree is for both to name every offset explicitly. See the format in rt.h.
+
+static int put_u8(uint8_t *b, int n, uint8_t v)
 {
-    const uint32_t now = rt_ms();
-    int            n   = 0;
+    b[n] = v;
+    return n + 1;
+}
 
-    if (n < max) {
-        // Power fields are the achieved dBm, not the requested one - the UI should show what
-        // the radio is actually doing.
-        // now is captured once, at the top of this function, and every age below is measured
-        // against it - so shipping it lets the page reconstruct exactly when the snapshot was
-        // taken rather than guessing from when the line happened to arrive.
-        snprintf(out[n++], RT_LINE_MAX, "S,%02X,%lu,%d,%d,%d,%d,%d,%d,%lu", rt_node_id(),
-                 (unsigned long)(now / 1000), g_lc, g_lr ? 1 : 0,
-                 rt_power_actual(CH_ESPNOW), rt_power_actual(CH_BLE_ADV),
-                 rt_power_actual(CH_154), g_ant_ext ? 1 : 0, (unsigned long)now);
-    }
+static int put_u16(uint8_t *b, int n, uint32_t v)
+{
+    if (v > 0xFFFF) {
+        v = 0xFFFF;  // clamp rather than wrap: a stuck-at-max age reads as "old", a wrapped
+    }                // one reads as "just arrived", and only one of those is survivable.
+    b[n]     = (uint8_t)(v & 0xFF);
+    b[n + 1] = (uint8_t)(v >> 8);
+    return n + 2;
+}
 
-    // Per-channel transmit accounting and the off-mode fault counter, so the page can show
-    // "we sent 174 and 0 were rejected" without anyone reading serial.
-    for (int c = 0; c < CH_COUNT && n < max; c++) {
-        snprintf(out[n++], RT_LINE_MAX, "T,%s,%lu,%lu,%lu,%lu,%lu", rt_chan_name[c],
-                 (unsigned long)s_tx_count[c], (unsigned long)s_tx_ok[c],
-                 (unsigned long)s_tx_fail[c], (unsigned long)s_rx_offmode[c],
-                 (unsigned long)(s_rx_offmode[c]
-                                 ? (now - s_rx_offmode_ms[c]) / 1000 : 0));
-    }
+static int put_u32(uint8_t *b, int n, uint32_t v)
+{
+    b[n]     = (uint8_t)(v & 0xFF);
+    b[n + 1] = (uint8_t)((v >> 8) & 0xFF);
+    b[n + 2] = (uint8_t)((v >> 16) & 0xFF);
+    b[n + 3] = (uint8_t)((v >> 24) & 0xFF);
+    return n + 4;
+}
 
-    if (n < max) {
-        uint32_t f154 = 0, o154 = 0, coex = 0;
-        rt_154_counters(&f154, &o154, &coex);
-        snprintf(out[n++], RT_LINE_MAX, "X,%s,%lu,%lu,%lu,%lu,%lu", rt_reset_reason(),
-                 (unsigned long)esp_get_free_heap_size(),
-                 (unsigned long)esp_get_minimum_free_heap_size(),
-                 (unsigned long)f154, (unsigned long)o154, (unsigned long)coex);
-    }
-
-    for (int i = 0; i < RT_MAX_PEERS && n < max; i++) {
+// Walk the peer table in the same order twice - once to count, once to emit - so the n_rows in
+// the status block cannot disagree with the rows that follow it.
+static rt_link *row_at(int want, uint8_t *peer_out, uint8_t *chan_out)
+{
+    int seen = 0;
+    for (int i = 0; i < RT_MAX_PEERS; i++) {
         if (!s_peers[i].used) {
             continue;
         }
-        for (int c = 0; c < CH_COUNT && n < max; c++) {
-            rt_link *l = &s_peers[i].ch[c];
-            if (!l->seen) {
+        for (int c = 0; c < CH_COUNT; c++) {
+            if (!s_peers[i].ch[c].seen) {
                 continue;
             }
-            const uint32_t wtot = l->wrx + l->wmissed;
-            const int      wpdr = wtot ? (int)((l->wrx * 100) / wtot) : -1;
-            const uint32_t tot  = l->rx + l->missed;
-            const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
-            const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
+            if (seen == want) {
+                *peer_out = s_peers[i].node;
+                *chan_out = (uint8_t)c;
+                return &s_peers[i].ch[c];
+            }
+            seen++;
+        }
+    }
+    return NULL;
+}
 
-            const int snr = (l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
-
-            snprintf(out[n++], RT_LINE_MAX,
-                     "R,%02X,%s,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu,%d,%u,%d",
-                     s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
-                     l->rssi_min, l->rssi_max, wpdr, tpdr,
-                     (unsigned long)l->rx, (unsigned long)l->missed,
-                     (unsigned long)(now - l->last_ms), snr, l->lqi, l->peer_txdbm);
+int rt_snapshot_rows(void)
+{
+    int n = 0;
+    for (int i = 0; i < RT_MAX_PEERS; i++) {
+        if (!s_peers[i].used) {
+            continue;
+        }
+        for (int c = 0; c < CH_COUNT; c++) {
+            if (s_peers[i].ch[c].seen) {
+                n++;
+            }
         }
     }
     return n;
+}
+
+int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
+{
+    const uint32_t now   = rt_ms();
+    const int      total = rt_snapshot_rows();
+
+    if (cap > RT_RPT_CHUNK_MAX) {
+        cap = RT_RPT_CHUNK_MAX;
+    }
+    // A connection that cannot carry the status block plus one row is not worth half a report.
+    if (cap < RT_RPT_HDR + RT_RPT_STATUS) {
+        return 0;
+    }
+    if (st->started && st->row_next >= total) {
+        return 0;  // done
+    }
+
+    int n = RT_RPT_HDR;  // header is filled in last, once we know if this is the final chunk
+    const uint8_t type = st->started ? RT_RPT_TYPE_ROWS : RT_RPT_TYPE_STATUS;
+
+    if (!st->started) {
+        uint32_t f154 = 0, o154 = 0, coex = 0;
+        rt_154_counters(&f154, &o154, &coex);
+
+        const uint8_t state = (uint8_t)((g_lr ? 1 : 0)
+                                        | (g_ant_ext ? 2 : 0)
+                                        | (rt_wifi_active() ? 4 : 0)
+                                        | (g_conn_2m ? 8 : 0)
+                                        | ((rt_conn_phy_actual() & 0x03) << 4));
+
+        n = put_u8(out, n, RT_RPT_VER);
+        n = put_u8(out, n, rt_node_id());
+        n = put_u8(out, n, (uint8_t)g_lc);
+        n = put_u8(out, n, state);
+        n = put_u32(out, n, now);
+        // Achieved dBm, not requested - the page should show what the radio is doing.
+        for (int c = 0; c < CH_COUNT; c++) {
+            n = put_u8(out, n, (uint8_t)rt_power_actual(c));
+        }
+        n = put_u8(out, n, rt_reset_code());
+        n = put_u32(out, n, (uint32_t)esp_get_free_heap_size());
+        n = put_u32(out, n, (uint32_t)esp_get_minimum_free_heap_size());
+        n = put_u32(out, n, f154);
+        n = put_u32(out, n, o154);
+        n = put_u32(out, n, coex);
+        n = put_u8(out, n, (uint8_t)(total > 255 ? 255 : total));
+
+        for (int c = 0; c < CH_COUNT; c++) {
+            n = put_u32(out, n, s_tx_count[c]);
+            n = put_u32(out, n, s_tx_ok[c]);
+            n = put_u32(out, n, s_tx_fail[c]);
+            n = put_u16(out, n, s_rx_offmode[c]);
+            n = put_u16(out, n, s_rx_offmode[c] ? (now - s_rx_offmode_ms[c]) / 1000 : 0);
+        }
+        // The page decodes this block at fixed offsets, so a field added here without updating
+        // RT_RPT_STATUS - and the matching reader - would silently shift every row that
+        // follows. Say so loudly instead; a wrong offset is not a thing to discover from a
+        // graph that looks a bit odd.
+        if (n - RT_RPT_HDR != RT_RPT_STATUS) {
+            ESP_LOGE(TAG, "status block is %d bytes, RT_RPT_STATUS says %d - the page will "
+                          "mis-decode every row", n - RT_RPT_HDR, RT_RPT_STATUS);
+        }
+        st->started = 1;
+    }
+
+    while (st->row_next < total && n + RT_RPT_ROW <= cap) {
+        uint8_t  peer = 0, chan = 0;
+        rt_link *l = row_at(st->row_next, &peer, &chan);
+        if (l == NULL) {
+            break;  // table changed under us; the next report carries the truth
+        }
+        st->row_next++;
+
+        const uint32_t wtot = l->wrx + l->wmissed;
+        const int      wpdr = wtot ? (int)((l->wrx * 100) / wtot) : -1;
+        const uint32_t tot  = l->rx + l->missed;
+        const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
+        const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
+        const int      snr  = (l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
+
+        n = put_u8(out, n, peer);
+        n = put_u8(out, n, chan);
+        n = put_u8(out, n, (uint8_t)l->rssi_last);
+        n = put_u8(out, n, (uint8_t)mean);
+        n = put_u8(out, n, (uint8_t)l->rssi_min);
+        n = put_u8(out, n, (uint8_t)l->rssi_max);
+        n = put_u8(out, n, (uint8_t)wpdr);
+        n = put_u8(out, n, (uint8_t)tpdr);
+        n = put_u32(out, n, l->rx);
+        n = put_u32(out, n, l->missed);
+        n = put_u16(out, n, now - l->last_ms);
+        n = put_u8(out, n, (uint8_t)snr);
+        n = put_u8(out, n, l->lqi);
+        n = put_u8(out, n, (uint8_t)l->peer_txdbm);
+    }
+
+    const bool last = (st->row_next >= total);
+    out[0] = type;
+    out[1] = gen;
+    out[2] = (uint8_t)st->chunk;
+    out[3] = last ? 0x01 : 0x00;
+    st->chunk++;
+    return n;
+}
+
+// End of a report period. Clears the window counters that "pdr now" is computed from.
+//
+// This is called by app_main once, after *both* consumers have read them - and that ordering is
+// the whole point. rt_report() used to clear them itself, as the last thing it did per link,
+// and app_main calls rt_report() immediately before rt_ui_notify(). So the serial table got a
+// real "pdr now" and the phone read the counters microseconds after they were zeroed, which
+// made wtot zero, which made the page's pdr_now -1 - every report, since the column existed.
+//
+// Two readers of one window means neither of them may own clearing it.
+void rt_snapshot_window_reset(void)
+{
+    for (int i = 0; i < RT_MAX_PEERS; i++) {
+        if (!s_peers[i].used) {
+            continue;
+        }
+        for (int c = 0; c < CH_COUNT; c++) {
+            s_peers[i].ch[c].wrx     = 0;
+            s_peers[i].ch[c].wmissed = 0;
+        }
+    }
 }
 
 void rt_report(void)
@@ -489,8 +626,8 @@ void rt_report(void)
                 printf(" lqi %u", l->lqi);
             }
             printf("\n");
-
-            l->wrx = l->wmissed = 0;
+            // Window counters are NOT cleared here - app_main does it after the phone report
+            // has been built too. See rt_snapshot_window_reset().
         }
     }
     if (!any) {

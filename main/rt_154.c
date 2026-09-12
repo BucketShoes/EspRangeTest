@@ -214,6 +214,38 @@ static bool transmit_with_retries(uint8_t *frame)
     return false;
 }
 
+// The receiver is a mode-level thing too, not just the transmitter.
+//
+// This radio is configured rx_when_idle at startup and, until now, was never told to stop - so
+// in espnow-solo, ble_adv-solo and wifi+phone modes the 802.15.4 receiver stayed on
+// continuously while the report claimed the channel was off. A receiver is not free: this one
+// is a 100%-duty claim on the antenna, and it sits at the bottom of the coex arbiter, so it
+// spent those modes losing every arbitration and taking time from the channel actually under
+// test. It is exactly the fault this project already fixed twice - once for the BLE scanner,
+// once for the Wi-Fi driver - in the one radio nobody went back to check.
+//
+// Driven from tx_task rather than from rt_set_lc(), so every radio call in this file happens on
+// one task. Costs up to one TX_PERIOD_MS of latency on a mode change, which is a deliberate,
+// operator-commanded event.
+static bool s_rx_on = true;
+
+static void apply_rx_gate(void)
+{
+    const bool want = rt_tx_enabled(CH_154);
+    if (want == s_rx_on) {
+        return;
+    }
+    if (want) {
+        RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(true));
+        RT_TRY(TAG, esp_ieee802154_receive());
+    } else {
+        RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(false));
+        RT_TRY(TAG, esp_ieee802154_sleep());
+    }
+    s_rx_on = want;
+    ESP_LOGI(TAG, "receiver %s", want ? "on" : "asleep (low contention on another channel)");
+}
+
 static void tx_task(void *pv)
 {
     (void)pv;
@@ -221,6 +253,7 @@ static void tx_task(void *pv)
 
     for (;;) {
         report_tx_errors();
+        apply_rx_gate();
         if (rt_tx_enabled(CH_154)) {
             uint8_t frame[1 + HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN];
             uint8_t *f = &frame[1];

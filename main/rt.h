@@ -125,6 +125,36 @@ void rt_set_lr(bool lr);
 #define RT_CMD_ANT_INT 0x82
 #define RT_CMD_ANT_EXT 0x83
 
+// ---- Control-link PHY --------------------------------------------------------------------
+//
+// The phone connection is used two completely different ways, and they want opposite PHYs:
+//
+//   coded S=8 - the link itself is under test. How far can a phone stay connected? This is the
+//               long-range option and the default, because it is also the safe one: a link
+//               that is too slow still reaches.
+//   2M        - the link is not under test at all; the phone is in a pocket next to the board
+//               and is only a screen for some *other* channel's results. Here the report is
+//               pure overhead stolen from the channel being measured, and 2M is the cheapest
+//               way to carry it - roughly 16x less airtime per byte than coded S=8.
+//
+// Nothing in between. 1M and S=2 are compromises for a decision that does not need one.
+//
+// Defaults to coded, and the button restore puts it back - same rule as everywhere else here:
+// no command may leave the board somewhere the physical control cannot reach. Selecting 2M and
+// then walking out of range is a real way to lose the link, which is precisely why the restore
+// gesture has to undo it.
+#define RT_CMD_PHY_CODED 0x84
+#define RT_CMD_PHY_2M    0x85
+
+extern volatile bool g_conn_2m;
+void rt_set_conn_phy(bool two_m);
+
+// What the controller says the connection actually settled on, from
+// BLE_GAP_EVENT_PHY_UPDATE_COMPLETE: 0 unknown, 1 = 1M, 2 = 2M, 3 = coded. Requested and
+// achieved are both reported, for the same reason transmit power is - the phone can decline,
+// and an 8x airtime difference is not something to assume went through.
+uint8_t rt_conn_phy_actual(void);
+
 // ---- Antenna selection -------------------------------------------------------------------
 //
 // The XIAO's RF switch has two ports: RF1 is the onboard ceramic chip antenna, RF2 is the U.FL
@@ -261,34 +291,103 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
 // long before anyone looks, and "it came back on defaults" is not a diagnosis.
 const char *rt_reset_reason(void);
 
+// The same thing as a code, for the packed report. Kept in step with the name table in main.c;
+// the page holds the matching list. 0 = unknown.
+uint8_t rt_reset_code(void);
+
 // Print the whole table.
 void rt_report(void);
 
-// Current state as short CSV text lines, for the web UI. Text rather than a binary format
-// on purpose: it is the same information the serial report shows, it is readable in a BLE
-// debugging app, and it needs no decoder on the browser side.
-//   S,<node>,<uptime_s>,<lc>,<lr>,<pwr_espnow>,<pwr_ble_adv>,<pwr_154>,<ant_external>,<up_ms>
-//   R,<peer>,<chan>,<rssi>,<avg>,<min>,<max>,<pdr_now>,<pdr_all>,<rx>,<miss>,<age_ms>,<snr>,
-//     <lqi>,<peer_txdbm>
+// ---- The report, packed binary ------------------------------------------------------------
 //
-// up_ms is the board's own millisecond clock at the instant the whole snapshot was taken, and
-// every age_ms in the same report is measured against it. The page needs both: the lines of
-// one report do not arrive together - they are spread over as many connection events as it
-// takes - so "how long since this arrived" is not the same question as "how old was it when
-// the board looked". Without up_ms the two get conflated and the age jitters by however long
-// the report took to transmit. snr is rssi - noise floor, or -128 where the radio does not
-// measure one.
-//   T,<chan>,<queued>,<ok>,<rejected>,<offmode_rx>,<offmode_age_s>
-//   X,<reset_reason>,<heap_free>,<heap_min>,<rx154_frames>,<rx154_ours>,<coex_refused>
+// This used to be CSV text, one ATT notification per line, and the reasoning for that was
+// sound as far as it went: same information as the serial report, readable in a BLE debugging
+// app, no decoder needed in the browser. What it missed is that on coded PHY the cost of a
+// report is dominated by the *number of notifications*, not by their size - each one pays a
+// fresh preamble, access address and FEC block 1 before a single byte of payload, and at S=8
+// that fixed cost is ~376us per packet before the payload's own 8us/bit.
 //
-// T and X carry what the serial report carries. The page has to be able to diagnose a failure
-// on its own: the operator is not next to a terminal on a range walk, and by the time they
-// are, the interesting lines have scrolled away.
-// Longest is the X line with six wide counters. 72 was enough before T and X existed and is
-// not now; truncation here would be silent, and a silently truncated diagnostic is worse than
-// no diagnostic at all.
-#define RT_LINE_MAX 96
-int rt_snapshot_lines(char out[][RT_LINE_MAX], int max);
+// The text report had grown to 8 notifications (S + 3xT + X + 3xR) at 1Hz - the largest single
+// consumer of airtime on the board, larger than any channel it was reporting on. Packed, the
+// two-board case is 142 bytes in ONE notification. Same information, an eighth of the packets.
+//
+// Everything is little-endian and hand-serialised field by field - no packed structs on this
+// wire, because the other end is JavaScript and a DataView has to agree with it byte for byte.
+//
+//   chunk header (4 bytes, every chunk)
+//     u8  type    0x01 status chunk (status block, then as many rows as fit)
+//                 0x02 rows-only continuation chunk
+//     u8  gen     report generation; same across every chunk of one report, wraps at 256
+//     u8  idx     chunk index within this report, from 0
+//     u8  flags   bit0 = last chunk of this report
+//
+//   status block (75 bytes, only in a 0x01 chunk, immediately after the header)
+//     u8  ver           RT_RPT_VER
+//     u8  node
+//     u8  lc
+//     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
+//                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded)
+//     u32 up_ms         board clock when the whole snapshot was taken; every age below is
+//                       measured against it, so the page can put ages on the board's timebase
+//                       instead of on arrival times
+//     i8  pwr[3]        achieved dBm per channel, CH_ order
+//     u8  rst           reset reason, as a code - see rt_reset_code()
+//     u32 heap_free
+//     u32 heap_min
+//     u32 rx154_frames
+//     u32 rx154_ours
+//     u32 coex_refused
+//     u8  n_rows        rows in the whole report, across all chunks
+//     tx[3], 16 bytes each, CH_ order:
+//       u32 queued, u32 ok, u32 rejected, u16 offmode_rx, u16 offmode_age_s
+//
+//   row record (21 bytes, packed end to end after whichever block precedes them)
+//     u8  peer, u8 chan
+//     i8  rssi_last, i8 rssi_avg, i8 rssi_min, i8 rssi_max
+//     i8  pdr_now, i8 pdr_all      -1 where there is no data yet
+//     u32 rx, u32 missed
+//     u16 age_ms                   clamped at 65535
+//     i8  snr                      -128 where the radio measures no noise floor
+//     u8  lqi                      802.15.4 only
+//     i8  peer_txdbm               what the far end said it transmitted at
+//
+// Counters stay u32 rather than being squeezed: at 4 packets/s a u24 wraps in seven weeks and
+// the six bytes saved are not worth a counter that silently rolls over mid-test.
+// 33 bytes of status + 3 x 16 bytes of per-channel tx accounting. Checked against the
+// serialiser at runtime rather than trusted - see rt_snapshot_chunk().
+#define RT_RPT_VER      2
+#define RT_RPT_HDR      4
+#define RT_RPT_STATUS   81
+#define RT_RPT_ROW      21
+#define RT_RPT_TYPE_STATUS 0x01
+#define RT_RPT_TYPE_ROWS   0x02
+
+// Biggest chunk we will ever build. ATT MTU is requested at 247, so 244 bytes of payload; the
+// real limit is read back per connection with ble_att_mtu() and this is only the ceiling.
+#define RT_RPT_CHUNK_MAX 244
+
+// Serialise the next chunk of a report into out. Call with *state zeroed to start a report,
+// then keep calling until it returns 0; each call emits one notification's worth. Returns the
+// number of bytes written.
+//
+// cap is the largest chunk this connection can carry (ble_att_mtu() - 3, capped at
+// RT_RPT_CHUNK_MAX). gen is the report generation, chosen by the caller once per report.
+typedef struct {
+    int row_next;   // index of the next row to emit
+    int chunk;      // chunks emitted so far
+    int started;    // status block has gone out
+} rt_rpt_state_t;
+
+int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st);
+
+// How many rows this report will contain. Needed up front, because n_rows goes in the status
+// block and the status block goes out first.
+int rt_snapshot_rows(void);
+
+// End of a report period: clears the counters behind "pdr now". Called by app_main after both
+// the serial report and the phone report have read them - see the comment on the definition
+// for why neither of those two may own it.
+void rt_snapshot_window_reset(void);
 
 void rt_espnow_start(void);
 void rt_ble_start(void);

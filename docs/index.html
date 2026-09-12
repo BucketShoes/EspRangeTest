@@ -100,6 +100,12 @@ const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 // exactly two gestures, tap and hold, and hold has to stay the restore.
 const CMD_ANT_INT = 0x82, CMD_ANT_EXT = 0x83;
 
+// Control-link PHY. Coded S=8 is the default and the long-range one; 2M is the cheap one, for
+// when the phone is next to the board and the report is just overhead on someone else's test.
+// Nothing in between - 1M and S=2 are compromises for a decision that does not need one.
+// Must match RT_CMD_PHY_* in main/rt.h.
+const CMD_PHY_CODED = 0x84, CMD_PHY_2M = 0x85;
+
 // Transmit power in dBm, per radio. Two-byte write: [0xB0 + channel, dbm]; channel 3 sets all
 // three at once. Must match RT_CMD_PWR_SET and s_range[] in the firmware. Ranges are the
 // hardware's - Wi-Fi cannot go below +2dBm, the other two reach -15 - so "all" clamps each
@@ -180,9 +186,7 @@ async function connect(dev) {
   Object.assign(d, { name: dev.name, dev, cmd, live: true, userDisconnected: false, seen: Date.now() });
   devs.set(dev.name, d);
 
-  tx.addEventListener('characteristicvaluechanged', ev => {
-    onLine(d, new TextDecoder().decode(ev.target.value));
-  });
+  tx.addEventListener('characteristicvaluechanged', ev => onNotify(d, ev.target.value));
   await tx.startNotifications();
 
   dev.addEventListener('gattserverdisconnected', () => {
@@ -224,6 +228,146 @@ function disconnect(dev, d) {
 // The S line is the frame marker, so it bumps a generation counter. Rows carry the generation
 // they arrived in, and anything older than the previous complete report is dropped. One
 // report's grace, so a row is not flickered out while its own report is still arriving.
+// ---- notification dispatch -----------------------------------------------------------------
+//
+// The board sends a packed binary report (RT_RPT_VER 2). Older firmware sent CSV text lines.
+// Both are still decoded here, and the two can never be confused: a binary chunk starts with a
+// type byte of 0x01 or 0x02, and every CSV line starts with 'S', 'T', 'X' or 'R' - 0x53, 0x54,
+// 0x58, 0x52. So the first byte alone settles it.
+//
+// This matters more than it looks. The old CSV path had a hard ordering requirement: the page
+// had to be redeployed *before* firmware that changed the format was flashed, or the UI
+// silently stopped parsing. Accepting both removes the ordering entirely - flash and deploy in
+// whatever order, and a board that has not been reflashed yet keeps working.
+const RST_NAMES = ['unknown', 'power-on', 'sw-restart', 'PANIC', 'INT-WDT', 'TASK-WDT',
+                   'WDT', 'BROWNOUT', 'ext-pin', 'deepsleep', 'usb'];
+const PHY_NAMES = ['?', '1M', '2M', 'coded'];
+const CH_NAMES  = ['espnow', 'ble_adv', '154'];
+
+function onNotify(d, view) {
+  d.seen = Date.now();
+  const t = view.getUint8(0);
+  if (t === 0x01 || t === 0x02) return onChunk(d, view);
+  // Older firmware: CSV text, one line per notification.
+  for (const line of new TextDecoder().decode(view).split('\n')) {
+    if (line.trim()) onLine(d, line);
+  }
+}
+
+// Decode one chunk of a packed report. Layout is documented in main/rt.h; every offset here has
+// to match the serialiser in rt_stats.c byte for byte.
+function onChunk(d, v) {
+  const type = v.getUint8(0), gen = v.getUint8(1), last = v.getUint8(3) & 1;
+  let o = 4;
+
+  if (type === 0x01) {
+    const ver = v.getUint8(o);
+    if (ver !== 2) {
+      logMsg(`${d.name}: report format v${ver}, this page decodes v2 - update the page`, true);
+      return;
+    }
+    const node  = v.getUint8(o + 1);
+    const lc    = v.getUint8(o + 2);
+    const state = v.getUint8(o + 3);
+    const upMs  = v.getUint32(o + 4, true);
+
+    // Uptime going backwards is the only reliable sign the board reset - it comes back and
+    // reconnects on its own and otherwise says nothing about having lost everything.
+    const up = Math.floor(upMs / 1000);
+    if (d.uptime !== undefined && up < d.uptime) {
+      logMsg(`${d.name}: REBOOTED after ${d.uptime}s` +
+             (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
+      d.rebootAt = Date.now();
+      d.reboots = (d.reboots ?? 0) + 1;
+      d.offset = undefined;   // board clock restarted; re-learn it
+      d.diag = undefined;
+    }
+
+    // A new report generation retires the previous one's rows, exactly as the S line used to.
+    // One report's grace, so a row is not flickered out while its own report is still arriving.
+    //
+    // First binary chunk from a board that was talking CSV a moment ago (it has just been
+    // reflashed): drop the old rows outright. Their generation numbers came from the other
+    // path's counter and would never compare as stale against this one's.
+    if (d.genN === undefined) d.rows.clear();
+    if (gen !== d.gen) { d.gen = gen; d.genN = (d.genN ?? 0) + 1; }
+    for (const [k, r] of d.rows) {
+      if (r.gen < d.genN - 1) d.rows.delete(k);
+    }
+
+    d.node    = node.toString(16).toUpperCase().padStart(2, '0');
+    d.uptime  = up;
+    d.lc      = lc;
+    d.lr      = state & 1 ? 1 : 0;
+    d.ant     = state & 2 ? 1 : 0;
+    d.wifiOn  = state & 4 ? 1 : 0;
+    d.conn2m  = state & 8 ? 1 : 0;
+    d.connPhy = (state >> 4) & 3;
+
+    d.boardMs = upMs;
+    // offset converts board time to browser time, as a running *minimum*: transit delay is
+    // always positive, so the smallest (arrival - boardMs) ever seen is the best estimate.
+    const candidate = Date.now() - upMs;
+    d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
+
+    d.pwr = [v.getInt8(o + 8), v.getInt8(o + 9), v.getInt8(o + 10)];
+
+    const prev = d.diag;
+    d.diag = {
+      rst:     RST_NAMES[v.getUint8(o + 11)] ?? 'unknown',
+      heap:    v.getUint32(o + 12, true),
+      heapMin: v.getUint32(o + 16, true),
+      frames:  v.getUint32(o + 20, true),
+      ours:    v.getUint32(o + 24, true),
+      coex:    v.getUint32(o + 28, true),
+    };
+    if (!prev || prev.rst !== d.diag.rst) {
+      logMsg(`${d.name}: last reset was ${d.diag.rst}`, /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
+    }
+
+    o += 33;   // status fields; tx records follow
+    d.tx = new Map();
+    for (let c = 0; c < 3; c++, o += 16) {
+      d.tx.set(CH_NAMES[c], {
+        queued:     v.getUint32(o, true),
+        ok:         v.getUint32(o + 4, true),
+        rejected:   v.getUint32(o + 8, true),
+        offmode:    v.getUint16(o + 12, true),
+        offmodeAge: v.getUint16(o + 14, true),
+      });
+    }
+  }
+
+  // Rows fill whatever is left of the chunk, in both types.
+  while (o + 21 <= v.byteLength) {
+    const peer = v.getUint8(o).toString(16).toUpperCase().padStart(2, '0');
+    const ch   = CH_NAMES[v.getUint8(o + 1)] ?? '?';
+    const age  = v.getUint16(o + 16, true);
+    d.rows.set(peer + '/' + ch, {
+      peer, ch,
+      rssi:   v.getInt8(o + 2),
+      avg:    v.getInt8(o + 3),
+      min:    v.getInt8(o + 4),
+      max:    v.getInt8(o + 5),
+      pdrNow: v.getInt8(o + 6),      // -1 = no samples this window
+      pdrAll: v.getInt8(o + 7),
+      rx:     v.getUint32(o + 8, true),
+      miss:   v.getUint32(o + 12, true),
+      age,
+      snr:    v.getInt8(o + 18),     // -128 where the radio measures no noise floor
+      lqi:    v.getUint8(o + 19),
+      ptx:    v.getInt8(o + 20),
+      gen:    d.genN ?? 0,
+      // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
+      // so its age is a straight subtraction from "now" and cannot drift with arrival times.
+      abs:    (d.boardMs ?? 0) - age,
+    });
+    o += 21;
+  }
+
+  scheduleRender();
+}
+
 function onLine(d, line) {
   const f = line.trim().split(',');
   d.seen = Date.now();
@@ -383,6 +527,20 @@ function buildCard(d) {
   R.ant.onclick = () => cmd(d, d.ant ? CMD_ANT_INT : CMD_ANT_EXT);
   modes.appendChild(R.ant);
 
+  // Control-link PHY. Two uses, opposite answers: coded S=8 when the phone link itself is what
+  // is being range-tested, 2M when the phone is in a pocket next to the board and the report is
+  // pure overhead stolen from whatever channel is under test. 2M is ~16x cheaper per byte.
+  //
+  // Shows requested and achieved separately, because the phone can decline and an 8x airtime
+  // difference is not something to assume went through - same reasoning as the power sliders.
+  R.phy = document.createElement('button');
+  R.phy.title = 'Control-link PHY. Coded S=8 is the long-range option and the default. 2M is ' +
+                'about 16x less airtime per byte - use it when the phone is next to the board ' +
+                'and the link is not what you are measuring. Holding the board’s button ' +
+                'restores coded.';
+  R.phy.onclick = () => cmd(d, d.conn2m ? CMD_PHY_CODED : CMD_PHY_2M);
+  modes.appendChild(R.phy);
+
   const disc = document.createElement('button');
   disc.textContent = 'Disconnect';
   disc.onclick = () => disconnect(d.dev, d);
@@ -527,6 +685,19 @@ function updateCard(d) {
   R.ant.textContent = d.ant === undefined ? 'ant ?'
                     : d.ant ? 'ant external' : 'ant internal';
   R.ant.className = d.ant ? 'on' : '';
+
+  // Requested on the left, what the controller actually settled on in brackets when the two
+  // disagree - a phone that declined 2M reads "2M (1M)" rather than silently looking applied.
+  if (d.conn2m === undefined) {
+    R.phy.textContent = 'phy ?';
+    R.phy.className = '';
+  } else {
+    const want = d.conn2m ? '2M' : 'coded';
+    const got  = PHY_NAMES[d.connPhy] ?? '?';
+    const agree = (d.conn2m && d.connPhy === 2) || (!d.conn2m && d.connPhy === 3);
+    R.phy.textContent = agree || !d.connPhy ? `phy ${want}` : `phy ${want} (${got})`;
+    R.phy.className = d.conn2m ? 'on' : '';
+  }
 
 
   R.sliders.forEach((sl, i) => {

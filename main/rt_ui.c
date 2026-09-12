@@ -123,6 +123,48 @@ static void apply_conn_params(bool slow)
 
 static bool s_ui_suspended;
 
+// ---- control-link PHY ----------------------------------------------------------------------
+//
+// Coded S=8 by default, 2M on request. See RT_CMD_PHY_* in rt.h for why those two and nothing
+// between them.
+volatile bool g_conn_2m;
+
+// What the controller actually settled on, from BLE_GAP_EVENT_PHY_UPDATE_COMPLETE. Requested
+// and achieved are both shipped in the report: the phone is free to decline, and the
+// difference between coded S=8 and 2M is about 16x the airtime per byte - far too large a
+// thing to assume went through because it was asked for.
+static volatile uint8_t s_conn_phy_actual;  // 0 unknown, 1 = 1M, 2 = 2M, 3 = coded
+
+uint8_t rt_conn_phy_actual(void)
+{
+    return (s_conn == BLE_HS_CONN_HANDLE_NONE) ? 0 : s_conn_phy_actual;
+}
+
+// Ask the current connection to move. Logged and otherwise ignored on failure: losing the UI
+// connection over a PHY preference would be a far worse outcome than carrying the report at
+// the wrong rate.
+static void apply_conn_phy(void)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
+        return;
+    }
+    const uint8_t mask = g_conn_2m ? BLE_GAP_LE_PHY_2M_MASK : BLE_GAP_LE_PHY_CODED_MASK;
+    // The S=8 preference only means anything when the coded mask is the one being asked for;
+    // it is ignored for 2M, and passing it anyway keeps the call in one place.
+    const int rc = ble_gap_set_prefered_le_phy(s_conn, mask, mask, BLE_GAP_LE_PHY_CODED_S8);
+    ESP_LOGI(TAG, "requested %s on the connection, rc=%d", g_conn_2m ? "2M" : "coded S=8", rc);
+}
+
+void rt_set_conn_phy(bool two_m)
+{
+    if (two_m == g_conn_2m) {
+        return;
+    }
+    g_conn_2m = two_m;
+    s_conn_phy_actual = 0;  // unknown until the controller says otherwise
+    apply_conn_phy();
+}
+
 // Called whenever g_lc changes. LC_WIFI_UI is the one mode that wants BLE fully off, not just
 // throttled - a phone has to reach the AP instead, which only works with LR off (see
 // rt_apply_lc_radios in main.c). Everywhere else, low contention on some other channel just
@@ -178,6 +220,8 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
         rt_set_lr(b[0] == RT_CMD_LR_ON);
     } else if (b[0] == RT_CMD_ANT_INT || b[0] == RT_CMD_ANT_EXT) {
         rt_set_antenna(b[0] == RT_CMD_ANT_EXT);
+    } else if (b[0] == RT_CMD_PHY_CODED || b[0] == RT_CMD_PHY_2M) {
+        rt_set_conn_phy(b[0] == RT_CMD_PHY_2M);
     } else if (b[0] >= RT_CMD_PWR_SET && b[0] <= RT_CMD_PWR_SET + CH_COUNT) {
         if (len < 2) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -228,14 +272,12 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
+            s_conn_phy_actual = 0;
             ESP_LOGI(TAG, "phone connected");
-            // Ask for coded PHY. If the phone declines, the link simply stays on 1M - this
-            // must never be allowed to cost us the UI connection, so the result is logged
-            // and otherwise ignored.
-            const int rc = ble_gap_set_prefered_le_phy(s_conn, BLE_GAP_LE_PHY_CODED_MASK,
-                                                       BLE_GAP_LE_PHY_CODED_MASK,
-                                                       BLE_GAP_LE_PHY_CODED_S8);
-            ESP_LOGI(TAG, "requested coded S=8 on the connection, rc=%d", rc);
+            // Whichever PHY is currently selected. If the phone declines, the link simply
+            // stays on 1M - this must never be allowed to cost us the UI connection, so the
+            // result is logged and otherwise ignored.
+            apply_conn_phy();
             apply_conn_params(UI_SLOW());
         } else {
             start_adv();
@@ -258,6 +300,11 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
         // 1 = 1M, 2 = 2M, 3 = coded. Which coding (S=2 or S=8) is not reported: that needs
         // Bluetooth 5.4 Advertising Coding Selection and the C6 is 5.3.
+        //
+        // Kept, not just logged. This is the single biggest factor in what the control link
+        // costs the channel under test - roughly 16x between 2M and coded S=8 - and serial is
+        // exactly where nobody is looking during a range walk.
+        s_conn_phy_actual = event->phy_updated.tx_phy;
         ESP_LOGI(TAG, "connection PHY now tx=%d rx=%d",
                  event->phy_updated.tx_phy, event->phy_updated.rx_phy);
         return 0;
@@ -402,16 +449,27 @@ void rt_ui_notify(void)
         return;
     }
 
-    // S + one T per channel + X + one R per (peer, channel). Undersizing this does not fail
-    // loudly - rt_snapshot_lines() just stops early and the peer rows quietly vanish - so it
-    // is spelled out rather than approximated.
-    static char lines[1 + CH_COUNT + 1 + RT_MAX_PEERS * CH_COUNT][RT_LINE_MAX];
-    const int   n = rt_snapshot_lines(lines, (int)(sizeof(lines) / sizeof(lines[0])));
+    // What this connection can actually carry in one notification, rather than what we asked
+    // for at build time. A phone that negotiated a smaller MTU gets more, smaller chunks
+    // instead of a silently truncated report.
+    int cap = (int)ble_att_mtu(s_conn) - 3;
+    if (cap > RT_RPT_CHUNK_MAX) {
+        cap = RT_RPT_CHUNK_MAX;
+    }
 
-    for (int i = 0; i < n; i++) {
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(lines[i], strlen(lines[i]));
+    // Wraps at 256, which is all the page needs: it only ever asks "is this the same report as
+    // the chunk before it".
+    static uint8_t s_gen;
+    s_gen++;
+
+    uint8_t         buf[RT_RPT_CHUNK_MAX];
+    rt_rpt_state_t  st = { 0 };
+    int             len;
+
+    while ((len = rt_snapshot_chunk(buf, cap, s_gen, &st)) > 0) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
         if (om == NULL) {
-            return;  // out of buffers; the next cycle will carry the same state anyway
+            return;  // out of buffers; the next cycle carries the same state anyway
         }
         if (ble_gatts_notify_custom(s_conn, s_tx_handle, om) != 0) {
             return;

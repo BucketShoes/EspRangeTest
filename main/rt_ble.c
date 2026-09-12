@@ -263,10 +263,27 @@ static void adv_task(void *pv)
     (void)pv;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(rt_jitter_ms(ADV_PERIOD_MS)));
+
+        // The off-path runs whether or not advertising ever came up.
+        //
+        // This used to sit behind `if (!s_ready) continue;`, which meant that if
+        // ble_gap_ext_adv_configure() had failed at boot, the scanner started by on_sync()
+        // - which does not check s_ready - could never be stopped by any mode change. A
+        // 100%-duty coded receiver, running forever, in modes whose entire purpose is to hand
+        // the antenna to another channel. Nothing about stopping a radio should depend on
+        // whether an unrelated one started.
+        if (!rt_tx_enabled(CH_BLE_ADV)) {
+            ble_gap_ext_adv_stop(ADV_INSTANCE);
+            if (s_scanning) {
+                stop_scan();
+                ESP_LOGI(TAG, "coded PHY scan stopped (low contention on another channel)");
+            }
+            continue;
+        }
         if (!s_ready) {
             continue;
         }
-        if (rt_tx_enabled(CH_BLE_ADV)) {
+        {
             ble_gap_ext_adv_stop(ADV_INSTANCE);
             if (s_pwr_dirty) {
                 // Power is a configure-time parameter, so the whole instance is rebuilt.
@@ -281,12 +298,6 @@ static void adv_task(void *pv)
             if (!s_scanning || s_scan_solo != solo) {
                 stop_scan();
                 start_scan(solo);
-            }
-        } else {
-            ble_gap_ext_adv_stop(ADV_INSTANCE);
-            if (s_scanning) {
-                stop_scan();
-                ESP_LOGI(TAG, "coded PHY scan stopped (low contention on another channel)");
             }
         }
     }

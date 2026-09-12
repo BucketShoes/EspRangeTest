@@ -89,10 +89,16 @@ volatile bool g_lr;
 
 // Set once at boot and then reported in every periodic report, not just the startup banner.
 static const char *s_reset_reason = "?";
+static uint8_t     s_reset_code;   // same thing as a number, for the packed report
 
 const char *rt_reset_reason(void)
 {
     return s_reset_reason;
+}
+
+uint8_t rt_reset_code(void)
+{
+    return s_reset_code;
 }
 
 #if RT_STAGE >= 1
@@ -262,8 +268,13 @@ void rt_apply_lc_radios(int lc)
 // It is the *only* hold, so there is nothing to overshoot into and nothing to release in time.
 static void restore_control(void)
 {
-    ESP_LOGW(TAG, "button restore: all radios on, LR off, control channels back");
+    ESP_LOGW(TAG, "button restore: all radios on, LR off, coded PHY, control channels back");
     rt_set_lr(false);
+    // 2M is the short-range choice, so it is a way to lose the phone by walking away from it -
+    // which makes putting it back part of what "restore every control channel" means. Same
+    // rule as LR and the antenna: no command may strand the board somewhere this button
+    // cannot reach.
+    rt_set_conn_phy(false);
     rt_set_lc(0);
 }
 
@@ -466,19 +477,22 @@ void app_main(void)
     // one place that says which it was. BROWNOUT in particular is the answer to "does it
     // reset at maximum transmit power", and it is a question guessing cannot settle: a
     // transmit-current brownout, a watchdog and a crash all present the same way.
+    // Name and code are set together, and the page holds the matching list. Adding a reason
+    // means touching both halves of this and docs/index.html - which is why they are one
+    // statement each rather than two tables that can drift apart.
     const esp_reset_reason_t why = esp_reset_reason();
     switch (why) {
-    case ESP_RST_POWERON:   s_reset_reason = "power-on";   break;
-    case ESP_RST_SW:        s_reset_reason = "sw-restart"; break;
-    case ESP_RST_PANIC:     s_reset_reason = "PANIC";      break;
-    case ESP_RST_INT_WDT:   s_reset_reason = "INT-WDT";    break;
-    case ESP_RST_TASK_WDT:  s_reset_reason = "TASK-WDT";   break;
-    case ESP_RST_WDT:       s_reset_reason = "WDT";        break;
-    case ESP_RST_BROWNOUT:  s_reset_reason = "BROWNOUT";   break;
-    case ESP_RST_EXT:       s_reset_reason = "ext-pin";    break;
-    case ESP_RST_DEEPSLEEP: s_reset_reason = "deepsleep";  break;
-    case ESP_RST_USB:       s_reset_reason = "usb";        break;
-    default:                s_reset_reason = "unknown";    break;
+    case ESP_RST_POWERON:   s_reset_reason = "power-on";   s_reset_code = 1;  break;
+    case ESP_RST_SW:        s_reset_reason = "sw-restart"; s_reset_code = 2;  break;
+    case ESP_RST_PANIC:     s_reset_reason = "PANIC";      s_reset_code = 3;  break;
+    case ESP_RST_INT_WDT:   s_reset_reason = "INT-WDT";    s_reset_code = 4;  break;
+    case ESP_RST_TASK_WDT:  s_reset_reason = "TASK-WDT";   s_reset_code = 5;  break;
+    case ESP_RST_WDT:       s_reset_reason = "WDT";        s_reset_code = 6;  break;
+    case ESP_RST_BROWNOUT:  s_reset_reason = "BROWNOUT";   s_reset_code = 7;  break;
+    case ESP_RST_EXT:       s_reset_reason = "ext-pin";    s_reset_code = 8;  break;
+    case ESP_RST_DEEPSLEEP: s_reset_reason = "deepsleep";  s_reset_code = 9;  break;
+    case ESP_RST_USB:       s_reset_reason = "usb";        s_reset_code = 10; break;
+    default:                s_reset_reason = "unknown";    s_reset_code = 0;  break;
     }
     ESP_LOGW(TAG, "last reset: %s (%d)", s_reset_reason, (int)why);
 
@@ -525,5 +539,9 @@ void app_main(void)
 #if RT_STAGE >= 4
         rt_ui_notify();
 #endif
+        // After both readers, never inside either. rt_report() used to clear these itself,
+        // which meant the phone's "pdr now" was computed from counters the serial report had
+        // zeroed microseconds earlier - so it read -1 on every report the column ever had.
+        rt_snapshot_window_reset();
     }
 }
