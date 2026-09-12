@@ -56,6 +56,31 @@
   .diaghead{font-size:11px;text-transform:uppercase;letter-spacing:.04em;
             font-weight:600;margin-bottom:3px}
   code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12px}
+  /* ---- field map ---- */
+  .map{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:10px;margin-bottom:12px}
+  .maphead{display:flex;justify-content:space-between;align-items:center;gap:8px;
+           font-size:15px;font-weight:600;margin-bottom:8px}
+  .maphead button{padding:3px 9px;font-size:12px;border-radius:6px;font-weight:400}
+  #cv{display:block;width:100%;height:56vh;min-height:260px;border-radius:9px;
+      background:#0a0c11;border:1px solid var(--line);touch-action:none}
+  .map.fold #cv,.map.fold .mapbar,.map.fold .axes,.map.fold .mapstat{display:none}
+  .mapbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .mapbar button{padding:7px 10px;font-size:13px;border-radius:8px}
+  .ax{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+  .axtop{display:flex;gap:7px;align-items:center}
+  .axkey{width:13px;height:13px;border-radius:3px;flex:none}
+  .axtop select{flex:1;min-width:0;background:var(--bg);color:var(--fg);
+                border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px}
+  .axtop button{padding:7px 9px;font-size:12px;border-radius:8px;flex:none}
+  .axrow{display:flex;gap:10px;align-items:center;margin-top:7px}
+  .axrow.off{display:none}
+  .axlab{width:44px;flex:none;font-size:12px;color:var(--dim)}
+  .axrow input[type=range]{flex:1;min-width:80px;height:26px}
+  .axval{width:78px;flex:none;text-align:right;font-size:12px;
+         font-variant-numeric:tabular-nums;color:var(--dim)}
+  .mapstat{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;
+           margin-top:8px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -66,12 +91,30 @@
   <button id="wake" title="Keep the screen on while walking">Keep awake</button>
 </div>
 <div id="err"></div>
+<div class="map" id="map">
+  <div class="maphead"><span>map</span><button id="fold">hide</button></div>
+  <canvas id="cv"></canvas>
+  <div class="mapbar">
+    <button id="gps">GPS off</button>
+    <button id="follow" class="on">follow</button>
+    <button id="fit">fit</button>
+    <button id="base">set base</button>
+    <button id="mis" class="on">misses</button>
+    <button id="csv">export</button>
+    <button id="wipe">clear</button>
+  </div>
+  <div class="axes" id="axes"></div>
+  <div class="mapstat" id="mapstat"></div>
+</div>
 <div id="devs"></div>
 
 <div class="hint" id="hint">
   Flash two boards, leave one behind, and walk away with the other plus this page.<br><br>
   Connect to either board — each one reports what <em>it</em> can hear, so the numbers are
   for the link between them. Tap <b>Connect a board</b> again to add the second one.<br><br>
+  For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
+  and walk. Every packet gets pinned to where you were standing when it arrived, so bare
+  track is ground where nothing got through.<br><br>
   Needs Chrome on Android or desktop. Web Bluetooth won't work from a
   <code>file://</code> page — use the GitHub Pages URL, or <code>python3 -m http.server</code>
   and open <code>http://localhost:8000</code>.
@@ -343,7 +386,7 @@ function onChunk(d, v) {
     const peer = v.getUint8(o).toString(16).toUpperCase().padStart(2, '0');
     const ch   = CH_NAMES[v.getUint8(o + 1)] ?? '?';
     const age  = v.getUint16(o + 16, true);
-    d.rows.set(peer + '/' + ch, {
+    putRow(d, peer + '/' + ch, {
       peer, ch,
       rssi:   v.getInt8(o + 2),
       avg:    v.getInt8(o + 3),
@@ -415,7 +458,7 @@ function onLine(d, line) {
     if (f.length > 8) d.ant = +f[8];
   } else if (f[0] === 'R') {
     // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
-    d.rows.set(f[1] + '/' + f[2], {
+    putRow(d, f[1] + '/' + f[2], {
       peer: f[1], ch: f[2], rssi: +f[3], avg: +f[4], min: +f[5], max: +f[6],
       pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
       snr: f.length > 12 ? +f[12] : -128,
@@ -475,6 +518,847 @@ const setPwr = (d, ch, dbm) => cmd(d, CMD_PWR_SET + ch, dbm & 0xff);
 const pdrClass = p => p < 0 ? 'dim' : p >= 90 ? 'ok' : p >= 50 ? 'warn' : 'bad';
 const rssiClass = r => r >= -70 ? 'ok' : r >= -90 ? 'warn' : 'bad';
 const pdrTxt = p => p < 0 ? '–' : p + '%';
+
+// ---- field map ------------------------------------------------------------------------------
+//
+// The table above answers "how is the link right now". Walking a range test asks a different
+// question - "where does it work" - and a column of figures cannot answer it, because by the
+// time you have read a number you are standing somewhere else.
+//
+// So the phone's own GPS draws the track, and every packet the board reports is placed on that
+// track at the point the phone was at when the packet *arrived* - not when the report carrying
+// it arrived. The board stamps each packet on its own clock, the page already learns the offset
+// between that clock and this one (a running minimum, so it is the least-delayed estimate), and
+// the row carries the packet's absolute board time. At walking pace the report lag is worth
+// about a metre, which is under GPS noise, but the correction is free and the alternative
+// smears every mark forward by however long its report happened to take crossing.
+//
+// Silence is the other half of the measurement. A stretch of track with no marks on it is a
+// stretch where nothing got through, and that is the thing worth being able to point at.
+//
+// It does not matter which of the two boards the phone is connected to: either way the packets
+// being counted crossed the same link, and either way the phone is where the walker is.
+
+const R_EARTH = 6371000;
+
+const geo = {
+  watch: null,
+  fixes: [],     // {t, lat, lon, acc, x, y} - x metres east, y metres north, from org
+  live:  null,   // most recent fix
+  org:   null,   // projection origin, set by the first fix and never moved
+  err:   null,
+  base:  null,   // {x, y, lat, lon} - operator's mark for where the other board was left
+};
+
+// Equirectangular about the first fix. Over a walk it is exact to well under a GPS fix's own
+// error, and unlike anything conformal it keeps metres as metres in both directions, which is
+// what the scale bar and the range rings need.
+function project(lat, lon) {
+  if (!geo.org) {
+    geo.org = { lat, lon,
+                kx: Math.cos(lat * Math.PI / 180) * R_EARTH * Math.PI / 180,
+                ky: R_EARTH * Math.PI / 180 };
+  }
+  return { x: (lon - geo.org.lon) * geo.org.kx, y: (lat - geo.org.lat) * geo.org.ky };
+}
+const unproject = (x, y) => !geo.org ? { lat: '', lon: '' }
+  : { lat: geo.org.lat + y / geo.org.ky, lon: geo.org.lon + x / geo.org.kx };
+
+// ---- the track ----------------------------------------------------------------------------
+
+const FIX_MAX = 40000;
+// A packet older than the first fix by more than this has no position worth guessing. Inside
+// it, the first fix is close enough - that is the difference between "just before I pressed
+// GPS" and "some time earlier today".
+const FIX_EDGE_MS = 15000;
+
+function onFix(p) {
+  geo.err = null;
+  // p.timestamp comes off the location provider and is not always the same clock as Date.now();
+  // every other time on this page is Date.now(), so the track has to be too, or interpolation
+  // lands every packet in the wrong place and never says why.
+  const t = Date.now();
+  const c = p.coords;
+  const q = project(c.latitude, c.longitude);
+  const prev = geo.fixes[geo.fixes.length - 1];
+
+  // Standing still still produces a fix a second, each a few metres off the last, so keeping
+  // them all turns a pause into a scribble and makes the stillest part of the walk look like
+  // the busiest. A fix that has not really moved just extends the one before it - which is also
+  // exactly right for interpolation, since every packet during the pause belongs at that spot.
+  if (prev && Math.hypot(q.x - prev.x, q.y - prev.y) < 1.5 && t - prev.t < 15000) {
+    prev.t = t;
+    prev.acc = c.accuracy;
+    geo.live = prev;
+  } else {
+    const f = { t, lat: c.latitude, lon: c.longitude, acc: c.accuracy,
+                spd: c.speed, x: q.x, y: q.y };
+    geo.fixes.push(f);
+    if (geo.fixes.length > FIX_MAX) geo.fixes.splice(0, 4000);
+    geo.live = f;
+  }
+  if (!view.seeded) { view.cx = geo.live.x; view.cy = geo.live.y; view.seeded = true; }
+  mapRedraw();
+}
+
+// Where the phone was at browser time t. Returns null when that is genuinely unknown rather
+// than guessing, and flags an extrapolated answer as provisional so the caller asks again once
+// a later fix has arrived to bracket it - which is the normal case for the newest packets,
+// since GPS updates about once a second and packets do not wait for it.
+function posAt(t) {
+  const F = geo.fixes;
+  if (!F.length) return null;
+  const a0 = F[0], aN = F[F.length - 1];
+  if (t <= a0.t) return t > a0.t - FIX_EDGE_MS ? { x: a0.x, y: a0.y, prov: false } : null;
+  if (t >= aN.t) return { x: aN.x, y: aN.y, prov: true };
+  let lo = 0, hi = F.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (F[m].t <= t) lo = m; else hi = m; }
+  const a = F[lo], b = F[hi], u = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0;
+  return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, prov: false };
+}
+
+// ---- samples ------------------------------------------------------------------------------
+//
+// One sample per row per report, created only when something actually happened. rx and missed
+// are totals since boot and only ever climb, so the difference against the previous report is
+// the whole story: how many packets landed, and how many the sequence numbers say were lost on
+// the way.
+//
+// The measurements - rssi, snr, lqi - belong to the newest packet, and that is where the mark
+// goes. The misses are spread over the interval since the previous packet, because that is the
+// interval they were lost in, and where they were lost is precisely the ground worth knowing
+// about. Note that the firmware can only notice a loss when a *later* packet turns up with a
+// gap in its sequence, so walking out of range entirely accumulates no misses at all. That
+// shows up as bare track, which is the honest picture and the one the eye reads fastest.
+
+const SAMP_MAX = 150000;
+const samples = [];
+const series  = new Map();   // key -> {key, dev, peer, ch, n, has:{metric -> bool}}
+let seriesRev = 0;
+
+function putRow(d, key, r) {
+  noteSample(d, key, r, d.rows.get(key));
+  d.rows.set(key, r);
+}
+
+function noteSample(d, key, r, prev) {
+  // No clock offset yet means no way to say when the packet arrived, and "now" would be wrong
+  // by exactly one report period. Skip it; the next report will have the offset.
+  if (d.offset === undefined) return;
+
+  let hits = 1, miss = 0, t0 = null;
+  if (prev) {
+    if (r.rx < prev.rx) {
+      hits = 1;                      // counters restarted - board reset, or the row came back
+    } else {
+      hits = r.rx - prev.rx;
+      miss = Math.max(0, r.miss - prev.miss);
+      t0   = d.offset + prev.abs;
+    }
+    if (!hits && !miss) return;      // the same packet being described again; nothing happened
+  }
+
+  // Two boards can be connected at once and both can hear the same peer, so the series a mark
+  // belongs to is which board heard it as well as which link it came in on.
+  const skey = d.name + '/' + key;
+  const t = d.offset + r.abs;
+  const s = {
+    t, t0: (t0 === null || t0 > t) ? t : t0,
+    key: skey, dev: d.name, peer: r.peer, ch: r.ch,
+    rssi: r.rssi, ptx: r.ptx,
+    loss: r.ptx === undefined ? undefined : r.ptx - r.rssi,
+    snr: r.snr, lqi: r.lqi, pdr: r.pdrNow, pdrall: r.pdrAll,
+    hits, miss,
+    pos: undefined, mpos: null, mprov: false,
+  };
+
+  let S = series.get(skey);
+  if (!S) {
+    S = { key: skey, dev: d.name, peer: r.peer, ch: r.ch, n: 0,
+          // rssi and the two pdr figures exist on every radio; the rest have to prove they
+          // exist on this one before they clutter the menu with a column of dashes.
+          has: { rssi: true, pdr: true, pdrall: true, hit: true,
+                 loss: false, snr: false, lqi: r.ch === '154' } };
+    series.set(skey, S);
+    seriesRev++;
+  }
+  S.n++;
+  if (s.loss !== undefined && !S.has.loss) { S.has.loss = true; seriesRev++; }
+  if (s.snr !== -128 && !S.has.snr)        { S.has.snr  = true; seriesRev++; }
+
+  samples.push(s);
+  if (samples.length > SAMP_MAX) samples.splice(0, 20000);
+  mapRedraw();
+}
+
+// ---- what can go on an axis -----------------------------------------------------------------
+//
+// lo/hi is the metric's own domain and it is what the zero slider spans: zero is the value at
+// which a mark has no length at all. pxu is the other half - how many pixels one unit of the
+// metric is worth.
+//
+// pxu is signed on purpose. Path loss is the one metric here that is worse when it is bigger,
+// so it defaults to a negative scale with zero at the top of its domain. That way a long mark
+// means a good link on every entry in the list, instead of one of them reading backwards
+// against all the others.
+const METRICS = {
+  rssi:   { lab: 'rssi',    unit: 'dBm', su: 'dB',  lo: -125, hi: 10,  zero: -115, pxu: 0.36 },
+  loss:   { lab: 'loss',    unit: 'dB',  su: 'dB',  lo: 0,    hi: 175, zero: 175,  pxu: -0.29 },
+  snr:    { lab: 'snr',     unit: 'dB',  su: 'dB',  lo: -20,  hi: 70,  zero: -10,  pxu: 0.51 },
+  lqi:    { lab: 'lqi',     unit: '',    su: 'lqi', lo: 0,    hi: 255, zero: 0,    pxu: 0.17 },
+  pdr:    { lab: 'pdr now', unit: '%',   su: '%',   lo: 0,    hi: 100, zero: 0,    pxu: 0.4 },
+  pdrall: { lab: 'pdr all', unit: '%',   su: '%',   lo: 0,    hi: 100, zero: 0,    pxu: 0.4 },
+  hit:    { lab: 'packets', unit: '',    su: 'pkt', lo: 0,    hi: 20,  zero: 0,    pxu: 3 },
+};
+const MKEYS = ['rssi', 'loss', 'snr', 'lqi', 'pdr', 'pdrall', 'hit'];
+const mval  = (s, m) => m === 'hit' ? s.hits : s[m];
+
+// The scale control has to cope with "one radio that never left a four dB band all afternoon"
+// and "raw rssi, the whole hundred and thirty five" in the same widget, and those are three
+// orders of magnitude apart. A linear slider cannot do both - it is all thumb at one end and
+// all dead zone at the other, which is exactly how the first version of this failed. So the
+// slider is exponential: 99 notches of about 8.7% each, spanning 0.01 to 30 pixels per unit,
+// with zero in the middle for a flat axis and the sign flipping which way the whiskers point.
+const PXU_MIN = 0.01, PXU_MAX = 30, PXU_STEPS = 99;
+const PXU_RATIO = PXU_MAX / PXU_MIN;
+const clampPxu = v => Math.min(PXU_MAX, Math.max(PXU_MIN, v));
+const pxuFromSlider = q => !q ? 0
+  : Math.sign(q) * PXU_MIN * Math.pow(PXU_RATIO, (Math.abs(q) - 1) / (PXU_STEPS - 1));
+const pxuToSlider = p => !p ? 0
+  : Math.sign(p) * Math.round(1 + (PXU_STEPS - 1) *
+      Math.log(clampPxu(Math.abs(p)) / PXU_MIN) / Math.log(PXU_RATIO));
+// Snapped to a notch, so the number in the readout is the number the slider will hand back if
+// it is nudged - rather than jumping the moment it is first touched.
+const pxuSnap = p => pxuFromSlider(pxuToSlider(p));
+const fmtPxu = p => Math.abs(p) >= 10 ? p.toFixed(0)
+                  : Math.abs(p) >= 1  ? p.toFixed(1)
+                  : Math.abs(p) >= 0.1 ? p.toFixed(2) : p.toFixed(3);
+
+const AXES = [
+  { id: 'x', lab: 'east',  col: '#38bdf8', src: '', met: '', zero: 0, pxu: 0, ui: null },
+  { id: 'y', lab: 'north', col: '#c084fc', src: '', met: '', zero: 0, pxu: 0, ui: null },
+];
+const axLen = (a, v) => (v - a.zero) * a.pxu;
+
+// ---- axis controls --------------------------------------------------------------------------
+//
+// Two axes, each pointing at one (radio, metric) pair, each free to be off. A mark is a
+// horizontal whisker for whatever is on the east axis and a vertical one for the north axis, so
+// two radios plotted together make a cross whose arms are their two signal strengths at the
+// spot the packets landed. Turning one axis off leaves plain ticks, which is what you want once
+// the crosses start overlapping.
+
+function axSeriesLabel(S) {
+  const all = [...series.values()];
+  const manyDev  = new Set(all.map(v => v.dev)).size > 1;
+  const manyPeer = all.filter(v => v.ch === S.ch).length > 1;
+  return S.ch + (manyPeer ? ' ' + S.peer : '') +
+         (manyDev ? ' @' + S.dev.replace(/^ESPRT-/, '') : '');
+}
+
+let axBuiltRev = -1;
+function rebuildAxisMenus() {
+  if (axBuiltRev === seriesRev) return;
+  axBuiltRev = seriesRev;
+  const list = [...series.values()].sort((p, q) => p.key.localeCompare(q.key));
+  const opts = '<option value="">none</option>' + list.map(S =>
+    `<optgroup label="${esc(axSeriesLabel(S))}">` +
+    MKEYS.filter(m => S.has[m]).map(m =>
+      `<option value="${esc(S.key)}|${m}">${esc(METRICS[m].lab)}</option>`).join('') +
+    '</optgroup>').join('');
+  for (const a of AXES) {
+    const want = a.src ? a.src + '|' + a.met : '';
+    a.ui.sel.innerHTML = opts;
+    a.ui.sel.value = want;
+    // The series it was pointed at has gone (board reset, mode change, row retired). Say so
+    // rather than silently re-pointing the axis at somebody else's numbers.
+    if (a.ui.sel.value !== want) { a.src = ''; a.met = ''; syncAxis(a); }
+  }
+}
+
+function syncAxis(a) {
+  const on = !!a.met;
+  a.ui.zero.row.classList.toggle('off', !on);
+  a.ui.scale.row.classList.toggle('off', !on);
+  a.ui.auto.disabled = !on;
+  if (!on) return;
+  const M = METRICS[a.met];
+  Object.assign(a.ui.zero.s, { min: M.lo, max: M.hi, step: 1 });
+  a.ui.zero.s.value = a.zero;
+  a.ui.scale.s.value = pxuToSlider(a.pxu);
+  a.ui.zero.out.textContent = a.zero + (M.unit ? ' ' + M.unit : '');
+  a.ui.scale.out.textContent = fmtPxu(a.pxu) + ' px/' + M.su;
+}
+
+// Fit the whole spread of what has actually been heard into about 55 pixels, keeping whichever
+// direction the axis is currently pointed in. Guessing a scale up front is hopeless - a walk
+// that never leaves -40dBm and one that grazes the noise floor want completely different ones.
+function autoAxis(a) {
+  if (!a.met) return;
+  let lo = Infinity, hi = -Infinity;
+  for (const s of samples) {
+    if (s.key !== a.src) continue;
+    const v = mval(s, a.met);
+    if (typeof v !== 'number' || !isFinite(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!isFinite(lo)) return;
+  const M = METRICS[a.met];
+  const pad = Math.max(1, (hi - lo) * 0.12);
+  // Put the weakest thing heard just off zero and the strongest at about 55 pixels, keeping
+  // whichever direction the axis already points in.
+  if (a.pxu < 0) {
+    a.zero = Math.min(M.hi, Math.round(hi + pad));
+    a.pxu  = -pxuSnap(clampPxu(55 / Math.max(1, a.zero - lo)));
+  } else {
+    a.zero = Math.max(M.lo, Math.round(lo - pad));
+    a.pxu  = pxuSnap(clampPxu(55 / Math.max(1, hi - a.zero)));
+  }
+  syncAxis(a);
+  mapRedraw();
+}
+
+function buildAxes() {
+  const host = document.getElementById('axes');
+  for (const a of AXES) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ax';
+
+    const top = document.createElement('div');
+    top.className = 'axtop';
+    const key = document.createElement('span');
+    key.className = 'axkey';
+    key.style.background = a.col;
+    key.title = a.lab;
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="">none</option>';
+    const auto = document.createElement('button');
+    auto.textContent = 'auto';
+    auto.disabled = true;
+    auto.title = 'Scale this axis to fit everything heard so far';
+    auto.onclick = () => autoAxis(a);
+    top.append(key, sel, auto);
+    wrap.appendChild(top);
+
+    const mkSlider = (label, min, max, step, onInput) => {
+      const row = document.createElement('div');
+      row.className = 'axrow off';
+      row.appendChild(Object.assign(document.createElement('span'),
+                                    { className: 'axlab', textContent: label }));
+      const s = document.createElement('input');
+      Object.assign(s, { type: 'range', min, max, step, value: 0 });
+      s.style.accentColor = a.col;
+      const out = Object.assign(document.createElement('b'), { className: 'axval' });
+      s.addEventListener('input', () => onInput(+s.value));
+      row.append(s, out);
+      wrap.appendChild(row);
+      return { row, s, out };
+    };
+
+    // Zero spans the metric's own domain; length is in pixels and signed, so dragging it
+    // through zero flips the whiskers to point the other way. That is worth having: on a walk
+    // that runs east, marks pointing east sit on top of the track and marks pointing west sit
+    // clear of it.
+    const zero = mkSlider('zero', -125, 255, 1, v => {
+      a.zero = v;
+      a.ui.zero.out.textContent = v + (METRICS[a.met].unit ? ' ' + METRICS[a.met].unit : '');
+      mapRedraw();
+    });
+    const scale = mkSlider('scale', -PXU_STEPS, PXU_STEPS, 1, q => {
+      a.pxu = pxuFromSlider(q);
+      a.ui.scale.out.textContent = fmtPxu(a.pxu) + ' px/' + METRICS[a.met].su;
+      mapRedraw();
+    });
+
+    a.ui = { sel, auto, zero, scale };
+    sel.onchange = () => {
+      const v = sel.value;
+      if (!v) { a.src = ''; a.met = ''; }
+      else {
+        const [src, met] = v.split('|');
+        // Only reset the scale when the *metric* changes. Swapping which radio is on the axis
+        // while keeping rssi should keep the scale you just dialled in, or comparing the two
+        // means re-dialling it every time.
+        if (met !== a.met) { a.zero = METRICS[met].zero; a.pxu = pxuSnap(METRICS[met].pxu); }
+        a.src = src; a.met = met;
+      }
+      syncAxis(a);
+      mapRedraw();
+    };
+    host.appendChild(wrap);
+  }
+}
+
+// ---- the canvas -----------------------------------------------------------------------------
+
+const cv  = document.getElementById('cv');
+const cx2 = cv.getContext('2d');
+const view = { cx: 0, cy: 0, mpp: 0.6, w: 0, h: 0, dpr: 1, follow: true, seeded: false };
+let showMiss = true, mapQueued = false;
+
+const sxOf = x => view.w / 2 + (x - view.cx) / view.mpp;
+const syOf = y => view.h / 2 - (y - view.cy) / view.mpp;
+const unview = (sx, sy) => ({ x: view.cx + (sx - view.w / 2) * view.mpp,
+                              y: view.cy - (sy - view.h / 2) * view.mpp });
+
+function sizeCanvas() {
+  // Capped at 3: a 4x display would quadruple the fill cost of a walk's worth of marks for a
+  // sharpness nobody can see at arm's length in daylight.
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return false;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  view.w = w; view.h = h; view.dpr = dpr;
+  return true;
+}
+
+// 1, 2 or 5 times a power of ten - the intervals a person can divide in their head while
+// looking at a scale bar.
+function niceStep(target) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(target, 1e-6))));
+  for (const m of [1, 2, 5]) if (p * m >= target) return p * m;
+  return p * 10;
+}
+const fmtM = m => m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 2) + ' km'
+                            : (m >= 100 ? m.toFixed(0) : m.toFixed(1)) + ' m';
+
+function mapRedraw() {
+  if (mapQueued) return;
+  mapQueued = true;
+  requestAnimationFrame(() => {
+    mapQueued = false;
+    // Ahead of the draw, and outside it, because the menus have to fill up as soon as a radio
+    // is heard - not once there is something to draw. Setting the axes up while the boards are
+    // still on the bench, before GPS is on and before there is a single fix, is the normal way
+    // to start a test; hanging that off the drawing path left the dropdowns empty exactly then.
+    rebuildAxisMenus();
+    drawMap();
+    paintMapStat();
+  });
+}
+
+function drawMap() {
+  if (!sizeCanvas()) return;
+  const W = view.w, H = view.h, dpr = view.dpr, g = cx2;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  // Exactly one device pixel. Everything on this canvas is a hairline, because a walk lays
+  // thousands of marks down over the same few hundred pixels and anything thicker merges into
+  // a solid block that says nothing.
+  g.lineWidth = 1 / dpr;
+  g.lineCap = 'butt';
+  g.font = '11px ui-sans-serif,system-ui,sans-serif';
+  g.textBaseline = 'top';
+
+  if (!geo.fixes.length) {
+    g.fillStyle = '#6b7488';
+    g.textAlign = 'center';
+    g.fillText(geo.watch === null ? 'GPS off - tap GPS to start the track'
+                                  : 'waiting for a fix...', W / 2, H / 2 - 6);
+    g.textAlign = 'left';
+    return;
+  }
+  if (view.follow && geo.live) { view.cx = geo.live.x; view.cy = geo.live.y; }
+
+  const [ax, ay] = AXES;
+
+  // Range rings, when a base has been dropped. They turn the whole canvas into a distance
+  // readout at a glance, which is the number a range test is really about.
+  if (geo.base) {
+    const step = niceStep(view.mpp * 95);
+    const bx = sxOf(geo.base.x), by = syOf(geo.base.y);
+    const far = Math.hypot(W, H);
+    g.strokeStyle = 'rgba(96,165,250,.16)';
+    g.fillStyle = 'rgba(96,165,250,.45)';
+    for (let r = step, i = 0; r / view.mpp < far && i < 40; r += step, i++) {
+      const rp = r / view.mpp;
+      g.beginPath();
+      g.arc(bx, by, rp, 0, Math.PI * 2);
+      g.stroke();
+      // Up and to the right of the ring, but only where the whole label actually fits - half a
+      // distance hanging off the edge is worse than no distance at all.
+      const tx = bx + rp * 0.7071 + 2, ty = by - rp * 0.7071 - 12;
+      if (tx > 4 && tx < W - 44 && ty > 2 && ty < H - 14) g.fillText(fmtM(r), tx, ty);
+    }
+  }
+
+  // The track. One path, one stroke - a walk is tens of thousands of segments and stroking
+  // them individually is the difference between a smooth pan and a slideshow.
+  g.strokeStyle = '#4d566b';
+  g.beginPath();
+  for (let i = 0; i < geo.fixes.length; i++) {
+    const f = geo.fixes[i], px = sxOf(f.x), py = syOf(f.y);
+    i ? g.lineTo(px, py) : g.moveTo(px, py);
+  }
+  g.stroke();
+
+  // Marks. Batched into one path per thing being drawn, for the same reason.
+  const pX = new Path2D(), pY = new Path2D(), pDot = new Path2D(), pMiss = new Path2D();
+  const pad = 260;   // whiskers reach outward, so cull generously rather than exactly
+  let drawn = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    if (!s.pos || s.pos.prov) s.pos = posAt(s.t);
+    if (!s.pos) continue;
+    const px = sxOf(s.pos.x), py = syOf(s.pos.y);
+    if (px < -pad || px > W + pad || py < -pad || py > H + pad) continue;
+    drawn++;
+
+    pDot.moveTo(px - 1.5, py); pDot.lineTo(px + 1.5, py);
+    pDot.moveTo(px, py - 1.5); pDot.lineTo(px, py + 1.5);
+
+    if (ax.met && s.key === ax.src) {
+      const v = mval(s, ax.met);
+      if (typeof v === 'number' && isFinite(v)) {
+        pX.moveTo(px, py); pX.lineTo(px + axLen(ax, v), py);
+      }
+    }
+    if (ay.met && s.key === ay.src) {
+      const v = mval(s, ay.met);
+      if (typeof v === 'number' && isFinite(v)) {
+        pY.moveTo(px, py); pY.lineTo(px, py - axLen(ay, v));
+      }
+    }
+
+    if (showMiss && s.miss) {
+      // Positions resolved once and kept, since re-interpolating every lost packet on every
+      // frame is the one thing here that would actually cost something.
+      if (!s.mpos || s.mprov) {
+        const n = Math.min(s.miss, 40);
+        s.mpos = []; s.mprov = false;
+        for (let k = 1; k <= n; k++) {
+          const q = posAt(s.t0 + (s.t - s.t0) * (k / (n + 1)));
+          if (!q) continue;
+          if (q.prov) s.mprov = true;
+          s.mpos.push(q);
+        }
+      }
+      for (const q of s.mpos) {
+        const qx = sxOf(q.x), qy = syOf(q.y);
+        pMiss.moveTo(qx, qy - 2.5); pMiss.lineTo(qx, qy + 2.5);
+      }
+    }
+  }
+  if (showMiss) { g.strokeStyle = 'rgba(248,113,113,.55)'; g.stroke(pMiss); }
+  g.strokeStyle = 'rgba(232,234,240,.32)'; g.stroke(pDot);
+  g.strokeStyle = ax.col; g.stroke(pX);
+  g.strokeStyle = ay.col; g.stroke(pY);
+
+  // Base marker: a small open square, so it reads as a placed thing rather than a measurement.
+  if (geo.base) {
+    const bx = sxOf(geo.base.x), by = syOf(geo.base.y);
+    g.strokeStyle = '#60a5fa';
+    g.beginPath();
+    g.rect(bx - 4, by - 4, 8, 8);
+    g.moveTo(bx - 7, by); g.lineTo(bx + 7, by);
+    g.moveTo(bx, by - 7); g.lineTo(bx, by + 7);
+    g.stroke();
+  }
+
+  // Where you are, with the fix's own claimed accuracy around it - which on a phone is often
+  // wider than the thing being measured, and is worth seeing rather than assuming away.
+  if (geo.live) {
+    const lx = sxOf(geo.live.x), ly = syOf(geo.live.y);
+    if (geo.live.acc) {
+      g.strokeStyle = 'rgba(74,222,128,.22)';
+      g.beginPath(); g.arc(lx, ly, geo.live.acc / view.mpp, 0, Math.PI * 2); g.stroke();
+    }
+    g.fillStyle = '#4ade80';
+    g.beginPath(); g.arc(lx, ly, 3.5, 0, Math.PI * 2); g.fill();
+  }
+
+  // ---- overlay: scale bar, north, legend --------------------------------------------------
+  const barM = niceStep(view.mpp * (W * 0.28));
+  const barP = barM / view.mpp;
+  g.strokeStyle = '#8b93a7';
+  g.beginPath();
+  g.moveTo(12, H - 14); g.lineTo(12 + barP, H - 14);
+  g.moveTo(12, H - 18); g.lineTo(12, H - 10);
+  g.moveTo(12 + barP, H - 18); g.lineTo(12 + barP, H - 10);
+  g.stroke();
+  g.fillStyle = '#8b93a7';
+  g.textBaseline = 'bottom';
+  g.fillText(fmtM(barM), 12, H - 18);
+  g.fillText('N ↑', W - 30, H - 8);
+  g.textBaseline = 'top';
+
+  let ly = 10;
+  for (const a of AXES) {
+    if (!a.met) continue;
+    const S = series.get(a.src);
+    const M = METRICS[a.met];
+    g.fillStyle = a.col;
+    g.fillText(`${a.id === 'x' ? '↔' : '↕'} ` +
+               `${S ? axSeriesLabel(S) : a.src} ${M.lab}  ` +
+               `0 at ${a.zero}${M.unit}, ${fmtPxu(a.pxu)} px/${M.su}`, 12, ly);
+    ly += 15;
+  }
+  if (drawn < samples.length) {
+    g.fillStyle = '#6b7488';
+    g.fillText(`${drawn} of ${samples.length} marks in view`, 12, ly);
+  }
+}
+
+// ---- pan, zoom, follow ----------------------------------------------------------------------
+//
+// Follow keeps the newest position centred, which is what you want while walking, and any drag
+// or pinch turns it off - because the moment you reach in to look at somewhere you have already
+// been, having the map yank itself back under your thumb once a second is unusable. The button
+// turns it back on.
+
+function setFollow(on) {
+  view.follow = on;
+  document.getElementById('follow').classList.toggle('on', on);
+  if (on) mapRedraw();
+}
+
+function zoomAt(sx, sy, k) {
+  const before = unview(sx, sy);
+  view.mpp = Math.min(400, Math.max(0.05, view.mpp * k));
+  const after = unview(sx, sy);
+  // Keep whatever was under the fingers under the fingers.
+  view.cx += before.x - after.x;
+  view.cy += before.y - after.y;
+  if (view.follow) setFollow(false);
+  mapRedraw();
+}
+
+const ptrs = new Map();
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+});
+cv.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const ids = [...ptrs.keys()];
+  if (ids.length === 1) {
+    const p = ptrs.get(e.pointerId);
+    view.cx -= (e.clientX - p.x) * view.mpp;
+    view.cy += (e.clientY - p.y) * view.mpp;
+    if (view.follow) setFollow(false);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    mapRedraw();
+  } else if (ids.length >= 2) {
+    const a = ptrs.get(ids[0]), b = ptrs.get(ids[1]);
+    const d0 = Math.hypot(a.x - b.x, a.y - b.y);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const a2 = ptrs.get(ids[0]), b2 = ptrs.get(ids[1]);
+    const d1 = Math.hypot(a2.x - b2.x, a2.y - b2.y);
+    if (d0 > 8 && d1 > 8) {
+      const r = cv.getBoundingClientRect();
+      zoomAt((a2.x + b2.x) / 2 - r.left, (a2.y + b2.y) / 2 - r.top, d0 / d1);
+    }
+  }
+});
+const dropPtr = e => { ptrs.delete(e.pointerId); };
+cv.addEventListener('pointerup', dropPtr);
+cv.addEventListener('pointercancel', dropPtr);
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(e.deltaY * 0.0015));
+}, { passive: false });
+
+function fitMap() {
+  const pts = geo.base ? [...geo.fixes, geo.base] : geo.fixes;
+  if (!pts.length || !sizeCanvas()) return;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    if (p.x < x0) x0 = p.x;
+    if (p.x > x1) x1 = p.x;
+    if (p.y < y0) y0 = p.y;
+    if (p.y > y1) y1 = p.y;
+  }
+  view.cx = (x0 + x1) / 2;
+  view.cy = (y0 + y1) / 2;
+  view.mpp = Math.max((x1 - x0) / Math.max(view.w - 70, 40),
+                      (y1 - y0) / Math.max(view.h - 70, 40), 0.05) * 1.08;
+  setFollow(false);
+  mapRedraw();
+}
+
+// ---- GPS ------------------------------------------------------------------------------------
+
+const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 };
+
+function gpsStart() {
+  if (geo.watch !== null) return;
+  if (!navigator.geolocation) return fail('No geolocation in this browser.');
+  geo.watch = navigator.geolocation.watchPosition(onFix, e => {
+    geo.err = e.message;
+    logMsg('GPS: ' + e.message, true);
+    paintMapBar();
+    mapRedraw();
+  }, GEO_OPTS);
+  logMsg('GPS on');
+  paintMapBar();
+  mapRedraw();
+}
+
+function gpsStop() {
+  if (geo.watch === null) return;
+  navigator.geolocation.clearWatch(geo.watch);
+  geo.watch = null;
+  logMsg('GPS off');
+  paintMapBar();
+  mapRedraw();
+}
+
+function paintMapBar() {
+  const g = document.getElementById('gps');
+  g.textContent = geo.watch === null ? 'GPS off' : geo.err ? 'GPS error' : 'GPS on';
+  g.className = geo.watch === null ? '' : geo.err ? 'bad' : 'on';
+  document.getElementById('base').textContent = geo.base ? 'clear base' : 'set base';
+  document.getElementById('base').classList.toggle('on', !!geo.base);
+  document.getElementById('mis').classList.toggle('on', showMiss);
+}
+
+function paintMapStat() {
+  const bits = [];
+  if (geo.live) {
+    bits.push(`fix ±${geo.live.acc ? geo.live.acc.toFixed(0) : '?'}m`);
+    if (geo.base) {
+      bits.push(`<b class="ok">base ${fmtM(Math.hypot(geo.live.x - geo.base.x,
+                                                      geo.live.y - geo.base.y))}</b>`);
+    }
+  } else if (geo.watch !== null) {
+    bits.push('waiting for a fix');
+  }
+  if (geo.err) bits.push(`<b class="bad">${esc(geo.err)}</b>`);
+  if (geo.fixes.length) {
+    let walked = 0;
+    for (let i = 1; i < geo.fixes.length; i++) {
+      walked += Math.hypot(geo.fixes[i].x - geo.fixes[i - 1].x,
+                           geo.fixes[i].y - geo.fixes[i - 1].y);
+    }
+    bits.push(`walked ${fmtM(walked)}`);
+  }
+  let hits = 0, miss = 0;
+  for (const s of samples) { hits += s.hits; miss += s.miss; }
+  if (hits || miss) {
+    bits.push(`${hits} rx · ${miss} lost` +
+              (hits + miss ? ` · ${Math.round(hits * 100 / (hits + miss))}%` : ''));
+  }
+  bits.push(`${view.mpp.toFixed(2)} m/px`);
+  document.getElementById('mapstat').innerHTML = bits.join(' · ');
+}
+
+// ---- export ----------------------------------------------------------------------------------
+//
+// A walk you cannot get off the phone is a walk you have to do again. Fixes and packets go into
+// one file with a type column rather than two, because the interesting rows are the ones where
+// there is a fix and no packet, and that pattern only exists when both are on the same
+// timeline.
+
+function exportCsv() {
+  if (!samples.length && !geo.fixes.length) return fail('Nothing recorded yet.');
+  const head = ['type', 'iso', 'ms', 'dev', 'peer', 'ch', 'lat', 'lon', 'acc_m',
+                'east_m', 'north_m', 'base_m', 'rssi_dbm', 'ptx_dbm', 'loss_db',
+                'snr_db', 'lqi', 'pdr_now', 'pdr_all', 'hits', 'misses'];
+  const rows = [];
+  const n6 = v => v === undefined || v === '' ? '' : (+v).toFixed(6);
+  const n1 = v => v === undefined || v === null ? '' : (+v).toFixed(1);
+  const baseOf = (x, y) => geo.base ? Math.hypot(x - geo.base.x, y - geo.base.y).toFixed(1) : '';
+
+  for (const f of geo.fixes) {
+    rows.push(['fix', new Date(f.t).toISOString(), f.t, '', '', '',
+               n6(f.lat), n6(f.lon), f.acc === undefined ? '' : f.acc.toFixed(1),
+               n1(f.x), n1(f.y), baseOf(f.x, f.y),
+               '', '', '', '', '', '', '', '', '']);
+  }
+  for (const s of samples) {
+    const p = s.pos || posAt(s.t);
+    const ll = p ? unproject(p.x, p.y) : { lat: '', lon: '' };
+    rows.push(['rx', new Date(s.t).toISOString(), s.t, s.dev, s.peer, s.ch,
+               n6(ll.lat), n6(ll.lon), '',
+               p ? n1(p.x) : '', p ? n1(p.y) : '', p ? baseOf(p.x, p.y) : '',
+               s.rssi, s.ptx === undefined ? '' : s.ptx,
+               s.loss === undefined ? '' : s.loss,
+               s.snr === -128 ? '' : s.snr,
+               s.ch === '154' ? s.lqi : '',
+               s.pdr, s.pdrall, s.hits, s.miss]);
+  }
+  rows.sort((a, b) => a[2] - b[2]);
+
+  const csv = head.join(',') + '\n' + rows.map(r => r.join(',')).join('\n') + '\n';
+  const d = new Date(), p2 = v => String(v).padStart(2, '0');
+  const name = `esprangetest-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}` +
+               `-${p2(d.getHours())}${p2(d.getMinutes())}.csv`;
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  logMsg(`exported ${rows.length} rows to ${name}`);
+}
+
+// ---- wiring ------------------------------------------------------------------------------------
+
+buildAxes();
+
+document.getElementById('gps').onclick = () => geo.watch === null ? gpsStart() : gpsStop();
+document.getElementById('follow').onclick = () => setFollow(!view.follow);
+document.getElementById('fit').onclick = fitMap;
+document.getElementById('mis').onclick = () => {
+  showMiss = !showMiss;
+  paintMapBar();
+  mapRedraw();
+};
+document.getElementById('base').onclick = () => {
+  if (geo.base) geo.base = null;
+  else if (!geo.live) return fail('No fix yet - cannot mark the base.');
+  else geo.base = { x: geo.live.x, y: geo.live.y, lat: geo.live.lat, lon: geo.live.lon };
+  paintMapBar();
+  mapRedraw();
+};
+document.getElementById('csv').onclick = exportCsv;
+document.getElementById('wipe').onclick = () => {
+  if (samples.length && !confirm(`Throw away ${samples.length} marks and the track?`)) return;
+  samples.length = 0;
+  geo.fixes.length = 0;
+  geo.live = null;
+  geo.org = null;
+  geo.base = null;
+  series.clear();
+  seriesRev++;
+  view.seeded = false;
+  paintMapBar();
+  mapRedraw();
+  logMsg('map cleared');
+};
+document.getElementById('fold').onclick = function () {
+  const folded = document.getElementById('map').classList.toggle('fold');
+  this.textContent = folded ? 'show' : 'hide';
+  if (!folded) mapRedraw();
+};
+
+addEventListener('resize', mapRedraw);
+
+// A back-swipe or an accidental reload in the middle of a field test throws the whole walk
+// away, and there is no getting it back from where you are standing.
+addEventListener('beforeunload', e => {
+  if (!samples.length) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
+// Asking for location the instant the page opens is rude and Chrome may refuse it outright,
+// so the button is the way in. But once permission has been given, a field test starts by
+// opening this page and walking - having to remember to press it first is a way to arrive
+// somewhere interesting with no track behind you.
+if (navigator.permissions) {
+  navigator.permissions.query({ name: 'geolocation' })
+    .then(p => { if (p.state === 'granted') gpsStart(); })
+    .catch(() => {});
+}
+paintMapBar();
+mapRedraw();
+
 
 // ---- rendering ---------------------------------------------------------------------------
 //
