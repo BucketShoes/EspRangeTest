@@ -62,16 +62,20 @@
   .maphead{display:flex;justify-content:space-between;align-items:center;gap:8px;
            font-size:15px;font-weight:600;margin-bottom:8px}
   .maphead button{padding:3px 9px;font-size:12px;border-radius:6px;font-weight:400}
+  /* pan-y, not none: one finger has to stay the page's, or a map this tall leaves nowhere to
+     grab to scroll past it. pan-y still forbids the browser's own pinch, so two fingers are
+     free for the map. */
   #cv{display:block;width:100%;height:56vh;min-height:260px;border-radius:9px;
-      background:#0a0c11;border:1px solid var(--line);touch-action:none}
+      background:#0a0c11;border:1px solid var(--line);touch-action:pan-y}
   .map.fold #cv,.map.fold .mapbar,.map.fold .axes,.map.fold .mapstat{display:none}
   .mapbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
   .mapbar button{padding:7px 10px;font-size:13px;border-radius:8px}
   .ax{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
-  .axtop{display:flex;gap:7px;align-items:center}
+  .axtop{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
   .axkey{width:13px;height:13px;border-radius:3px;flex:none}
-  .axtop select{flex:1;min-width:0;background:var(--bg);color:var(--fg);
-                border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px}
+  .axtop select{flex:1 1 118px;min-width:0;background:var(--bg);color:var(--fg);
+                border:1px solid var(--line);border-radius:8px;padding:7px;font-size:13px}
+  .axtop select:disabled{opacity:.35}
   .axtop button{padding:7px 9px;font-size:12px;border-radius:8px;flex:none}
   .axrow{display:flex;gap:10px;align-items:center;margin-top:7px}
   .axrow.off{display:none}
@@ -92,7 +96,9 @@
 </div>
 <div id="err"></div>
 <div class="map" id="map">
-  <div class="maphead"><span>map</span><button id="fold">hide</button></div>
+  <div class="maphead"><span>map <span class="dim"
+       style="font-weight:400;font-size:11px">two fingers to move</span></span><button
+       id="fold">hide</button></div>
   <canvas id="cv"></canvas>
   <div class="mapbar">
     <button id="gps">GPS off</button>
@@ -756,28 +762,57 @@ function axSeriesLabel(S) {
          (manyDev ? ' @' + S.dev.replace(/^ESPRT-/, '') : '');
 }
 
+// One menu of every radio crossed with every metric is unusable the moment there is more than
+// one board on it: two boards is six radios times six metrics, and picking "154 rssi" means
+// reading past thirty things that are not it. Split in two, the same choice is one short list
+// of radios and one short list of metrics - six plus six, and each one is a list of things that
+// differ in only one way.
 let axBuiltRev = -1;
 function rebuildAxisMenus() {
   if (axBuiltRev === seriesRev) return;
   axBuiltRev = seriesRev;
   const list = [...series.values()].sort((p, q) => p.key.localeCompare(q.key));
-  const opts = '<option value="">none</option>' + list.map(S =>
-    `<optgroup label="${esc(axSeriesLabel(S))}">` +
-    MKEYS.filter(m => S.has[m]).map(m =>
-      `<option value="${esc(S.key)}|${m}">${esc(METRICS[m].lab)}</option>`).join('') +
-    '</optgroup>').join('');
+  const opts = '<option value="">off</option>' + list.map(S =>
+    `<option value="${esc(S.key)}">${esc(axSeriesLabel(S))}</option>`).join('');
   for (const a of AXES) {
-    const want = a.src ? a.src + '|' + a.met : '';
-    a.ui.sel.innerHTML = opts;
-    a.ui.sel.value = want;
-    // The series it was pointed at has gone (board reset, mode change, row retired). Say so
-    // rather than silently re-pointing the axis at somebody else's numbers.
-    if (a.ui.sel.value !== want) { a.src = ''; a.met = ''; syncAxis(a); }
+    a.ui.src.innerHTML = opts;
+    a.ui.src.value = a.src;
+    // The radio it was pointed at has gone (board reset, mode change, row retired). Drop the
+    // axis rather than silently re-pointing it at somebody else's numbers.
+    if (a.ui.src.value !== a.src) a.src = '';
+    fillMetrics(a);
+    syncAxis(a);
   }
 }
 
+// The metric list is whatever this particular radio actually produces - there is no point
+// offering lqi on ESP-NOW or snr on BLE, and a menu of dashes is how the single-menu version
+// got so long in the first place.
+function fillMetrics(a) {
+  const S = series.get(a.src);
+  const avail = S ? MKEYS.filter(m => S.has[m]) : [];
+  a.ui.met.innerHTML = avail.map(m =>
+    `<option value="${m}">${esc(METRICS[m].lab)}</option>`).join('');
+  a.ui.met.disabled = !avail.length;
+  if (!avail.length) { a.met = ''; return; }
+  // Switching radio keeps the metric wherever the new one has it, because comparing the same
+  // measurement across two radios is the whole point of the thing.
+  if (!avail.includes(a.met)) setMetric(a, avail.includes('rssi') ? 'rssi' : avail[0]);
+  a.ui.met.value = a.met;
+}
+
+// Only a change of *metric* resets the scale. Swapping which radio is on the axis while staying
+// on rssi keeps the scale you just dialled in, or comparing the two means re-dialling it every
+// single time.
+function setMetric(a, m) {
+  if (m === a.met) return;
+  a.met  = m;
+  a.zero = METRICS[m].zero;
+  a.pxu  = pxuSnap(METRICS[m].pxu);
+}
+
 function syncAxis(a) {
-  const on = !!a.met;
+  const on = !!(a.src && a.met);
   a.ui.zero.row.classList.toggle('off', !on);
   a.ui.scale.row.classList.toggle('off', !on);
   a.ui.auto.disabled = !on;
@@ -831,14 +866,18 @@ function buildAxes() {
     key.className = 'axkey';
     key.style.background = a.col;
     key.title = a.lab;
-    const sel = document.createElement('select');
-    sel.innerHTML = '<option value="">none</option>';
+    const src = document.createElement('select');
+    src.innerHTML = '<option value="">off</option>';
+    src.title = 'Which radio, on which board, to draw on this axis';
+    const met = document.createElement('select');
+    met.disabled = true;
+    met.title = 'Which measurement from that radio';
     const auto = document.createElement('button');
     auto.textContent = 'auto';
     auto.disabled = true;
     auto.title = 'Scale this axis to fit everything heard so far';
     auto.onclick = () => autoAxis(a);
-    top.append(key, sel, auto);
+    top.append(key, src, met, auto);
     wrap.appendChild(top);
 
     const mkSlider = (label, min, max, step, onInput) => {
@@ -871,18 +910,15 @@ function buildAxes() {
       mapRedraw();
     });
 
-    a.ui = { sel, auto, zero, scale };
-    sel.onchange = () => {
-      const v = sel.value;
-      if (!v) { a.src = ''; a.met = ''; }
-      else {
-        const [src, met] = v.split('|');
-        // Only reset the scale when the *metric* changes. Swapping which radio is on the axis
-        // while keeping rssi should keep the scale you just dialled in, or comparing the two
-        // means re-dialling it every time.
-        if (met !== a.met) { a.zero = METRICS[met].zero; a.pxu = pxuSnap(METRICS[met].pxu); }
-        a.src = src; a.met = met;
-      }
+    a.ui = { src, met, auto, zero, scale };
+    src.onchange = () => {
+      a.src = src.value;
+      fillMetrics(a);
+      syncAxis(a);
+      mapRedraw();
+    };
+    met.onchange = () => {
+      setMetric(a, met.value);
       syncAxis(a);
       mapRedraw();
     };
@@ -1127,37 +1163,84 @@ function zoomAt(sx, sy, k) {
   mapRedraw();
 }
 
+// The map takes two fingers and never one. One finger belongs to the page: the canvas is 56vh
+// and on a phone in a field it is most of the screen, so a map that grabbed a single drag would
+// leave nothing to scroll down to the numbers with. Two fingers pan and pinch together, which
+// is the gesture nobody performs by accident while walking.
+//
+// A mouse keeps drag-to-pan - there is no second finger to require, and a desktop has a
+// scrollbar for the page.
 const ptrs = new Map();
+let pinch = null;
+
+function pinchState() {
+  if (ptrs.size < 2) return null;
+  const [a, b] = [...ptrs.values()];
+  return { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+
 cv.addEventListener('pointerdown', e => {
-  cv.setPointerCapture(e.pointerId);
   ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-});
-cv.addEventListener('pointermove', e => {
-  if (!ptrs.has(e.pointerId)) return;
-  const ids = [...ptrs.keys()];
-  if (ids.length === 1) {
-    const p = ptrs.get(e.pointerId);
-    view.cx -= (e.clientX - p.x) * view.mpp;
-    view.cy += (e.clientY - p.y) * view.mpp;
-    if (view.follow) setFollow(false);
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    mapRedraw();
-  } else if (ids.length >= 2) {
-    const a = ptrs.get(ids[0]), b = ptrs.get(ids[1]);
-    const d0 = Math.hypot(a.x - b.x, a.y - b.y);
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const a2 = ptrs.get(ids[0]), b2 = ptrs.get(ids[1]);
-    const d1 = Math.hypot(a2.x - b2.x, a2.y - b2.y);
-    if (d0 > 8 && d1 > 8) {
-      const r = cv.getBoundingClientRect();
-      zoomAt((a2.x + b2.x) / 2 - r.left, (a2.y + b2.y) / 2 - r.top, d0 / d1);
-    }
+  // Capture only once the gesture is actually ours. Capturing a lone finger would swallow the
+  // page scroll that finger is supposed to be doing.
+  if (e.pointerType === 'mouse' || ptrs.size >= 2) {
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* pointer already gone */ }
   }
+  pinch = pinchState();
 });
-const dropPtr = e => { ptrs.delete(e.pointerId); };
+
+cv.addEventListener('pointermove', e => {
+  const prev = ptrs.get(e.pointerId);
+  if (!prev) return;
+  const now = { x: e.clientX, y: e.clientY };
+
+  if (ptrs.size < 2) {
+    if (e.pointerType !== 'mouse') return;      // one finger: leave it to the page
+    ptrs.set(e.pointerId, now);
+    view.cx -= (now.x - prev.x) * view.mpp;
+    view.cy += (now.y - prev.y) * view.mpp;
+    if (view.follow) setFollow(false);
+    mapRedraw();
+    return;
+  }
+
+  ptrs.set(e.pointerId, now);
+  const p = pinchState();
+  if (!pinch || !p) { pinch = p; return; }
+  // Drag the midpoint and change the separation in one gesture, so the map can be moved and
+  // scaled without lifting off - which matters when one hand is holding the phone.
+  view.cx -= (p.mx - pinch.mx) * view.mpp;
+  view.cy += (p.my - pinch.my) * view.mpp;
+  if (pinch.d > 8 && p.d > 8) {
+    const r = cv.getBoundingClientRect();
+    zoomAt(p.mx - r.left, p.my - r.top, pinch.d / p.d);
+  } else {
+    if (view.follow) setFollow(false);
+    mapRedraw();
+  }
+  pinch = p;
+});
+
+const dropPtr = e => {
+  ptrs.delete(e.pointerId);
+  // Recomputed rather than kept, so lifting one of three fingers does not jump the map by the
+  // difference between the old midpoint and the new one.
+  pinch = pinchState();
+};
 cv.addEventListener('pointerup', dropPtr);
 cv.addEventListener('pointercancel', dropPtr);
+
+// touch-action already forbids the browser's pinch, but a second finger arriving mid-scroll can
+// still leave it fighting us for the gesture. Two fingers on this canvas are ours, full stop.
+cv.addEventListener('touchmove', e => {
+  if (e.touches.length >= 2) e.preventDefault();
+}, { passive: false });
+
 cv.addEventListener('wheel', e => {
+  // Same rule as the single finger: a plain wheel is the page's, or a desktop reader gets
+  // stranded on the map with the scroll going nowhere. Ctrl+wheel zooms, which is also exactly
+  // what a trackpad pinch sends.
+  if (!e.ctrlKey) return;
   e.preventDefault();
   const r = cv.getBoundingClientRect();
   zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(e.deltaY * 0.0015));
