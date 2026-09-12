@@ -70,16 +70,27 @@
   .map.fold #cv,.map.fold .mapbar,.map.fold .axes,.map.fold .mapstat{display:none}
   .mapbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
   .mapbar button{padding:7px 10px;font-size:13px;border-radius:8px}
-  .ax{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
-  .axtop{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-  .axkey{width:13px;height:13px;border-radius:3px;flex:none}
-  .axtop select{flex:1 1 118px;min-width:0;background:var(--bg);color:var(--fg);
-                border:1px solid var(--line);border-radius:8px;padding:7px;font-size:13px}
-  .axtop select:disabled{opacity:.35}
-  .axtop button{padding:7px 9px;font-size:12px;border-radius:8px;flex:none}
+  .axes{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+  .prow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .prow select{flex:1 1 118px;min-width:0;background:var(--bg);color:var(--fg);
+               border:1px solid var(--line);border-radius:8px;padding:7px;font-size:13px}
+  .prow button{padding:7px 10px;font-size:12px;border-radius:8px;flex:none}
+  .srow{display:flex;gap:7px;align-items:center;margin:5px 0}
+  .srow input[type=checkbox]{width:18px;height:18px;flex:none;accent-color:var(--acc);margin:0}
+  .srow button{padding:5px 8px;font-size:11px;border-radius:6px;flex:none}
+  /* A stub rotated to the angle this radio's rays are drawn at, so the list and the map say
+     the same thing. */
+  .swatch{width:14px;height:14px;flex:none;position:relative}
+  .swatch::after{content:'';position:absolute;left:6px;top:0;width:2px;height:14px;
+                 background:var(--c,#454b5a);border-radius:1px}
+  .slab{flex:1 1 auto;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;
+        white-space:nowrap}
+  .srng{flex:none;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  #sizerow{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}
+  #sizerow.off{display:none}
   .axrow{display:flex;gap:10px;align-items:center;margin-top:7px}
   .axrow.off{display:none}
-  .axlab{width:44px;flex:none;font-size:12px;color:var(--dim)}
+  .axlab{width:52px;flex:none;font-size:12px;color:var(--dim)}
   .axrow input[type=range]{flex:1;min-width:80px;height:26px}
   .axval{width:78px;flex:none;text-align:right;font-size:12px;
          font-variant-numeric:tabular-nums;color:var(--dim)}
@@ -109,7 +120,7 @@
     <button id="csv">export</button>
     <button id="wipe">clear</button>
   </div>
-  <div class="axes" id="axes"></div>
+  <div class="axes" id="plot"></div>
   <div class="mapstat" id="mapstat"></div>
 </div>
 <div id="devs"></div>
@@ -697,64 +708,53 @@ function noteSample(d, key, r, prev) {
   mapRedraw();
 }
 
-// ---- what can go on an axis -----------------------------------------------------------------
+// ---- what gets drawn --------------------------------------------------------------------------
 //
-// lo/hi is the metric's own domain and it is what the zero slider spans: zero is the value at
-// which a mark has no length at all. pxu is the other half - how many pixels one unit of the
-// metric is worth.
+// One metric at a time, across as many radios as you like. Every mark is a ray from the spot the
+// packet landed, and the only thing that varies along it is length: long is a strong link, short
+// is a weak one, and there is a floor so a packet that barely made it still leaves something
+// visible. Seeing that anything arrived at all matters more than reading its value precisely.
 //
-// pxu is signed on purpose. Path loss is the one metric here that is worse when it is bigger,
-// so it defaults to a negative scale with zero at the top of its domain. That way a long mark
-// means a good link on every entry in the list, instead of one of them reading backwards
-// against all the others.
+// This replaced a signed offset-and-gain pair per axis, which was wrong in a way that took a
+// walk to notice: below the zero point the length went negative, so the marks turned round and
+// grew *longer* the worse the signal got. Reading "big" as "good" and being handed the opposite
+// is worse than no scale at all.
+//
+// Length is now a mapping between two values and two pixel sizes, clamped at both ends. That
+// gives the floor, and it gives a ceiling too - without one, a scale fine enough to separate
+// -100 from -90 draws a single -50 clear across the screen.
 const METRICS = {
-  rssi:   { lab: 'rssi',    unit: 'dBm', su: 'dB',  lo: -125, hi: 10,  zero: -115, pxu: 0.36 },
-  loss:   { lab: 'loss',    unit: 'dB',  su: 'dB',  lo: 0,    hi: 175, zero: 175,  pxu: -0.29 },
-  snr:    { lab: 'snr',     unit: 'dB',  su: 'dB',  lo: -20,  hi: 70,  zero: -10,  pxu: 0.51 },
-  lqi:    { lab: 'lqi',     unit: '',    su: 'lqi', lo: 0,    hi: 255, zero: 0,    pxu: 0.17 },
-  pdr:    { lab: 'pdr now', unit: '%',   su: '%',   lo: 0,    hi: 100, zero: 0,    pxu: 0.4 },
-  pdrall: { lab: 'pdr all', unit: '%',   su: '%',   lo: 0,    hi: 100, zero: 0,    pxu: 0.4 },
-  hit:    { lab: 'packets', unit: '',    su: 'pkt', lo: 0,    hi: 20,  zero: 0,    pxu: 3 },
+  // lo/hi bound the sliders; slo/shi are where a fresh source starts - shortest at slo,
+  // longest at shi. For loss, smaller is better, so those two run backwards on purpose.
+  rssi:   { lab: 'rssi',    unit: 'dBm', lo: -125, hi: 10,  slo: -110, shi: -40 },
+  loss:   { lab: 'loss',    unit: 'dB',  lo: 0,    hi: 175, slo: 160,  shi: 60 },
+  snr:    { lab: 'snr',     unit: 'dB',  lo: -20,  hi: 70,  slo: 0,    shi: 40 },
+  lqi:    { lab: 'lqi',     unit: '',    lo: 0,    hi: 255, slo: 0,    shi: 255 },
+  pdr:    { lab: 'pdr now', unit: '%',   lo: 0,    hi: 100, slo: 0,    shi: 100 },
+  pdrall: { lab: 'pdr all', unit: '%',   lo: 0,    hi: 100, slo: 0,    shi: 100 },
+  hit:    { lab: 'packets', unit: '',    lo: 0,    hi: 20,  slo: 0,    shi: 8 },
 };
 const MKEYS = ['rssi', 'loss', 'snr', 'lqi', 'pdr', 'pdrall', 'hit'];
 const mval  = (s, m) => m === 'hit' ? s.hits : s[m];
 
-// The scale control has to cope with "one radio that never left a four dB band all afternoon"
-// and "raw rssi, the whole hundred and thirty five" in the same widget, and those are three
-// orders of magnitude apart. A linear slider cannot do both - it is all thumb at one end and
-// all dead zone at the other, which is exactly how the first version of this failed. So the
-// slider is exponential: 99 notches of about 8.7% each, spanning 0.01 to 30 pixels per unit,
-// with zero in the middle for a flat axis and the sign flipping which way the whiskers point.
-const PXU_MIN = 0.01, PXU_MAX = 30, PXU_STEPS = 99;
-const PXU_RATIO = PXU_MAX / PXU_MIN;
-const clampPxu = v => Math.min(PXU_MAX, Math.max(PXU_MIN, v));
-const pxuFromSlider = q => !q ? 0
-  : Math.sign(q) * PXU_MIN * Math.pow(PXU_RATIO, (Math.abs(q) - 1) / (PXU_STEPS - 1));
-const pxuToSlider = p => !p ? 0
-  : Math.sign(p) * Math.round(1 + (PXU_STEPS - 1) *
-      Math.log(clampPxu(Math.abs(p)) / PXU_MIN) / Math.log(PXU_RATIO));
-// Snapped to a notch, so the number in the readout is the number the slider will hand back if
-// it is nudged - rather than jumping the moment it is first touched.
-const pxuSnap = p => pxuFromSlider(pxuToSlider(p));
-const fmtPxu = p => Math.abs(p) >= 10 ? p.toFixed(0)
-                  : Math.abs(p) >= 1  ? p.toFixed(1)
-                  : Math.abs(p) >= 0.1 ? p.toFixed(2) : p.toFixed(3);
+// Every enabled radio is the same metric on the same kind of scale, because the comparison is
+// the whole point - what differs is only which direction each one points. But the *mapping* is
+// per radio, and that is deliberate rather than sloppy: -98dBm is dead on ESP-NOW while -106
+// still works on 802.15.4, so a shared value scale would be the thing that isn't a fair
+// comparison. Calibrate each radio so its own edge of failure sits at the short end, and then
+// equal lengths really do mean equally close to falling over.
+const plot = {
+  met: 'rssi',
+  minPx: 4,
+  maxPx: 60,
+  scales: false,          // whether the per-radio range sliders are showing
+  src: new Map(),         // series key -> {on, slo, shi}
+};
 
-const AXES = [
-  { id: 'x', lab: 'east',  col: '#38bdf8', src: '', met: '', zero: 0, pxu: 0, ui: null },
-  { id: 'y', lab: 'north', col: '#c084fc', src: '', met: '', zero: 0, pxu: 0, ui: null },
-];
-const axLen = (a, v) => (v - a.zero) * a.pxu;
+const SRC_COLS = ['#38bdf8', '#c084fc', '#4ade80', '#fbbf24',
+                  '#fb7185', '#2dd4bf', '#a3e635', '#f472b6'];
 
-// ---- axis controls --------------------------------------------------------------------------
-//
-// Two axes, each pointing at one (radio, metric) pair, each free to be off. A mark is a
-// horizontal whisker for whatever is on the east axis and a vertical one for the north axis, so
-// two radios plotted together make a cross whose arms are their two signal strengths at the
-// spot the packets landed. Turning one axis off leaves plain ticks, which is what you want once
-// the crosses start overlapping.
-
-function axSeriesLabel(S) {
+function srcLabel(S) {
   const all = [...series.values()];
   const manyDev  = new Set(all.map(v => v.dev)).size > 1;
   const manyPeer = all.filter(v => v.ch === S.ch).length > 1;
@@ -762,170 +762,270 @@ function axSeriesLabel(S) {
          (manyDev ? ' @' + S.dev.replace(/^ESPRT-/, '') : '');
 }
 
-// One menu of every radio crossed with every metric is unusable the moment there is more than
-// one board on it: two boards is six radios times six metrics, and picking "154 rssi" means
-// reading past thirty things that are not it. Split in two, the same choice is one short list
-// of radios and one short list of metrics - six plus six, and each one is a list of things that
-// differ in only one way.
-let axBuiltRev = -1;
-function rebuildAxisMenus() {
-  if (axBuiltRev === seriesRev) return;
-  axBuiltRev = seriesRev;
-  const list = [...series.values()].sort((p, q) => p.key.localeCompare(q.key));
-  const opts = '<option value="">off</option>' + list.map(S =>
-    `<option value="${esc(S.key)}">${esc(axSeriesLabel(S))}</option>`).join('');
-  for (const a of AXES) {
-    a.ui.src.innerHTML = opts;
-    a.ui.src.value = a.src;
-    // The radio it was pointed at has gone (board reset, mode change, row retired). Drop the
-    // axis rather than silently re-pointing it at somebody else's numbers.
-    if (a.ui.src.value !== a.src) a.src = '';
-    fillMetrics(a);
-    syncAxis(a);
+const allSources = () =>
+  [...series.values()].sort((p, q) => p.key.localeCompare(q.key));
+
+// Colour follows a radio's place in the full list, not the enabled one, so switching a radio off
+// does not recolour everything else under you.
+function srcCol(key) {
+  const i = allSources().findIndex(S => S.key === key);
+  return SRC_COLS[(i < 0 ? 0 : i) % SRC_COLS.length];
+}
+
+// Per-radio config, created on demand. Defaults come from the metric, then `auto` or the sliders
+// move them. Keyed per metric, because a range in dBm means nothing once the metric is lqi.
+function srcCfg(key) {
+  const id = key + '|' + plot.met;
+  let c = plot.src.get(id);
+  if (!c) {
+    const M = METRICS[plot.met];
+    c = { on: true, slo: M.slo, shi: M.shi };
+    plot.src.set(id, c);
   }
+  return c;
 }
 
-// The metric list is whatever this particular radio actually produces - there is no point
-// offering lqi on ESP-NOW or snr on BLE, and a menu of dashes is how the single-menu version
-// got so long in the first place.
-function fillMetrics(a) {
-  const S = series.get(a.src);
-  const avail = S ? MKEYS.filter(m => S.has[m]) : [];
-  a.ui.met.innerHTML = avail.map(m =>
+// Only radios that are switched on and actually produce the current metric - there is no lqi on
+// ESP-NOW and no snr on BLE, and a ray that can never be drawn should not be taking up an angle.
+const activeSources = () =>
+  allSources().filter(S => S.has[plot.met] && srcCfg(S.key).on);
+
+// Shortest at slo, longest at shi, clamped hard at both. Reversing the two is how a
+// smaller-is-better metric like path loss is expressed, so no separate direction flag is needed.
+function markLen(cfg, v) {
+  const span = cfg.shi - cfg.slo;
+  const t = span === 0 ? 1 : (v - cfg.slo) / span;
+  return Math.max(plot.minPx,
+                  Math.min(plot.maxPx, plot.minPx + t * (plot.maxPx - plot.minPx)));
+}
+
+// Fanned over a half circle: first ray straight up, the rest evenly spaced clockwise. One radio
+// is vertical, two make the right-angled cross, three sit at 0/60/120, and so on. Keeping them
+// inside 180 degrees means no two rays ever lie along the same line, so nothing hides behind
+// anything else no matter how many are on.
+const rayAngle = (i, n) => i * Math.PI / n;
+
+// ---- plot controls ------------------------------------------------------------------------
+
+let srcBuiltRev = -1;
+
+function buildPlotControls() {
+  const host = document.getElementById('plot');
+
+  const top = document.createElement('div');
+  top.className = 'prow';
+  const met = document.createElement('select');
+  met.innerHTML = MKEYS.map(m =>
     `<option value="${m}">${esc(METRICS[m].lab)}</option>`).join('');
-  a.ui.met.disabled = !avail.length;
-  if (!avail.length) { a.met = ''; return; }
-  // Switching radio keeps the metric wherever the new one has it, because comparing the same
-  // measurement across two radios is the whole point of the thing.
-  if (!avail.includes(a.met)) setMetric(a, avail.includes('rssi') ? 'rssi' : avail[0]);
-  a.ui.met.value = a.met;
+  met.value = plot.met;
+  met.title = 'The one measurement every radio below is drawn with';
+  met.onchange = () => {
+    plot.met = met.value;
+    srcBuiltRev = -1;          // the metric decides which radios can be drawn at all
+    saveSettings();
+    rebuildSources();
+    mapRedraw();
+  };
+
+  const autoAll = document.createElement('button');
+  autoAll.textContent = 'auto';
+  autoAll.title = 'Fit every enabled radio to the spread it has actually shown';
+  autoAll.onclick = () => { activeSources().forEach(S => autoSource(S.key)); };
+
+  const scales = document.createElement('button');
+  scales.textContent = 'scales';
+  scales.title = 'Show the per-radio range sliders';
+  scales.onclick = () => {
+    plot.scales = !plot.scales;
+    scales.classList.toggle('on', plot.scales);
+    document.getElementById('sizerow').classList.toggle('off', !plot.scales);
+    saveSettings();
+    rebuildSources();
+  };
+  top.append(met, autoAll, scales);
+  host.appendChild(top);
+
+  const list = document.createElement('div');
+  list.id = 'srclist';
+  host.appendChild(list);
+
+  // Shared by every radio, because the pixel range is the one thing that genuinely must not
+  // differ between them - it is what makes two rays comparable at a glance.
+  const size = document.createElement('div');
+  size.id = 'sizerow';
+  size.className = 'off';
+  const mkSize = (label, key, min, max) => {
+    const row = document.createElement('div');
+    row.className = 'axrow';
+    row.appendChild(Object.assign(document.createElement('span'),
+                                  { className: 'axlab', textContent: label }));
+    const s = document.createElement('input');
+    Object.assign(s, { type: 'range', min, max, step: 1, value: plot[key] });
+    const out = Object.assign(document.createElement('b'),
+                              { className: 'axval', textContent: plot[key] + ' px' });
+    s.addEventListener('input', () => {
+      plot[key] = +s.value;
+      if (plot.minPx > plot.maxPx) {            // never let the floor cross the ceiling
+        if (key === 'minPx') plot.maxPx = plot.minPx;
+        else plot.minPx = plot.maxPx;
+      }
+      out.textContent = plot[key] + ' px';
+      saveSettings();
+      mapRedraw();
+    });
+    row.append(s, out);
+    size.appendChild(row);
+  };
+  mkSize('shortest', 'minPx', 1, 40);
+  mkSize('longest', 'maxPx', 10, 200);
+  host.appendChild(size);
 }
 
-// Only a change of *metric* resets the scale. Swapping which radio is on the axis while staying
-// on rssi keeps the scale you just dialled in, or comparing the two means re-dialling it every
-// single time.
-function setMetric(a, m) {
-  if (m === a.met) return;
-  a.met  = m;
-  a.zero = METRICS[m].zero;
-  a.pxu  = pxuSnap(METRICS[m].pxu);
-}
-
-function syncAxis(a) {
-  const on = !!(a.src && a.met);
-  a.ui.zero.row.classList.toggle('off', !on);
-  a.ui.scale.row.classList.toggle('off', !on);
-  a.ui.auto.disabled = !on;
-  if (!on) return;
-  const M = METRICS[a.met];
-  Object.assign(a.ui.zero.s, { min: M.lo, max: M.hi, step: 1 });
-  a.ui.zero.s.value = a.zero;
-  a.ui.scale.s.value = pxuToSlider(a.pxu);
-  a.ui.zero.out.textContent = a.zero + (M.unit ? ' ' + M.unit : '');
-  a.ui.scale.out.textContent = fmtPxu(a.pxu) + ' px/' + M.su;
-}
-
-// Fit the whole spread of what has actually been heard into about 55 pixels, keeping whichever
-// direction the axis is currently pointed in. Guessing a scale up front is hopeless - a walk
-// that never leaves -40dBm and one that grazes the noise floor want completely different ones.
-function autoAxis(a) {
-  if (!a.met) return;
+// Fit this radio to what it has actually produced: the weakest thing heard sits at the short end
+// and the strongest at the long end, so the whole range of the walk is spread over the full
+// length rather than bunched at one end of it.
+function autoSource(key) {
   let lo = Infinity, hi = -Infinity;
   for (const s of samples) {
-    if (s.key !== a.src) continue;
-    const v = mval(s, a.met);
+    if (s.key !== key) continue;
+    const v = mval(s, plot.met);
     if (typeof v !== 'number' || !isFinite(v)) continue;
     if (v < lo) lo = v;
     if (v > hi) hi = v;
   }
   if (!isFinite(lo)) return;
-  const M = METRICS[a.met];
-  const pad = Math.max(1, (hi - lo) * 0.12);
-  // Put the weakest thing heard just off zero and the strongest at about 55 pixels, keeping
-  // whichever direction the axis already points in.
-  if (a.pxu < 0) {
-    a.zero = Math.min(M.hi, Math.round(hi + pad));
-    a.pxu  = -pxuSnap(clampPxu(55 / Math.max(1, a.zero - lo)));
-  } else {
-    a.zero = Math.max(M.lo, Math.round(lo - pad));
-    a.pxu  = pxuSnap(clampPxu(55 / Math.max(1, hi - a.zero)));
-  }
-  syncAxis(a);
+  const cfg = srcCfg(key);
+  const pad = Math.max(1, (hi - lo) * 0.08);
+  // Keep whichever way round this metric is: for path loss the short end is the big number.
+  if (cfg.shi < cfg.slo) { cfg.slo = Math.round(hi + pad); cfg.shi = Math.round(lo - pad); }
+  else                   { cfg.slo = Math.round(lo - pad); cfg.shi = Math.round(hi + pad); }
+  saveSettings();
+  rebuildSources();
   mapRedraw();
 }
 
-function buildAxes() {
-  const host = document.getElementById('axes');
-  for (const a of AXES) {
-    const wrap = document.createElement('div');
-    wrap.className = 'ax';
+function rebuildSources() {
+  const list = document.getElementById('srclist');
+  if (!list) return;
+  const all = allSources();
+  const act = activeSources();
+  const rank = new Map(act.map((S, i) => [S.key, i]));
+  list.innerHTML = '';
 
-    const top = document.createElement('div');
-    top.className = 'axtop';
-    const key = document.createElement('span');
-    key.className = 'axkey';
-    key.style.background = a.col;
-    key.title = a.lab;
-    const src = document.createElement('select');
-    src.innerHTML = '<option value="">off</option>';
-    src.title = 'Which radio, on which board, to draw on this axis';
-    const met = document.createElement('select');
-    met.disabled = true;
-    met.title = 'Which measurement from that radio';
+  if (!all.length) {
+    list.innerHTML = '<div class="hint" style="font-size:12px">' +
+                     'Radios appear here as soon as packets arrive.</div>';
+    return;
+  }
+
+  for (const S of all) {
+    const M = METRICS[plot.met];
+    const cfg = srcCfg(S.key);
+    const usable = S.has[plot.met];
+    const i = rank.get(S.key);
+
+    const row = document.createElement('div');
+    row.className = 'srow';
+
+    const box = document.createElement('input');
+    Object.assign(box, { type: 'checkbox', checked: cfg.on && usable, disabled: !usable });
+    box.onchange = () => {
+      cfg.on = box.checked;
+      saveSettings();
+      rebuildSources();     // the fan re-spaces itself around whatever is left
+      mapRedraw();
+    };
+
+    // The angle this radio's rays are drawn at, as a stub pointing the same way - so the
+    // legend on the map and the row in the list are the same fact twice.
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    sw.style.setProperty('--c', usable && cfg.on ? srcCol(S.key) : '#454b5a');
+    if (usable && cfg.on) sw.style.transform = `rotate(${(i * 180 / act.length).toFixed(0)}deg)`;
+
+    const lab = document.createElement('span');
+    lab.className = 'slab';
+    lab.textContent = srcLabel(S);
+    if (!usable) lab.classList.add('dim');
+
+    const rng = document.createElement('span');
+    rng.className = 'srng';
+    rng.textContent = !usable ? 'no ' + M.lab
+                    : cfg.slo + ' → ' + cfg.shi + (M.unit ? ' ' + M.unit : '');
+
     const auto = document.createElement('button');
     auto.textContent = 'auto';
-    auto.disabled = true;
-    auto.title = 'Scale this axis to fit everything heard so far';
-    auto.onclick = () => autoAxis(a);
-    top.append(key, src, met, auto);
-    wrap.appendChild(top);
+    auto.disabled = !usable;
+    auto.onclick = () => autoSource(S.key);
 
-    const mkSlider = (label, min, max, step, onInput) => {
-      const row = document.createElement('div');
-      row.className = 'axrow off';
-      row.appendChild(Object.assign(document.createElement('span'),
-                                    { className: 'axlab', textContent: label }));
+    row.append(box, sw, lab, rng, auto);
+    list.appendChild(row);
+
+    if (!plot.scales || !usable || !cfg.on) continue;
+
+    const mkRange = (label, field) => {
+      const r = document.createElement('div');
+      r.className = 'axrow';
+      r.appendChild(Object.assign(document.createElement('span'),
+                                  { className: 'axlab', textContent: label }));
       const s = document.createElement('input');
-      Object.assign(s, { type: 'range', min, max, step, value: 0 });
-      s.style.accentColor = a.col;
-      const out = Object.assign(document.createElement('b'), { className: 'axval' });
-      s.addEventListener('input', () => onInput(+s.value));
-      row.append(s, out);
-      wrap.appendChild(row);
-      return { row, s, out };
+      Object.assign(s, { type: 'range', min: M.lo, max: M.hi, step: 1, value: cfg[field] });
+      s.style.accentColor = srcCol(S.key);
+      const out = Object.assign(document.createElement('b'),
+        { className: 'axval', textContent: cfg[field] + (M.unit ? ' ' + M.unit : '') });
+      s.addEventListener('input', () => {
+        cfg[field] = +s.value;
+        out.textContent = cfg[field] + (M.unit ? ' ' + M.unit : '');
+        rng.textContent = cfg.slo + ' → ' + cfg.shi + (M.unit ? ' ' + M.unit : '');
+        saveSettings();
+        mapRedraw();
+      });
+      r.append(s, out);
+      list.appendChild(r);
     };
-
-    // Zero spans the metric's own domain; length is in pixels and signed, so dragging it
-    // through zero flips the whiskers to point the other way. That is worth having: on a walk
-    // that runs east, marks pointing east sit on top of the track and marks pointing west sit
-    // clear of it.
-    const zero = mkSlider('zero', -125, 255, 1, v => {
-      a.zero = v;
-      a.ui.zero.out.textContent = v + (METRICS[a.met].unit ? ' ' + METRICS[a.met].unit : '');
-      mapRedraw();
-    });
-    const scale = mkSlider('scale', -PXU_STEPS, PXU_STEPS, 1, q => {
-      a.pxu = pxuFromSlider(q);
-      a.ui.scale.out.textContent = fmtPxu(a.pxu) + ' px/' + METRICS[a.met].su;
-      mapRedraw();
-    });
-
-    a.ui = { src, met, auto, zero, scale };
-    src.onchange = () => {
-      a.src = src.value;
-      fillMetrics(a);
-      syncAxis(a);
-      mapRedraw();
-    };
-    met.onchange = () => {
-      setMetric(a, met.value);
-      syncAxis(a);
-      mapRedraw();
-    };
-    host.appendChild(wrap);
+    mkRange('shortest', 'slo');
+    mkRange('longest', 'shi');
   }
 }
 
+// Rebuilt only when the set of radios changes, so touching a slider does not tear the list out
+// from under the finger that is holding it.
+function syncSources() {
+  if (srcBuiltRev === seriesRev) return;
+  srcBuiltRev = seriesRev;
+  rebuildSources();
+}
+
+// ---- settings that outlive a run --------------------------------------------------------------
+//
+// Only the setup, never the readings. Clearing the track deliberately leaves all of this alone,
+// and so does a reload - a field test starts by getting the scales right, and having to do that
+// again every time the page reloads is how a walk gets wasted.
+const SETTINGS_KEY = 'esprt.plot.v1';
+
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      met: plot.met, minPx: plot.minPx, maxPx: plot.maxPx, scales: plot.scales,
+      showMiss: showMiss,
+      src: [...plot.src.entries()],
+    }));
+  } catch (e) { /* private window, or storage full - the page still works without it */ }
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    if (o.met && METRICS[o.met]) plot.met = o.met;
+    if (typeof o.minPx === 'number') plot.minPx = o.minPx;
+    if (typeof o.maxPx === 'number') plot.maxPx = o.maxPx;
+    if (typeof o.scales === 'boolean') plot.scales = o.scales;
+    if (typeof o.showMiss === 'boolean') showMiss = o.showMiss;
+    if (Array.isArray(o.src)) plot.src = new Map(o.src);
+  } catch (e) { /* corrupt or unavailable - fall back to defaults rather than failing to load */ }
+}
 // ---- the canvas -----------------------------------------------------------------------------
 
 const cv  = document.getElementById('cv');
@@ -967,11 +1067,11 @@ function mapRedraw() {
   mapQueued = true;
   requestAnimationFrame(() => {
     mapQueued = false;
-    // Ahead of the draw, and outside it, because the menus have to fill up as soon as a radio
-    // is heard - not once there is something to draw. Setting the axes up while the boards are
+    // Ahead of the draw, and outside it, because the list has to fill up as soon as a radio is
+    // heard - not once there is something to draw. Setting the scales up while the boards are
     // still on the bench, before GPS is on and before there is a single fix, is the normal way
-    // to start a test; hanging that off the drawing path left the dropdowns empty exactly then.
-    rebuildAxisMenus();
+    // to start a test; hanging that off the drawing path left the list empty exactly then.
+    syncSources();
     drawMap();
     paintMapStat();
   });
@@ -1000,7 +1100,8 @@ function drawMap() {
   }
   if (view.follow && geo.live) { view.cx = geo.live.x; view.cy = geo.live.y; }
 
-  const [ax, ay] = AXES;
+  const act = activeSources();
+  const rank = new Map(act.map((S, i) => [S.key, i]));
 
   // Range rings, when a base has been dropped. They turn the whole canvas into a distance
   // readout at a glance, which is the number a range test is really about.
@@ -1032,9 +1133,16 @@ function drawMap() {
   }
   g.stroke();
 
-  // Marks. Batched into one path per thing being drawn, for the same reason.
-  const pX = new Path2D(), pY = new Path2D(), pDot = new Path2D(), pMiss = new Path2D();
-  const pad = 260;   // whiskers reach outward, so cull generously rather than exactly
+  // Marks. One path per radio, so a walk's worth of rays is a handful of strokes rather than
+  // tens of thousands.
+  const pMiss = new Path2D();
+  const rays = act.map(() => new Path2D());
+  // Precomputed per radio: the unit vector its rays point along, and its length mapping.
+  const dirs = act.map((S, i) => {
+    const a = rayAngle(i, act.length);
+    return { dx: Math.sin(a), dy: -Math.cos(a), cfg: srcCfg(S.key) };
+  });
+  const pad = plot.maxPx + 20;   // rays reach outward, so cull generously rather than exactly
   let drawn = 0;
   for (let i = 0; i < samples.length; i++) {
     const s = samples[i];
@@ -1044,19 +1152,13 @@ function drawMap() {
     if (px < -pad || px > W + pad || py < -pad || py > H + pad) continue;
     drawn++;
 
-    pDot.moveTo(px - 1.5, py); pDot.lineTo(px + 1.5, py);
-    pDot.moveTo(px, py - 1.5); pDot.lineTo(px, py + 1.5);
-
-    if (ax.met && s.key === ax.src) {
-      const v = mval(s, ax.met);
+    const r = rank.get(s.key);
+    if (r !== undefined) {
+      const v = mval(s, plot.met);
       if (typeof v === 'number' && isFinite(v)) {
-        pX.moveTo(px, py); pX.lineTo(px + axLen(ax, v), py);
-      }
-    }
-    if (ay.met && s.key === ay.src) {
-      const v = mval(s, ay.met);
-      if (typeof v === 'number' && isFinite(v)) {
-        pY.moveTo(px, py); pY.lineTo(px, py - axLen(ay, v));
+        const d = dirs[r], L = markLen(d.cfg, v);
+        rays[r].moveTo(px, py);
+        rays[r].lineTo(px + d.dx * L, py + d.dy * L);
       }
     }
 
@@ -1080,9 +1182,7 @@ function drawMap() {
     }
   }
   if (showMiss) { g.strokeStyle = 'rgba(248,113,113,.55)'; g.stroke(pMiss); }
-  g.strokeStyle = 'rgba(232,234,240,.32)'; g.stroke(pDot);
-  g.strokeStyle = ax.col; g.stroke(pX);
-  g.strokeStyle = ay.col; g.stroke(pY);
+  act.forEach((S, i) => { g.strokeStyle = srcCol(S.key); g.stroke(rays[i]); });
 
   // Base marker: a small open square, so it reads as a placed thing rather than a measurement.
   if (geo.base) {
@@ -1122,17 +1222,24 @@ function drawMap() {
   g.fillText('N ↑', W - 30, H - 8);
   g.textBaseline = 'top';
 
+  // Legend. Each entry carries a stub drawn at that radio's own angle, so which ray is which
+  // can be read off the map without looking away from it.
+  const M = METRICS[plot.met];
   let ly = 10;
-  for (const a of AXES) {
-    if (!a.met) continue;
-    const S = series.get(a.src);
-    const M = METRICS[a.met];
-    g.fillStyle = a.col;
-    g.fillText(`${a.id === 'x' ? '↔' : '↕'} ` +
-               `${S ? axSeriesLabel(S) : a.src} ${M.lab}  ` +
-               `0 at ${a.zero}${M.unit}, ${fmtPxu(a.pxu)} px/${M.su}`, 12, ly);
+  g.fillStyle = '#8b93a7';
+  g.fillText(M.lab + (M.unit ? ' (' + M.unit + ')' : ''), 12, ly);
+  ly += 15;
+  act.forEach((S, i) => {
+    const d = dirs[i], cy0 = ly + 6;
+    g.strokeStyle = srcCol(S.key);
+    g.beginPath();
+    g.moveTo(16, cy0);
+    g.lineTo(16 + d.dx * 9, cy0 + d.dy * 9);
+    g.stroke();
+    g.fillStyle = srcCol(S.key);
+    g.fillText(`${srcLabel(S)}  ${d.cfg.slo} → ${d.cfg.shi}`, 30, ly);
     ly += 15;
-  }
+  });
   if (drawn < samples.length) {
     g.fillStyle = '#6b7488';
     g.fillText(`${drawn} of ${samples.length} marks in view`, 12, ly);
@@ -1382,13 +1489,16 @@ function exportCsv() {
 
 // ---- wiring ------------------------------------------------------------------------------------
 
-buildAxes();
+loadSettings();
+buildPlotControls();
+rebuildSources();
 
 document.getElementById('gps').onclick = () => geo.watch === null ? gpsStart() : gpsStop();
 document.getElementById('follow').onclick = () => setFollow(!view.follow);
 document.getElementById('fit').onclick = fitMap;
 document.getElementById('mis').onclick = () => {
   showMiss = !showMiss;
+  saveSettings();
   paintMapBar();
   mapRedraw();
 };
@@ -1400,19 +1510,21 @@ document.getElementById('base').onclick = () => {
   mapRedraw();
 };
 document.getElementById('csv').onclick = exportCsv;
+// Readings only. The whole point of clearing is to start a run without the junk from the last
+// one, and that is done *after* everything is set up - so wiping the setup at the same time
+// means every test begins by dialling the scales in again.
+//
+// The radio list survives too, and so does the projection origin: dropping those would take the
+// per-radio scales and the base marker with them, which are exactly the things worth keeping.
 document.getElementById('wipe').onclick = () => {
   if (samples.length && !confirm(`Throw away ${samples.length} marks and the track?`)) return;
   samples.length = 0;
   geo.fixes.length = 0;
   geo.live = null;
-  geo.org = null;
-  geo.base = null;
-  series.clear();
-  seriesRev++;
   view.seeded = false;
   paintMapBar();
   mapRedraw();
-  logMsg('map cleared');
+  logMsg('track and readings cleared - settings kept');
 };
 document.getElementById('fold').onclick = function () {
   const folded = document.getElementById('map').classList.toggle('fold');
@@ -1421,14 +1533,6 @@ document.getElementById('fold').onclick = function () {
 };
 
 addEventListener('resize', mapRedraw);
-
-// A back-swipe or an accidental reload in the middle of a field test throws the whole walk
-// away, and there is no getting it back from where you are standing.
-addEventListener('beforeunload', e => {
-  if (!samples.length) return;
-  e.preventDefault();
-  e.returnValue = '';
-});
 
 // Asking for location the instant the page opens is rude and Chrome may refuse it outright,
 // so the button is the way in. But once permission has been given, a field test starts by
