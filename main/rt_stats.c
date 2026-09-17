@@ -544,7 +544,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         n = put_u8(out, n, (uint8_t)tpdr);
         n = put_u32(out, n, l->rx);
         n = put_u32(out, n, l->missed);
-        n = put_u32(out, n, now - l->last_ms);
+        n = put_u16(out, n, (now - l->last_ms + 50) / 100);
         n = put_u8(out, n, (uint8_t)snr);
         n = put_u8(out, n, l->lqi);
         n = put_u8(out, n, (uint8_t)l->peer_txdbm);

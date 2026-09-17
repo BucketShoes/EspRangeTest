@@ -368,13 +368,13 @@ void rt_report(void);
 //     tx[3], 16 bytes each, CH_ order:
 //       u32 queued, u32 ok, u32 rejected, u16 offmode_rx, u16 offmode_age_s
 //
-//   row record (23 bytes, packed end to end after whichever block precedes them)
+//   row record (21 bytes, packed end to end after whichever block precedes them)
 //     u8  peer, u8 chan
 //     i8  rssi_last, i8 rssi_avg, i8 rssi_min, i8 rssi_max
 //     i8  pdr_now, i8 pdr_all      -1 where there is no data yet
 //     u32 rx, u32 missed
-//     u32 age_ms                   was u16 in v2, which clamped at 65.5 s - so a link silent
-//                                  for longer sat at "65 s ago" forever instead of ageing
+//     u16 age_ds                   0.1s units, clamped at 6553.5s. v2 sent ms here, which
+//                                  clamped at 65.5s - a silent link sat at "65s ago" forever
 //     i8  snr                      -128 where the radio measures no noise floor
 //     u8  lqi                      802.15.4 only
 //     i8  peer_txdbm               what the far end said it transmitted at
@@ -386,7 +386,7 @@ void rt_report(void);
 #define RT_RPT_VER      3
 #define RT_RPT_HDR      4
 #define RT_RPT_STATUS   81
-#define RT_RPT_ROW      23
+#define RT_RPT_ROW      21
 #define RT_RPT_TYPE_STATUS 0x01
 #define RT_RPT_TYPE_ROWS   0x02
 
