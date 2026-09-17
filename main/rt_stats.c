@@ -286,13 +286,6 @@ void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
     s_tx_count[chan]++;
 }
 
-void rt_tx_muted(int chan)
-{
-    if (chan >= 0 && chan < CH_COUNT) {
-        s_tx_seq[chan]++;
-    }
-}
-
 void rt_tx_ok(int chan)
 {
     if (chan >= 0 && chan < CH_COUNT) {

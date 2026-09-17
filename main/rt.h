@@ -184,31 +184,19 @@ void rt_set_antenna(bool external);
 
 // ---- Transmit mute -----------------------------------------------------------------------
 //
-// Stops ESP-NOW and 802.15.4 sending their test packets, and nothing else. Receivers stay on,
-// so a muted board is a pure listener on those two channels.
+// ESP-NOW and 802.15.4 skip sending their test packets. That is all it does - receiving and
+// everything reported about received packets is untouched. For carrying several listening
+// boards together without them flooding each other.
 //
-// Deliberately only those two. The BLE advertiser shares its controller with the phone link,
-// and the SoftAP is how a phone reaches the board over Wi-Fi; muting either is a way to lose a
-// control path, which no command here is allowed to do.
+// Only those two: BLE and the SoftAP carry the control paths.
 //
-// Separate from rt_tx_enabled() on purpose: that answers "is this channel in the current mode",
-// and rt_rx() throws away what arrives on a channel that is not - a muted channel still counts
-// what it hears.
-//
-// Sequence numbers keep advancing while muted (rt_tx_muted()). A receiver cannot know the far
-// end's settings and must not need to: silence from a muted board has to look exactly like
-// silence from one that is out of range, and both are packets it did not hear. Freezing the
-// sequence would make a muted board's gap vanish from the far end's loss figures - the sender
-// editing the receiver's report. Off at boot, and the button restore clears it.
+// Not folded into rt_tx_enabled(), because rt_rx() also uses that to discard packets arriving
+// on a channel outside the current mode. Off at boot; the button restore clears it.
 #define RT_CMD_TX_UNMUTE 0x86
 #define RT_CMD_TX_MUTE   0x87
 
 extern volatile bool g_tx_mute;
 void rt_set_tx_mute(bool mute);
-
-// A tx loop's slot passing while muted: uses up the sequence number the packet would have had,
-// and counts nothing as queued, because nothing was.
-void rt_tx_muted(int chan);
 
 // ---- Transmit power ----------------------------------------------------------------------
 //

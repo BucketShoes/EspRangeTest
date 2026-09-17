@@ -50,9 +50,7 @@ static void tx_task(void *pv)
 {
     (void)pv;
     for (;;) {
-        if (rt_tx_enabled(CH_ESPNOW) && g_tx_mute) {
-            rt_tx_muted(CH_ESPNOW);
-        } else if (rt_tx_enabled(CH_ESPNOW)) {
+        if (rt_tx_enabled(CH_ESPNOW) && !g_tx_mute) {
             // The real figure, read back from the driver, not the one we asked for: the
             // hardware quantises the request to its own ladder of values.
             int8_t qdbm = 0;
