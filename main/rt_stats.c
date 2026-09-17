@@ -19,6 +19,16 @@ static const char *TAG = "stats";
 const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
 volatile int g_lc = 0;
+volatile bool g_tx_mute;
+
+void rt_set_tx_mute(bool mute)
+{
+    if (mute == g_tx_mute) {
+        return;
+    }
+    g_tx_mute = mute;
+    ESP_LOGW(TAG, "espnow + 154 tx %s", mute ? "MUTED (receive only)" : "unmuted");
+}
 
 // Each radio's real range, from its own API - see the note in rt.h. Wi-Fi's floor of +2dBm is
 // not a choice; it is where esp_wifi_set_max_tx_power's valid range starts.
@@ -472,7 +482,8 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
                                         | (g_ant_ext ? 2 : 0)
                                         | (rt_wifi_active() ? 4 : 0)
                                         | (g_conn_2m ? 8 : 0)
-                                        | ((rt_conn_phy_actual() & 0x03) << 4));
+                                        | ((rt_conn_phy_actual() & 0x03) << 4)
+                                        | (g_tx_mute ? 0x40 : 0));
 
         n = put_u8(out, n, RT_RPT_VER);
         n = put_u8(out, n, rt_node_id());
@@ -582,7 +593,9 @@ void rt_report(void)
     printf("  tx: ");
     for (int c = 0; c < CH_COUNT; c++) {
         printf("%s=%lu%s", rt_chan_name[c], (unsigned long)s_tx_count[c],
-               rt_tx_enabled(c) ? "" : "(off)");
+               !rt_tx_enabled(c)              ? "(off)"
+               : g_tx_mute && c != CH_BLE_ADV ? "(muted)"
+                                              : "");
         if (s_tx_ok[c] || s_tx_fail[c]) {
             printf("[%lu ok, %lu rejected]", (unsigned long)s_tx_ok[c],
                    (unsigned long)s_tx_fail[c]);

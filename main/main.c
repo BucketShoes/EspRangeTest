@@ -271,6 +271,9 @@ static void restore_control(void)
     // rule as LR and the antenna: no command may strand the board somewhere this button
     // cannot reach.
     rt_set_conn_phy(false);
+    // Not a control path, but "all radios on" has to mean it: a board left muted by a command
+    // nobody remembers sending just reads as a dead channel.
+    rt_set_tx_mute(false);
     rt_set_lc(0);
 }
 

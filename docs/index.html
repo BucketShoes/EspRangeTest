@@ -166,6 +166,11 @@ const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 // exactly two gestures, tap and hold, and hold has to stay the restore.
 const CMD_ANT_INT = 0x82, CMD_ANT_EXT = 0x83;
 
+// Transmit mute: ESP-NOW and 802.15.4 stop sending, receivers stay on. BLE and Wi-Fi are left
+// alone because they carry the control paths. Off at boot; the button restore clears it.
+// Must match RT_CMD_TX_* in main/rt.h.
+const CMD_TX_UNMUTE = 0x86, CMD_TX_MUTE = 0x87;
+
 // Control-link PHY. Coded S=8 is the default and the long-range one; 2M is the cheap one, for
 // when the phone is next to the board and the report is just overhead on someone else's test.
 // Nothing in between - 1M and S=2 are compromises for a decision that does not need one.
@@ -369,6 +374,7 @@ function onChunk(d, v) {
     d.wifiOn  = state & 4 ? 1 : 0;
     d.conn2m  = state & 8 ? 1 : 0;
     d.connPhy = (state >> 4) & 3;
+    d.txMute  = state & 0x40 ? 1 : 0;
 
     d.boardMs = upMs;
     // offset converts board time to browser time, as a running *minimum*: transit delay is
@@ -1757,6 +1763,12 @@ function buildCard(d) {
   R.ant.onclick = () => cmd(d, d.ant ? CMD_ANT_INT : CMD_ANT_EXT);
   modes.appendChild(R.ant);
 
+  R.txm = document.createElement('button');
+  R.txm.title = 'Stop ESP-NOW and 802.15.4 transmitting; this board keeps receiving them. BLE ' +
+                'and Wi-Fi are unaffected. Holding the board’s button unmutes.';
+  R.txm.onclick = () => cmd(d, d.txMute ? CMD_TX_UNMUTE : CMD_TX_MUTE);
+  modes.appendChild(R.txm);
+
   // Control-link PHY. Two uses, opposite answers: coded S=8 when the phone link itself is what
   // is being range-tested, 2M when the phone is in a pocket next to the board and the report is
   // pure overhead stolen from whatever channel is under test. 2M is ~16x cheaper per byte.
@@ -1915,6 +1927,10 @@ function updateCard(d) {
   R.ant.textContent = d.ant === undefined ? 'ant ?'
                     : d.ant ? 'ant external' : 'ant internal';
   R.ant.className = d.ant ? 'on' : '';
+
+  R.txm.textContent = d.txMute === undefined ? 'tx ?'
+                    : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on';
+  R.txm.className = d.txMute ? 'on' : '';
 
   // Requested on the left, what the controller actually settled on in brackets when the two
   // disagree - a phone that declined 2M reads "2M (1M)" rather than silently looking applied.

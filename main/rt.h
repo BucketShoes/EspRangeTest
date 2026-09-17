@@ -182,6 +182,25 @@ uint8_t rt_conn_phy_actual(void);
 extern volatile bool g_ant_ext;
 void rt_set_antenna(bool external);
 
+// ---- Transmit mute -----------------------------------------------------------------------
+//
+// Stops ESP-NOW and 802.15.4 sending their test packets, and nothing else. Receivers stay on,
+// so a muted board is a pure listener on those two channels.
+//
+// Deliberately only those two. The BLE advertiser shares its controller with the phone link,
+// and the SoftAP is how a phone reaches the board over Wi-Fi; muting either is a way to lose a
+// control path, which no command here is allowed to do.
+//
+// Separate from rt_tx_enabled() on purpose: that answers "is this channel in the current mode",
+// and rt_rx() throws away what arrives on a channel that is not - a muted channel still counts
+// what it hears. Sequence numbers do not advance while muted, so the far end sees a pause in
+// arrivals, not a run of lost packets. Off at boot, and the button restore clears it.
+#define RT_CMD_TX_UNMUTE 0x86
+#define RT_CMD_TX_MUTE   0x87
+
+extern volatile bool g_tx_mute;
+void rt_set_tx_mute(bool mute);
+
 // ---- Transmit power ----------------------------------------------------------------------
 //
 // Raw dBm per channel, over each radio's real range, set at runtime.
@@ -336,7 +355,8 @@ void rt_report(void);
 //     u8  node
 //     u8  lc
 //     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
-//                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded)
+//                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded),
+//                       bit6 tx_mute
 //     u32 up_ms         board clock when the whole snapshot was taken; every age below is
 //                       measured against it, so the page can put ages on the board's timebase
 //                       instead of on arrival times

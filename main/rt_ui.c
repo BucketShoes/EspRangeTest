@@ -220,6 +220,8 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
         rt_set_lr(b[0] == RT_CMD_LR_ON);
     } else if (b[0] == RT_CMD_ANT_INT || b[0] == RT_CMD_ANT_EXT) {
         rt_set_antenna(b[0] == RT_CMD_ANT_EXT);
+    } else if (b[0] == RT_CMD_TX_UNMUTE || b[0] == RT_CMD_TX_MUTE) {
+        rt_set_tx_mute(b[0] == RT_CMD_TX_MUTE);
     } else if (b[0] == RT_CMD_PHY_CODED || b[0] == RT_CMD_PHY_2M) {
         rt_set_conn_phy(b[0] == RT_CMD_PHY_2M);
     } else if (b[0] >= RT_CMD_PWR_SET && b[0] <= RT_CMD_PWR_SET + CH_COUNT) {
