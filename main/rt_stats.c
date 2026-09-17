@@ -101,10 +101,18 @@ void rt_set_power(int chan, int dbm)
     printf("\n");
 }
 
+// One slice of the "pdr now" window. `slice` is which slice of time it holds counts for
+// (rt_ms() / slice length); a bucket whose slice has fallen out of the window is just ignored,
+// and overwritten the next time a packet lands in its ring position.
+typedef struct {
+    uint32_t slice;
+    uint16_t rx, missed;
+} rt_pdr_bucket;
+
 typedef struct {
     bool     seen;
     uint32_t rx, missed;      // totals since boot
-    uint32_t wrx, wmissed;    // since the last report
+    rt_pdr_bucket win[RT_PDR_BUCKETS];
     uint32_t last_seq;
     int32_t  rssi_sum;
     int32_t  rssi_n;
@@ -132,6 +140,40 @@ static uint8_t  s_node_id;
 uint32_t rt_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+#define PDR_SLICE_MS (RT_PDR_WINDOW_MS / RT_PDR_BUCKETS)
+
+// The bucket for time `now`, emptied first if it still holds a slice from an earlier lap of the
+// ring. Only the rx path calls this - readers never write, so a report being built cannot
+// disturb the counts a packet callback is adding to.
+static rt_pdr_bucket *pdr_bucket(rt_link *l, uint32_t now)
+{
+    const uint32_t slice = now / PDR_SLICE_MS;
+    rt_pdr_bucket *b = &l->win[slice % RT_PDR_BUCKETS];
+    if (b->slice != slice) {
+        b->slice  = slice;
+        b->rx     = 0;
+        b->missed = 0;
+    }
+    return b;
+}
+
+// Percent over every bucket still inside the window, or -1 if nothing landed or was lost in it.
+// Replaces a pair of counters cleared at every report, which tied the window to REPORT_MS and
+// needed app_main to clear them only after both the serial and phone reports had read them.
+static int pdr_now(const rt_link *l, uint32_t now)
+{
+    const uint32_t cur = now / PDR_SLICE_MS;
+    uint32_t rx = 0, missed = 0;
+    for (int i = 0; i < RT_PDR_BUCKETS; i++) {
+        if (cur - l->win[i].slice < RT_PDR_BUCKETS) {
+            rx     += l->win[i].rx;
+            missed += l->win[i].missed;
+        }
+    }
+    const uint32_t tot = rx + missed;
+    return tot ? (int)((rx * 100) / tot) : -1;
 }
 
 uint32_t rt_jitter_ms(uint32_t ms)
@@ -297,6 +339,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     }
 
     rt_link *l = &s_peers[slot].ch[chan];
+    rt_pdr_bucket *b = pdr_bucket(l, rt_ms());
 
     if (l->seen) {
         const uint32_t gap = p.seq - l->last_seq;
@@ -304,7 +347,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
         // inject a phantom loss run.
         if (gap > 1 && gap < 1000) {
             l->missed  += gap - 1;
-            l->wmissed += gap - 1;
+            b->missed  += gap - 1;
         }
     } else {
         l->seen     = true;
@@ -314,7 +357,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
 
     l->last_seq  = p.seq;
     l->rx++;
-    l->wrx++;
+    b->rx++;
     l->rssi_last = rssi;
     l->rssi_sum += rssi;
     l->rssi_n++;
@@ -474,12 +517,11 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         }
         st->row_next++;
 
-        const uint32_t wtot = l->wrx + l->wmissed;
-        const int      wpdr = wtot ? (int)((l->wrx * 100) / wtot) : -1;
+        const int      wpdr = pdr_now(l, now);
         const uint32_t tot  = l->rx + l->missed;
         const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
         const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
-        const int      snr  = (l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
+        const int      snr  =(l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
 
         n = put_u8(out, n, peer);
         n = put_u8(out, n, chan);
@@ -504,28 +546,6 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
     out[3] = last ? 0x01 : 0x00;
     st->chunk++;
     return n;
-}
-
-// End of a report period. Clears the window counters that "pdr now" is computed from.
-//
-// This is called by app_main once, after *both* consumers have read them - and that ordering is
-// the whole point. rt_report() used to clear them itself, as the last thing it did per link,
-// and app_main calls rt_report() immediately before rt_ui_notify(). So the serial table got a
-// real "pdr now" and the phone read the counters microseconds after they were zeroed, which
-// made wtot zero, which made the page's pdr_now -1 - every report, since the column existed.
-//
-// Two readers of one window means neither of them may own clearing it.
-void rt_snapshot_window_reset(void)
-{
-    for (int i = 0; i < RT_MAX_PEERS; i++) {
-        if (!s_peers[i].used) {
-            continue;
-        }
-        for (int c = 0; c < CH_COUNT; c++) {
-            s_peers[i].ch[c].wrx     = 0;
-            s_peers[i].ch[c].wmissed = 0;
-        }
-    }
 }
 
 void rt_report(void)
@@ -603,8 +623,7 @@ void rt_report(void)
             }
             any = true;
 
-            const uint32_t wtot = l->wrx + l->wmissed;
-            const int      wpdr = wtot ? (int)((l->wrx * 100) / wtot) : -1;
+            const int      wpdr = pdr_now(l, now);
             const uint32_t tot  = l->rx + l->missed;
             const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
             const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
@@ -626,8 +645,6 @@ void rt_report(void)
                 printf(" lqi %u", l->lqi);
             }
             printf("\n");
-            // Window counters are NOT cleared here - app_main does it after the phone report
-            // has been built too. See rt_snapshot_window_reset().
         }
     }
     if (!any) {

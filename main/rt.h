@@ -71,6 +71,16 @@ extern const char *rt_chan_name[CH_COUNT];
 #define RT_MAGIC     0x9C7A5254u
 #define RT_MAX_PEERS 6
 
+// "pdr now": delivery ratio over a sliding window, kept per link as RT_PDR_BUCKETS equal slices
+// of time. The window moves forward one slice at a time, so a reading covers between
+// (BUCKETS-1)/BUCKETS and all of RT_PDR_WINDOW_MS depending on how far into the newest slice it
+// is taken. More buckets = smoother slide, 8 bytes each per link.
+//
+// Time-based rather than counted in reports, so changing REPORT_MS does not change what the
+// figure means. At 4 Hz a 1 s window moved in 25% steps; 10 s is 40 packets and 2.5% steps.
+#define RT_PDR_WINDOW_MS 10000
+#define RT_PDR_BUCKETS   10
+
 // 8 bytes. All nodes are little-endian ESP32s, so a packed struct straight onto the wire is
 // fine - no hand serialisation needed.
 typedef struct __attribute__((packed)) {
@@ -383,11 +393,6 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st);
 // How many rows this report will contain. Needed up front, because n_rows goes in the status
 // block and the status block goes out first.
 int rt_snapshot_rows(void);
-
-// End of a report period: clears the counters behind "pdr now". Called by app_main after both
-// the serial report and the phone report have read them - see the comment on the definition
-// for why neither of those two may own it.
-void rt_snapshot_window_reset(void);
 
 void rt_espnow_start(void);
 void rt_ble_start(void);

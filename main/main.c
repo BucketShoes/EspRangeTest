@@ -28,12 +28,8 @@ static const char *TAG = "rt";
 
 // 2s was the upper bound of usable, not a target - at that rate a walk is hard to read as it
 // happens. The measurement packets themselves run at 2-4Hz, so this only ever governed how
-// often the table is summarised, never what was captured.
-//
-// The one cost is resolution of the "pdr now" column: it covers one report period, so at 1s and
-// 4Hz it is four samples and moves in 25% steps. The "pdr all" column and every RSSI figure are
-// unaffected, and a sparse channel still reports its late arrivals - one packet through at 99%
-// loss is worth seeing whenever it lands.
+// often the table is summarised, never what was captured. "pdr now" has its own time window
+// (RT_PDR_WINDOW_MS in rt.h) and does not depend on this.
 #define REPORT_MS    1000
 #define BUTTON_GPIO  9
 #define WIFI_CHAN    1
@@ -539,9 +535,5 @@ void app_main(void)
 #if RT_STAGE >= 4
         rt_ui_notify();
 #endif
-        // After both readers, never inside either. rt_report() used to clear these itself,
-        // which meant the phone's "pdr now" was computed from counters the serial report had
-        // zeroed microseconds earlier - so it read -1 on every report the column ever had.
-        rt_snapshot_window_reset();
     }
 }

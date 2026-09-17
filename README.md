@@ -14,7 +14,7 @@ Every 2 seconds the results go out over serial:
   C6 154      rssi  -88 (avg  -85, -95..-77)  pdr  61% now /  70% all  rx 118 miss 74  253ms ago lqi 96
 ```
 
-`pdr now` is the current 2-second window, `pdr all` is since boot. Loss is counted from gaps
+`pdr now` is a sliding 10-second window (`RT_PDR_WINDOW_MS` in `main/rt.h`), `pdr all` is since boot. Loss is counted from gaps
 in the sequence numbers.
 
 ## Radios
