@@ -256,7 +256,9 @@ static void tx_task(void *pv)
         apply_rx_gate();
         // Muting stops the transmit only; apply_rx_gate() still follows the mode, so a muted
         // board keeps listening.
-        if (rt_tx_enabled(CH_154) && !g_tx_mute) {
+        if (rt_tx_enabled(CH_154) && g_tx_mute) {
+            rt_tx_muted(CH_154);
+        } else if (rt_tx_enabled(CH_154)) {
             uint8_t frame[1 + HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN];
             uint8_t *f = &frame[1];
 

@@ -193,13 +193,22 @@ void rt_set_antenna(bool external);
 //
 // Separate from rt_tx_enabled() on purpose: that answers "is this channel in the current mode",
 // and rt_rx() throws away what arrives on a channel that is not - a muted channel still counts
-// what it hears. Sequence numbers do not advance while muted, so the far end sees a pause in
-// arrivals, not a run of lost packets. Off at boot, and the button restore clears it.
+// what it hears.
+//
+// Sequence numbers keep advancing while muted (rt_tx_muted()). A receiver cannot know the far
+// end's settings and must not need to: silence from a muted board has to look exactly like
+// silence from one that is out of range, and both are packets it did not hear. Freezing the
+// sequence would make a muted board's gap vanish from the far end's loss figures - the sender
+// editing the receiver's report. Off at boot, and the button restore clears it.
 #define RT_CMD_TX_UNMUTE 0x86
 #define RT_CMD_TX_MUTE   0x87
 
 extern volatile bool g_tx_mute;
 void rt_set_tx_mute(bool mute);
+
+// A tx loop's slot passing while muted: uses up the sequence number the packet would have had,
+// and counts nothing as queued, because nothing was.
+void rt_tx_muted(int chan);
 
 // ---- Transmit power ----------------------------------------------------------------------
 //
