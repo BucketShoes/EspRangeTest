@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_now.h"
@@ -30,9 +31,14 @@ static void on_rx(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 
 // esp_now_send() returning ESP_OK only means the driver queued the frame, not that it went
 // out - the actual air result lands here, asynchronously.
-static void on_send(const uint8_t *mac_addr, esp_now_send_status_t status)
+// IDF 5.5 changed the first argument from the peer MAC to a wifi_tx_info_t. Unused either way.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+static void on_send(const wifi_tx_info_t *tx_info, esp_now_send_status_t status)
+#else
+static void on_send(const uint8_t *tx_info, esp_now_send_status_t status)
+#endif
 {
-    (void)mac_addr;
+    (void)tx_info;
     if (status == ESP_NOW_SEND_SUCCESS) {
         rt_tx_ok(CH_ESPNOW);
     } else {
