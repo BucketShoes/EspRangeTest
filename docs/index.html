@@ -75,19 +75,25 @@
   .prow select{flex:1 1 118px;min-width:0;background:var(--bg);color:var(--fg);
                border:1px solid var(--line);border-radius:8px;padding:7px;font-size:13px}
   .prow button{padding:7px 10px;font-size:12px;border-radius:8px;flex:none}
-  .srow{display:flex;gap:7px;align-items:center;margin:5px 0}
-  .srow input[type=checkbox]{width:18px;height:18px;flex:none;accent-color:var(--acc);margin:0}
+  .prow.quick button{padding:5px 9px;font-size:12px}
+  .srow{display:flex;gap:7px;align-items:center;margin:7px 0 2px}
   .srow button{padding:5px 8px;font-size:11px;border-radius:6px;flex:none}
-  /* A stub rotated to the angle this radio's rays are drawn at, so the list and the map say
-     the same thing. */
-  .swatch{width:14px;height:14px;flex:none;position:relative}
-  .swatch::after{content:'';position:absolute;left:6px;top:0;width:2px;height:14px;
-                 background:var(--c,#454b5a);border-radius:1px}
   .slab{flex:1 1 auto;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;
         white-space:nowrap}
   .srng{flex:none;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
-  #sizerow{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}
-  #sizerow.off{display:none}
+  .sizerow{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}
+  #picker.off,#scalebox.off{display:none}
+  /* One table per receiver: protocols across, transmitters down. Every header is a selection,
+     so "all the 802.15.4 this board hears" is one tap rather than six. */
+  table.pick{width:100%;border-collapse:collapse;margin:10px 0 4px}
+  table.pick th{font-size:11px;color:var(--dim);font-weight:600;text-transform:none;
+                letter-spacing:0;padding:4px 3px;text-align:center;white-space:nowrap}
+  table.pick th.sel{cursor:pointer;border-radius:6px;user-select:none;-webkit-user-select:none}
+  table.pick th.sel:active{background:#262b36}
+  table.pick th:first-child{text-align:left;color:var(--fg);font-size:12px}
+  table.pick th.rowh{color:var(--dim);font-weight:400;font-size:12px}
+  table.pick td{padding:3px;text-align:center;border-top:1px solid var(--line)}
+  table.pick input[type=checkbox]{width:20px;height:20px;margin:0}
   .axrow{display:flex;gap:10px;align-items:center;margin-top:7px}
   .axrow.off{display:none}
   .axlab{width:52px;flex:none;font-size:12px;color:var(--dim)}
@@ -710,22 +716,19 @@ function noteSample(d, key, r, prev) {
 
 // ---- what gets drawn --------------------------------------------------------------------------
 //
-// One metric at a time, across as many radios as you like. Every mark is a ray from the spot the
-// packet landed, and the only thing that varies along it is length: long is a strong link, short
-// is a weak one, and there is a floor so a packet that barely made it still leaves something
-// visible. Seeing that anything arrived at all matters more than reading its value precisely.
+// One metric at a time, across as many links as you like. Every mark is a ray from the spot the
+// packet landed, and the only thing that varies along it is length: long is a healthy link,
+// short is one about to fall over, with a floor so a packet that barely made it still leaves
+// something visible and a ceiling so one strong link cannot cover the screen.
 //
-// This replaced a signed offset-and-gain pair per axis, which was wrong in a way that took a
-// walk to notice: below the zero point the length went negative, so the marks turned round and
-// grew *longer* the worse the signal got. Reading "big" as "good" and being handed the opposite
-// is worse than no scale at all.
-//
-// Length is now a mapping between two values and two pixel sizes, clamped at both ends. That
-// gives the floor, and it gives a ceiling too - without one, a scale fine enough to separate
-// -100 from -90 draws a single -50 clear across the screen.
+// What a ray is worth is set per *protocol*, not per link. Two boards running 802.15.4 have to
+// be on the same scale or the comparison is rigged; the same board's 802.15.4 and BLE must not
+// be, because they give up at completely different signal levels and the only question worth
+// asking is how close to giving up each one is. So the scale is keyed by protocol and property,
+// and every link speaking that protocol shares it.
 const METRICS = {
-  // lo/hi bound the sliders; slo/shi are where a fresh source starts - shortest at slo,
-  // longest at shi. For loss, smaller is better, so those two run backwards on purpose.
+  // lo/hi bound the sliders; slo/shi are where a protocol starts before it is calibrated -
+  // shortest at slo, longest at shi. For loss, smaller is better, so those run backwards.
   rssi:   { lab: 'rssi',    unit: 'dBm', lo: -125, hi: 10,  slo: -110, shi: -40 },
   loss:   { lab: 'loss',    unit: 'dB',  lo: 0,    hi: 175, slo: 160,  shi: 60 },
   snr:    { lab: 'snr',     unit: 'dB',  lo: -20,  hi: 70,  slo: 0,    shi: 40 },
@@ -736,74 +739,75 @@ const METRICS = {
 };
 const MKEYS = ['rssi', 'loss', 'snr', 'lqi', 'pdr', 'pdrall', 'hit'];
 const mval  = (s, m) => m === 'hit' ? s.hits : s[m];
+const PROTOS = ['espnow', 'ble_adv', '154'];
 
-// Every enabled radio is the same metric on the same kind of scale, because the comparison is
-// the whole point - what differs is only which direction each one points. But the *mapping* is
-// per radio, and that is deliberate rather than sloppy: -98dBm is dead on ESP-NOW while -106
-// still works on 802.15.4, so a shared value scale would be the thing that isn't a fair
-// comparison. Calibrate each radio so its own edge of failure sits at the short end, and then
-// equal lengths really do mean equally close to falling over.
 const plot = {
   met: 'rssi',
   minPx: 4,
   maxPx: 60,
-  scales: false,          // whether the per-radio range sliders are showing
-  src: new Map(),         // series key -> {on, slo, shi}
+  rot: 0,                 // degrees added to every ray in the fan
+  showPick: true,         // the receiver tables
+  showScale: false,       // the per-protocol ranges
+  on: new Map(),          // series key -> bool. Absent means on; a new link appears drawn.
+  scale: new Map(),       // "proto|metric" -> {slo, shi}
 };
 
 const SRC_COLS = ['#38bdf8', '#c084fc', '#4ade80', '#fbbf24',
                   '#fb7185', '#2dd4bf', '#a3e635', '#f472b6'];
 
+// "154 BB→AA": the protocol, who sent it, who heard it. The receiver is dropped while there is
+// only one, because then every row has the same one and it is just noise.
 function srcLabel(S) {
-  const all = [...series.values()];
-  const manyDev  = new Set(all.map(v => v.dev)).size > 1;
-  const manyPeer = all.filter(v => v.ch === S.ch).length > 1;
-  return S.ch + (manyPeer ? ' ' + S.peer : '') +
-         (manyDev ? ' @' + S.dev.replace(/^ESPRT-/, '') : '');
+  const manyRx = new Set([...series.values()].map(v => v.dev)).size > 1;
+  return S.ch + ' ' + S.peer + (manyRx ? '→' + shortDev(S.dev) : '');
 }
+const shortDev = d => d.replace(/^ESPRT-/, '');
 
 const allSources = () =>
   [...series.values()].sort((p, q) => p.key.localeCompare(q.key));
 
-// Colour follows a radio's place in the full list, not the enabled one, so switching a radio off
-// does not recolour everything else under you.
+// Colour follows a link's place in the full list, not the drawn one, so switching links off does
+// not recolour everything else under you.
 function srcCol(key) {
   const i = allSources().findIndex(S => S.key === key);
   return SRC_COLS[(i < 0 ? 0 : i) % SRC_COLS.length];
 }
 
-// Per-radio config, created on demand. Defaults come from the metric, then `auto` or the sliders
-// move them. Keyed per metric, because a range in dBm means nothing once the metric is lqi.
-function srcCfg(key) {
-  const id = key + '|' + plot.met;
-  let c = plot.src.get(id);
-  if (!c) {
-    const M = METRICS[plot.met];
-    c = { on: true, slo: M.slo, shi: M.shi };
-    plot.src.set(id, c);
+const isOn  = key => plot.on.get(key) !== false;
+const setOn = (key, v) => plot.on.set(key, !!v);
+
+// Shared by every link on this protocol, created on demand. Keyed by metric too, because a
+// range in dBm means nothing once the metric is lqi.
+function scaleFor(ch, met) {
+  const id = ch + '|' + met;
+  let s = plot.scale.get(id);
+  if (!s) {
+    const M = METRICS[met];
+    s = { slo: M.slo, shi: M.shi };
+    plot.scale.set(id, s);
   }
-  return c;
+  return s;
 }
 
-// Only radios that are switched on and actually produce the current metric - there is no lqi on
-// ESP-NOW and no snr on BLE, and a ray that can never be drawn should not be taking up an angle.
+// Only links that are switched on and actually produce the current metric - there is no lqi on
+// ESP-NOW and no snr on BLE, and a ray that can never be drawn should not be taking an angle.
 const activeSources = () =>
-  allSources().filter(S => S.has[plot.met] && srcCfg(S.key).on);
+  allSources().filter(S => S.has[plot.met] && isOn(S.key));
 
 // Shortest at slo, longest at shi, clamped hard at both. Reversing the two is how a
-// smaller-is-better metric like path loss is expressed, so no separate direction flag is needed.
-function markLen(cfg, v) {
-  const span = cfg.shi - cfg.slo;
-  const t = span === 0 ? 1 : (v - cfg.slo) / span;
+// smaller-is-better metric like path loss is expressed, so no direction flag is needed.
+function markLen(sc, v) {
+  const span = sc.shi - sc.slo;
+  const t = span === 0 ? 1 : (v - sc.slo) / span;
   return Math.max(plot.minPx,
                   Math.min(plot.maxPx, plot.minPx + t * (plot.maxPx - plot.minPx)));
 }
 
-// Fanned over a half circle: first ray straight up, the rest evenly spaced clockwise. One radio
-// is vertical, two make the right-angled cross, three sit at 0/60/120, and so on. Keeping them
-// inside 180 degrees means no two rays ever lie along the same line, so nothing hides behind
-// anything else no matter how many are on.
-const rayAngle = (i, n) => i * Math.PI / n;
+// Fanned over a half circle: evenly spaced, plus a rotation that moves all of them together.
+// Keeping the spread inside 180 degrees means no two rays ever lie along the same line; the
+// rotation is there because a ray that happens to point along the direction of travel lies flat
+// on the track and merges into it, and which one that is changes every time you turn a corner.
+const rayAngle = (i, n) => (plot.rot + i * 180 / n) * Math.PI / 180;
 
 // ---- plot controls ------------------------------------------------------------------------
 
@@ -818,42 +822,259 @@ function buildPlotControls() {
   met.innerHTML = MKEYS.map(m =>
     `<option value="${m}">${esc(METRICS[m].lab)}</option>`).join('');
   met.value = plot.met;
-  met.title = 'The one measurement every radio below is drawn with';
+  met.title = 'The one measurement every link below is drawn with';
   met.onchange = () => {
     plot.met = met.value;
-    srcBuiltRev = -1;          // the metric decides which radios can be drawn at all
+    srcBuiltRev = -1;          // the metric decides which links can be drawn at all
     saveSettings();
     rebuildSources();
     mapRedraw();
   };
 
-  const autoAll = document.createElement('button');
-  autoAll.textContent = 'auto';
-  autoAll.title = 'Fit every enabled radio to the spread it has actually shown';
-  autoAll.onclick = () => { activeSources().forEach(S => autoSource(S.key)); };
-
-  const scales = document.createElement('button');
-  scales.textContent = 'scales';
-  scales.title = 'Show the per-radio range sliders';
-  scales.onclick = () => {
-    plot.scales = !plot.scales;
-    scales.classList.toggle('on', plot.scales);
-    document.getElementById('sizerow').classList.toggle('off', !plot.scales);
-    saveSettings();
-    rebuildSources();
+  const mkToggle = (label, field, tip) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.title = tip;
+    b.classList.toggle('on', plot[field]);
+    b.onclick = () => {
+      plot[field] = !plot[field];
+      b.classList.toggle('on', plot[field]);
+      saveSettings();
+      rebuildSources();
+    };
+    return b;
   };
-  top.append(met, autoAll, scales);
+  top.append(met,
+             mkToggle('links', 'showPick', 'Show the receiver tables'),
+             mkToggle('scales', 'showScale', 'Show the per-protocol ranges'));
   host.appendChild(top);
 
-  const list = document.createElement('div');
-  list.id = 'srclist';
-  host.appendChild(list);
+  // Rotation earns a permanent place rather than hiding behind a disclosure: it is adjusted
+  // while looking at the map, whenever the walk turns and a ray goes flat along the track.
+  const rot = document.createElement('div');
+  rot.className = 'axrow';
+  rot.appendChild(Object.assign(document.createElement('span'),
+                                { className: 'axlab', textContent: 'rotate' }));
+  const rs = document.createElement('input');
+  Object.assign(rs, { type: 'range', min: 0, max: 90, step: 1, value: plot.rot });
+  const ro = Object.assign(document.createElement('b'),
+                           { className: 'axval', textContent: plot.rot + '°' });
+  rs.addEventListener('input', () => {
+    plot.rot = +rs.value;
+    ro.textContent = plot.rot + '°';
+    saveSettings();
+    mapRedraw();
+  });
+  rot.append(rs, ro);
+  host.appendChild(rot);
 
-  // Shared by every radio, because the pixel range is the one thing that genuinely must not
+  host.appendChild(Object.assign(document.createElement('div'), { id: 'picker' }));
+  host.appendChild(Object.assign(document.createElement('div'), { id: 'scalebox' }));
+}
+
+// ---- picking links ---------------------------------------------------------------------------
+//
+// Two boards is six links; four boards testing whether any relay hears a landing is closer to
+// forty. A flat list of tickboxes at that size is unreadable, and worse, it hides the shape of
+// what is being chosen - which is never arbitrary. It is always "every 802.15.4 this board can
+// hear", or "everything board C sent, on all three protocols".
+//
+// So: one table per receiver, protocols across, transmitters down. The headers are the useful
+// selections. Tapping a column header takes that protocol for that receiver, a row header takes
+// that transmitter, the corner takes the whole table, and the buttons above take a protocol
+// across every board at once.
+
+function pickSet(keys, want) {
+  keys.forEach(k => setOn(k, want));
+  saveSettings();
+  rebuildSources();
+  mapRedraw();
+}
+// Tapping a header that is already fully on clears it, so the same tap is both "give me these"
+// and "put them away".
+const toggleSet = keys => pickSet(keys, !keys.every(isOn));
+
+function buildPicker() {
+  const host = document.getElementById('picker');
+  if (!host) return;
+  host.innerHTML = '';
+  host.className = plot.showPick ? '' : 'off';
+  const all = allSources();
+  if (!plot.showPick) return;
+  if (!all.length) {
+    host.innerHTML = '<div class="hint" style="font-size:12px">' +
+                     'Links appear here as soon as packets arrive.</div>';
+    return;
+  }
+
+  const quick = document.createElement('div');
+  quick.className = 'prow quick';
+  const mkQuick = (label, keys, excl) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {
+      // The protocol buttons select *only* that protocol, because the way these get used is to
+      // flip between them - look at the 802.15.4 picture, then the same links on ESP-NOW.
+      if (excl) pickSet(all.map(S => S.key), false);
+      pickSet(keys, true);
+    };
+    quick.appendChild(b);
+  };
+  const none = document.createElement('button');
+  none.textContent = 'none';
+  none.onclick = () => pickSet(all.map(S => S.key), false);
+  mkQuick('all', all.map(S => S.key), false);
+  quick.appendChild(none);
+  for (const p of PROTOS) {
+    const keys = all.filter(S => S.ch === p).map(S => S.key);
+    if (keys.length) mkQuick(p, keys, true);
+  }
+  host.appendChild(quick);
+
+  const rxs = [...new Set(all.map(S => S.dev))].sort();
+  for (const rx of rxs) {
+    const mine = all.filter(S => S.dev === rx);
+    const txs = [...new Set(mine.map(S => S.peer))].sort();
+    const protos = PROTOS.filter(p => mine.some(S => S.ch === p));
+
+    const tbl = document.createElement('table');
+    tbl.className = 'pick';
+    const head = document.createElement('tr');
+    const corner = document.createElement('th');
+    corner.className = 'sel';
+    corner.textContent = 'heard by ' + shortDev(rx);
+    corner.title = 'Every link this board hears';
+    corner.onclick = () => toggleSet(mine.map(S => S.key));
+    head.appendChild(corner);
+    for (const p of protos) {
+      const th = document.createElement('th');
+      th.className = 'sel';
+      th.textContent = p;
+      th.title = 'Every ' + p + ' link this board hears';
+      th.onclick = () => toggleSet(mine.filter(S => S.ch === p).map(S => S.key));
+      head.appendChild(th);
+    }
+    tbl.appendChild(head);
+
+    for (const tx of txs) {
+      const tr = document.createElement('tr');
+      const rh = document.createElement('th');
+      rh.className = 'sel rowh';
+      rh.textContent = 'from ' + tx;
+      rh.title = 'Every protocol from this transmitter';
+      rh.onclick = () => toggleSet(mine.filter(S => S.peer === tx).map(S => S.key));
+      tr.appendChild(rh);
+
+      for (const p of protos) {
+        const td = document.createElement('td');
+        const S = mine.find(v => v.peer === tx && v.ch === p);
+        if (!S) {
+          td.innerHTML = '<span class="dim">–</span>';   // never heard on this combination
+        } else {
+          const usable = S.has[plot.met];
+          const box = document.createElement('input');
+          Object.assign(box, { type: 'checkbox', checked: isOn(S.key) && usable,
+                               disabled: !usable });
+          box.style.accentColor = srcCol(S.key);
+          box.title = usable ? srcLabel(S) : srcLabel(S) + ' has no ' + METRICS[plot.met].lab;
+          box.onchange = () => {
+            setOn(S.key, box.checked);
+            saveSettings();
+            rebuildSources();
+            mapRedraw();
+          };
+          td.appendChild(box);
+        }
+        tr.appendChild(td);
+      }
+      tbl.appendChild(tr);
+    }
+    host.appendChild(tbl);
+  }
+}
+
+// ---- per-protocol ranges -----------------------------------------------------------------
+
+// Fit this protocol to the spread it has actually shown, across every link drawn on it - one
+// scale for all of them, which is the point. Board A's 802.15.4 and board B's must never end up
+// on different scales just because one of them had a better afternoon.
+function autoScale(ch) {
+  let lo = Infinity, hi = -Infinity;
+  const keys = new Set(activeSources().filter(S => S.ch === ch).map(S => S.key));
+  for (const s of samples) {
+    if (!keys.has(s.key)) continue;
+    const v = mval(s, plot.met);
+    if (typeof v !== 'number' || !isFinite(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!isFinite(lo)) return;
+  const sc = scaleFor(ch, plot.met);
+  const pad = Math.max(1, (hi - lo) * 0.08);
+  // Keep whichever way round this metric is: for path loss the short end is the big number.
+  if (sc.shi < sc.slo) { sc.slo = Math.round(hi + pad); sc.shi = Math.round(lo - pad); }
+  else                 { sc.slo = Math.round(lo - pad); sc.shi = Math.round(hi + pad); }
+  saveSettings();
+  rebuildSources();
+  mapRedraw();
+}
+
+function buildScales() {
+  const host = document.getElementById('scalebox');
+  if (!host) return;
+  host.innerHTML = '';
+  host.className = plot.showScale ? '' : 'off';
+  if (!plot.showScale) return;
+
+  const M = METRICS[plot.met];
+  // Only protocols actually in the fan - a range for something not on screen is just clutter.
+  const drawn = [...new Set(activeSources().map(S => S.ch))];
+  if (!drawn.length) {
+    host.innerHTML = '<div class="hint" style="font-size:12px">Nothing selected to scale.</div>';
+  }
+
+  for (const ch of drawn) {
+    const sc = scaleFor(ch, plot.met);
+    const head = document.createElement('div');
+    head.className = 'srow';
+    head.appendChild(Object.assign(document.createElement('span'),
+      { className: 'slab', textContent: ch + ' ' + M.lab }));
+    const rng = Object.assign(document.createElement('span'),
+      { className: 'srng', textContent: sc.slo + ' → ' + sc.shi + (M.unit ? ' ' + M.unit : '') });
+    const auto = document.createElement('button');
+    auto.textContent = 'auto';
+    auto.title = 'Fit every ' + ch + ' link drawn to the spread it has shown';
+    auto.onclick = () => autoScale(ch);
+    head.append(rng, auto);
+    host.appendChild(head);
+
+    const mk = (label, field) => {
+      const r = document.createElement('div');
+      r.className = 'axrow';
+      r.appendChild(Object.assign(document.createElement('span'),
+                                  { className: 'axlab', textContent: label }));
+      const s = document.createElement('input');
+      Object.assign(s, { type: 'range', min: M.lo, max: M.hi, step: 1, value: sc[field] });
+      const out = Object.assign(document.createElement('b'),
+        { className: 'axval', textContent: sc[field] + (M.unit ? ' ' + M.unit : '') });
+      s.addEventListener('input', () => {
+        sc[field] = +s.value;
+        out.textContent = sc[field] + (M.unit ? ' ' + M.unit : '');
+        rng.textContent = sc.slo + ' → ' + sc.shi + (M.unit ? ' ' + M.unit : '');
+        saveSettings();
+        mapRedraw();
+      });
+      r.append(s, out);
+      host.appendChild(r);
+    };
+    mk('shortest', 'slo');
+    mk('longest', 'shi');
+  }
+
+  // Shared by every protocol, because the pixel range is the one thing that genuinely must not
   // differ between them - it is what makes two rays comparable at a glance.
   const size = document.createElement('div');
-  size.id = 'sizerow';
-  size.className = 'off';
+  size.className = 'sizerow';
   const mkSize = (label, key, min, max) => {
     const row = document.createElement('div');
     row.className = 'axrow';
@@ -881,115 +1102,13 @@ function buildPlotControls() {
   host.appendChild(size);
 }
 
-// Fit this radio to what it has actually produced: the weakest thing heard sits at the short end
-// and the strongest at the long end, so the whole range of the walk is spread over the full
-// length rather than bunched at one end of it.
-function autoSource(key) {
-  let lo = Infinity, hi = -Infinity;
-  for (const s of samples) {
-    if (s.key !== key) continue;
-    const v = mval(s, plot.met);
-    if (typeof v !== 'number' || !isFinite(v)) continue;
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
-  }
-  if (!isFinite(lo)) return;
-  const cfg = srcCfg(key);
-  const pad = Math.max(1, (hi - lo) * 0.08);
-  // Keep whichever way round this metric is: for path loss the short end is the big number.
-  if (cfg.shi < cfg.slo) { cfg.slo = Math.round(hi + pad); cfg.shi = Math.round(lo - pad); }
-  else                   { cfg.slo = Math.round(lo - pad); cfg.shi = Math.round(hi + pad); }
-  saveSettings();
-  rebuildSources();
-  mapRedraw();
-}
-
 function rebuildSources() {
-  const list = document.getElementById('srclist');
-  if (!list) return;
-  const all = allSources();
-  const act = activeSources();
-  const rank = new Map(act.map((S, i) => [S.key, i]));
-  list.innerHTML = '';
-
-  if (!all.length) {
-    list.innerHTML = '<div class="hint" style="font-size:12px">' +
-                     'Radios appear here as soon as packets arrive.</div>';
-    return;
-  }
-
-  for (const S of all) {
-    const M = METRICS[plot.met];
-    const cfg = srcCfg(S.key);
-    const usable = S.has[plot.met];
-    const i = rank.get(S.key);
-
-    const row = document.createElement('div');
-    row.className = 'srow';
-
-    const box = document.createElement('input');
-    Object.assign(box, { type: 'checkbox', checked: cfg.on && usable, disabled: !usable });
-    box.onchange = () => {
-      cfg.on = box.checked;
-      saveSettings();
-      rebuildSources();     // the fan re-spaces itself around whatever is left
-      mapRedraw();
-    };
-
-    // The angle this radio's rays are drawn at, as a stub pointing the same way - so the
-    // legend on the map and the row in the list are the same fact twice.
-    const sw = document.createElement('span');
-    sw.className = 'swatch';
-    sw.style.setProperty('--c', usable && cfg.on ? srcCol(S.key) : '#454b5a');
-    if (usable && cfg.on) sw.style.transform = `rotate(${(i * 180 / act.length).toFixed(0)}deg)`;
-
-    const lab = document.createElement('span');
-    lab.className = 'slab';
-    lab.textContent = srcLabel(S);
-    if (!usable) lab.classList.add('dim');
-
-    const rng = document.createElement('span');
-    rng.className = 'srng';
-    rng.textContent = !usable ? 'no ' + M.lab
-                    : cfg.slo + ' → ' + cfg.shi + (M.unit ? ' ' + M.unit : '');
-
-    const auto = document.createElement('button');
-    auto.textContent = 'auto';
-    auto.disabled = !usable;
-    auto.onclick = () => autoSource(S.key);
-
-    row.append(box, sw, lab, rng, auto);
-    list.appendChild(row);
-
-    if (!plot.scales || !usable || !cfg.on) continue;
-
-    const mkRange = (label, field) => {
-      const r = document.createElement('div');
-      r.className = 'axrow';
-      r.appendChild(Object.assign(document.createElement('span'),
-                                  { className: 'axlab', textContent: label }));
-      const s = document.createElement('input');
-      Object.assign(s, { type: 'range', min: M.lo, max: M.hi, step: 1, value: cfg[field] });
-      s.style.accentColor = srcCol(S.key);
-      const out = Object.assign(document.createElement('b'),
-        { className: 'axval', textContent: cfg[field] + (M.unit ? ' ' + M.unit : '') });
-      s.addEventListener('input', () => {
-        cfg[field] = +s.value;
-        out.textContent = cfg[field] + (M.unit ? ' ' + M.unit : '');
-        rng.textContent = cfg.slo + ' → ' + cfg.shi + (M.unit ? ' ' + M.unit : '');
-        saveSettings();
-        mapRedraw();
-      });
-      r.append(s, out);
-      list.appendChild(r);
-    };
-    mkRange('shortest', 'slo');
-    mkRange('longest', 'shi');
-  }
+  buildPicker();
+  buildScales();
 }
 
-// Rebuilt only when the set of radios changes, so touching a slider does not tear the list out
-// from under the finger that is holding it.
+// Rebuilt only when the set of links changes, so touching a slider does not tear the panel out
+// from under the finger holding it.
 function syncSources() {
   if (srcBuiltRev === seriesRev) return;
   srcBuiltRev = seriesRev;
@@ -1001,14 +1120,14 @@ function syncSources() {
 // Only the setup, never the readings. Clearing the track deliberately leaves all of this alone,
 // and so does a reload - a field test starts by getting the scales right, and having to do that
 // again every time the page reloads is how a walk gets wasted.
-const SETTINGS_KEY = 'esprt.plot.v1';
+const SETTINGS_KEY = 'esprt.plot.v2';
 
 function saveSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      met: plot.met, minPx: plot.minPx, maxPx: plot.maxPx, scales: plot.scales,
-      showMiss: showMiss,
-      src: [...plot.src.entries()],
+      met: plot.met, minPx: plot.minPx, maxPx: plot.maxPx, rot: plot.rot,
+      showPick: plot.showPick, showScale: plot.showScale, showMiss: showMiss,
+      on: [...plot.on.entries()], scale: [...plot.scale.entries()],
     }));
   } catch (e) { /* private window, or storage full - the page still works without it */ }
 }
@@ -1021,11 +1140,15 @@ function loadSettings() {
     if (o.met && METRICS[o.met]) plot.met = o.met;
     if (typeof o.minPx === 'number') plot.minPx = o.minPx;
     if (typeof o.maxPx === 'number') plot.maxPx = o.maxPx;
-    if (typeof o.scales === 'boolean') plot.scales = o.scales;
+    if (typeof o.rot === 'number') plot.rot = o.rot;
+    if (typeof o.showPick === 'boolean') plot.showPick = o.showPick;
+    if (typeof o.showScale === 'boolean') plot.showScale = o.showScale;
     if (typeof o.showMiss === 'boolean') showMiss = o.showMiss;
-    if (Array.isArray(o.src)) plot.src = new Map(o.src);
+    if (Array.isArray(o.on)) plot.on = new Map(o.on);
+    if (Array.isArray(o.scale)) plot.scale = new Map(o.scale);
   } catch (e) { /* corrupt or unavailable - fall back to defaults rather than failing to load */ }
 }
+
 // ---- the canvas -----------------------------------------------------------------------------
 
 const cv  = document.getElementById('cv');
@@ -1140,7 +1263,7 @@ function drawMap() {
   // Precomputed per radio: the unit vector its rays point along, and its length mapping.
   const dirs = act.map((S, i) => {
     const a = rayAngle(i, act.length);
-    return { dx: Math.sin(a), dy: -Math.cos(a), cfg: srcCfg(S.key) };
+    return { dx: Math.sin(a), dy: -Math.cos(a), sc: scaleFor(S.ch, plot.met) };
   });
   const pad = plot.maxPx + 20;   // rays reach outward, so cull generously rather than exactly
   let drawn = 0;
@@ -1156,7 +1279,7 @@ function drawMap() {
     if (r !== undefined) {
       const v = mval(s, plot.met);
       if (typeof v === 'number' && isFinite(v)) {
-        const d = dirs[r], L = markLen(d.cfg, v);
+        const d = dirs[r], L = markLen(d.sc, v);
         rays[r].moveTo(px, py);
         rays[r].lineTo(px + d.dx * L, py + d.dy * L);
       }
@@ -1237,7 +1360,7 @@ function drawMap() {
     g.lineTo(16 + d.dx * 9, cy0 + d.dy * 9);
     g.stroke();
     g.fillStyle = srcCol(S.key);
-    g.fillText(`${srcLabel(S)}  ${d.cfg.slo} → ${d.cfg.shi}`, 30, ly);
+    g.fillText(`${srcLabel(S)}  ${d.sc.slo} → ${d.sc.shi}`, 30, ly);
     ly += 15;
   });
   if (drawn < samples.length) {
@@ -1277,13 +1400,24 @@ function zoomAt(sx, sy, k) {
 //
 // A mouse keeps drag-to-pan - there is no second finger to require, and a desktop has a
 // scrollbar for the page.
+//
+// Three fingers drag the base marker. Putting a board down and only remembering to mark it a
+// hundred metres later is the normal way this goes, and "walk back and stand on it again" is a
+// bad answer - so the marker can be picked up and put where the board actually is.
 const ptrs = new Map();
-let pinch = null;
+let pinch = null, drag = null;
 
 function pinchState() {
   if (ptrs.size < 2) return null;
   const [a, b] = [...ptrs.values()];
   return { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+
+// Centroid of every finger down, for the three-finger drag.
+function centroid() {
+  let x = 0, y = 0;
+  for (const p of ptrs.values()) { x += p.x; y += p.y; }
+  return { x: x / ptrs.size, y: y / ptrs.size };
 }
 
 cv.addEventListener('pointerdown', e => {
@@ -1294,6 +1428,7 @@ cv.addEventListener('pointerdown', e => {
     try { cv.setPointerCapture(e.pointerId); } catch (err) { /* pointer already gone */ }
   }
   pinch = pinchState();
+  drag = ptrs.size >= 3 ? centroid() : null;
 });
 
 cv.addEventListener('pointermove', e => {
@@ -1312,6 +1447,29 @@ cv.addEventListener('pointermove', e => {
   }
 
   ptrs.set(e.pointerId, now);
+
+  // Three or more fingers move the base rather than the map. Starting the gesture with no base
+  // set drops one under the fingers, so the whole thing is a single motion.
+  if (ptrs.size >= 3) {
+    const c = centroid();
+    if (!drag) { drag = c; return; }
+    if (!geo.base) {
+      const r = cv.getBoundingClientRect();
+      const w = unview(c.x - r.left, c.y - r.top);
+      geo.base = { x: w.x, y: w.y };
+    }
+    geo.base.x += (c.x - drag.x) * view.mpp;
+    geo.base.y -= (c.y - drag.y) * view.mpp;
+    const ll = unproject(geo.base.x, geo.base.y);   // keep lat/lon true for the export
+    geo.base.lat = ll.lat;
+    geo.base.lon = ll.lon;
+    drag = c;
+    pinch = pinchState();      // so lifting back to two fingers does not jump the map
+    paintMapBar();
+    mapRedraw();
+    return;
+  }
+
   const p = pinchState();
   if (!pinch || !p) { pinch = p; return; }
   // Drag the midpoint and change the separation in one gesture, so the map can be moved and
@@ -1330,6 +1488,7 @@ cv.addEventListener('pointermove', e => {
 
 const dropPtr = e => {
   ptrs.delete(e.pointerId);
+  drag = ptrs.size >= 3 ? centroid() : null;
   // Recomputed rather than kept, so lifting one of three fingers does not jump the map by the
   // difference between the old midpoint and the new one.
   pinch = pinchState();
