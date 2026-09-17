@@ -16,6 +16,12 @@ if (-not $Ports) {
     exit 1
 }
 
+# Windows does not care, esptool does: it finds the board's USB PID by comparing the port name
+# exactly against pyserial's list, which says "COM29". "com29" matches nothing, so esptool
+# cannot tell the port is the C6's USB-Serial/JTAG, falls back to the DTR/RTS reset meant for a
+# UART bridge, and dies with a pySerial write timeout.
+$Ports = $Ports | ForEach-Object { $_.ToUpper() }
+
 $pio = (Get-Command pio -ErrorAction SilentlyContinue).Source
 if (-not $pio) { $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" }
 
