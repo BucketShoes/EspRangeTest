@@ -269,8 +269,8 @@ static void tx_task(void *pv)
             f[4] = (uint8_t)(PANID >> 8);
             f[5] = 0xFF;  // broadcast short address
             f[6] = 0xFF;
-            f[7] = rt_node_id();
-            f[8] = 0x00;
+            f[7] = (uint8_t)rt_node_id();          // short source address: the low two bytes
+            f[8] = (uint8_t)(rt_node_id() >> 8);   // of the node id, which the payload has all of
 
             rt_pkt_t p;
             rt_fill(&p, CH_154, s_txpower);
@@ -328,7 +328,8 @@ static bool frame_is_ours(const uint8_t *f, int psdu)
     }
     // The sender id appears twice - in the header's source address and in the payload. A frame
     // that is genuinely ours agrees with itself.
-    return f[7] == f[HDR_LEN + offsetof(rt_pkt_t, node)];
+    return f[7] == f[HDR_LEN + offsetof(rt_pkt_t, node)]
+        && f[8] == f[HDR_LEN + offsetof(rt_pkt_t, node) + 1];
 }
 
 void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *info)
@@ -386,7 +387,7 @@ void rt_154_start(void)
     RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
     rt_154_apply_power();
     RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
-    RT_TRY(TAG, esp_ieee802154_set_short_address(rt_node_id()));
+    RT_TRY(TAG, esp_ieee802154_set_short_address((uint16_t)rt_node_id()));
     RT_TRY(TAG, esp_ieee802154_set_promiscuous(true));  // hear everything, filter in rt_rx
     RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(true));
     RT_TRY(TAG, esp_ieee802154_receive());

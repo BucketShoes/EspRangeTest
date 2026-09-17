@@ -81,20 +81,30 @@ extern const char *rt_chan_name[CH_COUNT];
 #define RT_PDR_WINDOW_MS 10000
 #define RT_PDR_BUCKETS   10
 
-// 8 bytes. All nodes are little-endian ESP32s, so a packed struct straight onto the wire is
+// 12 bytes. All nodes are little-endian ESP32s, so a packed struct straight onto the wire is
 // fine - no hand serialisation needed.
+//
+// node is the last three bytes of the sender's MAC, little-endian. It was one byte, and boards
+// sharing a low MAC byte were merged into one peer. Every receiver checks the exact length, so
+// firmware on either side of that change simply ignores the other's packets.
 typedef struct __attribute__((packed)) {
     uint32_t magic;
-    uint8_t  node;   // low byte of the sender's MAC
+    uint8_t  node[3];
     int8_t   txdbm;
     uint32_t seq;    // per (sender, channel)
 } rt_pkt_t;
 
-uint8_t  rt_node_id(void);
+static inline uint32_t rt_pkt_node(const rt_pkt_t *p)
+{
+    return p->node[0] | ((uint32_t)p->node[1] << 8) | ((uint32_t)p->node[2] << 16);
+}
 
-// "ESPRT-" + the last three MAC bytes, for the SoftAP SSID and the BLE name. Wider than the
-// node id so boards that share a low MAC byte are still told apart when picking one to connect.
+// 24 bits: mac[3] << 16 | mac[4] << 8 | mac[5]. Printed as six hex digits, matching the name.
+uint32_t rt_node_id(void);
+
+// "ESPRT-" + rt_node_id() in hex, for the SoftAP SSID and the BLE name.
 const char *rt_node_name(void);
+
 uint32_t rt_ms(void);
 
 // ms with +/-5% of randomness, tick-quantised. Only the BLE advert refresh uses this now, and
@@ -366,9 +376,9 @@ void rt_report(void);
 //     u8  idx     chunk index within this report, from 0
 //     u8  flags   bit0 = last chunk of this report
 //
-//   status block (75 bytes, only in a 0x01 chunk, immediately after the header)
+//   status block (83 bytes, only in a 0x01 chunk, immediately after the header)
 //     u8  ver           RT_RPT_VER
-//     u8  node
+//     u24 node          rt_node_id()
 //     u8  lc
 //     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
 //                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded),
@@ -387,8 +397,8 @@ void rt_report(void);
 //     tx[3], 16 bytes each, CH_ order:
 //       u32 queued, u32 ok, u32 rejected, u16 offmode_rx, u16 offmode_age_s
 //
-//   row record (21 bytes, packed end to end after whichever block precedes them)
-//     u8  peer, u8 chan
+//   row record (23 bytes, packed end to end after whichever block precedes them)
+//     u24 peer, u8 chan
 //     i8  rssi_last, i8 rssi_avg, i8 rssi_min, i8 rssi_max
 //     i8  pdr_now, i8 pdr_all      -1 where there is no data yet
 //     u32 rx, u32 missed
@@ -400,12 +410,12 @@ void rt_report(void);
 //
 // Counters stay u32 rather than being squeezed: at 4 packets/s a u24 wraps in seven weeks and
 // the six bytes saved are not worth a counter that silently rolls over mid-test.
-// 33 bytes of status + 3 x 16 bytes of per-channel tx accounting. Checked against the
+// 35 bytes of status + 3 x 16 bytes of per-channel tx accounting. Checked against the
 // serialiser at runtime rather than trusted - see rt_snapshot_chunk().
-#define RT_RPT_VER      3
+#define RT_RPT_VER      4
 #define RT_RPT_HDR      4
-#define RT_RPT_STATUS   81
-#define RT_RPT_ROW      21
+#define RT_RPT_STATUS   83
+#define RT_RPT_ROW      23
 #define RT_RPT_TYPE_STATUS 0x01
 #define RT_RPT_TYPE_ROWS   0x02
 

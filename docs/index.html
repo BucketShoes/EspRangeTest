@@ -325,6 +325,11 @@ function onNotify(d, view) {
   }
 }
 
+// Node ids are the last three MAC bytes, little-endian on the wire, shown as the same six hex
+// digits the board's BLE name ends in.
+const u24   = (v, o) => v.getUint8(o) | (v.getUint8(o + 1) << 8) | (v.getUint8(o + 2) << 16);
+const hexId = n => n.toString(16).toUpperCase().padStart(6, '0');
+
 // Decode one chunk of a packed report. Layout is documented in main/rt.h; every offset here has
 // to match the serialiser in rt_stats.c byte for byte.
 function onChunk(d, v) {
@@ -333,18 +338,20 @@ function onChunk(d, v) {
 
   if (type === 0x01) {
     const ver = v.getUint8(o);
-    if (ver !== 2 && ver !== 3) {
-      logMsg(`${d.name}: report format v${ver}, this page decodes v2-v3 - update the page`, true);
+    // v4: node ids are 3 bytes (last three of the MAC) and row ages are in 0.1 s. Older boards
+    // also send 1-byte ids in their packets, which v4 boards do not accept, so there is no
+    // mixing the two - reflash rather than decode both.
+    if (ver !== 4) {
+      logMsg(`${d.name}: report format v${ver}, this page decodes v4 - ` +
+             (ver < 4 ? 'reflash the board' : 'update the page'), true);
+      d.rptOk = false;
       return;
     }
-    // v3 sends a row's age in 0.1 s units instead of ms. v2 clamped at 65.5 s, so a link silent
-    // for longer read "65 s ago" forever. Remembered per board because continuation chunks carry
-    // no version of their own.
-    d.rptVer = ver;
-    const node  = v.getUint8(o + 1);
-    const lc    = v.getUint8(o + 2);
-    const state = v.getUint8(o + 3);
-    const upMs  = v.getUint32(o + 4, true);
+    d.rptOk = true;
+    const node  = u24(v, o + 1);
+    const lc    = v.getUint8(o + 4);
+    const state = v.getUint8(o + 5);
+    const upMs  = v.getUint32(o + 6, true);
 
     // Uptime going backwards is the only reliable sign the board reset - it comes back and
     // reconnects on its own and otherwise says nothing about having lost everything.
@@ -370,7 +377,7 @@ function onChunk(d, v) {
       if (r.gen < d.genN - 1) d.rows.delete(k);
     }
 
-    d.node    = node.toString(16).toUpperCase().padStart(2, '0');
+    d.node    = hexId(node);
     d.uptime  = up;
     d.lc      = lc;
     d.lr      = state & 1 ? 1 : 0;
@@ -386,22 +393,22 @@ function onChunk(d, v) {
     const candidate = Date.now() - upMs;
     d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
 
-    d.pwr = [v.getInt8(o + 8), v.getInt8(o + 9), v.getInt8(o + 10)];
+    d.pwr = [v.getInt8(o + 10), v.getInt8(o + 11), v.getInt8(o + 12)];
 
     const prev = d.diag;
     d.diag = {
-      rst:     RST_NAMES[v.getUint8(o + 11)] ?? 'unknown',
-      heap:    v.getUint32(o + 12, true),
-      heapMin: v.getUint32(o + 16, true),
-      frames:  v.getUint32(o + 20, true),
-      ours:    v.getUint32(o + 24, true),
-      coex:    v.getUint32(o + 28, true),
+      rst:     RST_NAMES[v.getUint8(o + 13)] ?? 'unknown',
+      heap:    v.getUint32(o + 14, true),
+      heapMin: v.getUint32(o + 18, true),
+      frames:  v.getUint32(o + 22, true),
+      ours:    v.getUint32(o + 26, true),
+      coex:    v.getUint32(o + 30, true),
     };
     if (!prev || prev.rst !== d.diag.rst) {
       logMsg(`${d.name}: last reset was ${d.diag.rst}`, /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
     }
 
-    o += 33;   // status fields; tx records follow
+    o += 35;   // status fields; tx records follow
     d.tx = new Map();
     for (let c = 0; c < 3; c++, o += 16) {
       d.tx.set(CH_NAMES[c], {
@@ -415,31 +422,32 @@ function onChunk(d, v) {
   }
 
   // Rows fill whatever is left of the chunk, in both types.
-  const ageMult = d.rptVer === 3 ? 100 : 1;   // to ms
-  while (o + 21 <= v.byteLength) {
-    const peer = v.getUint8(o).toString(16).toUpperCase().padStart(2, '0');
-    const ch   = CH_NAMES[v.getUint8(o + 1)] ?? '?';
-    const age  = v.getUint16(o + 16, true) * ageMult;
+  // A rows-only chunk has no version of its own; its report's status chunk decided.
+  if (!d.rptOk) return;
+  while (o + 23 <= v.byteLength) {
+    const peer = hexId(u24(v, o));
+    const ch   = CH_NAMES[v.getUint8(o + 3)] ?? '?';
+    const age  = v.getUint16(o + 18, true) * 100;   // 0.1 s units on the wire
     putRow(d, peer + '/' + ch, {
       peer, ch,
-      rssi:   v.getInt8(o + 2),
-      avg:    v.getInt8(o + 3),
-      min:    v.getInt8(o + 4),
-      max:    v.getInt8(o + 5),
-      pdrNow: v.getInt8(o + 6),      // -1 = no samples this window
-      pdrAll: v.getInt8(o + 7),
-      rx:     v.getUint32(o + 8, true),
-      miss:   v.getUint32(o + 12, true),
+      rssi:   v.getInt8(o + 4),
+      avg:    v.getInt8(o + 5),
+      min:    v.getInt8(o + 6),
+      max:    v.getInt8(o + 7),
+      pdrNow: v.getInt8(o + 8),      // -1 = no samples this window
+      pdrAll: v.getInt8(o + 9),
+      rx:     v.getUint32(o + 10, true),
+      miss:   v.getUint32(o + 14, true),
       age,
-      snr:    v.getInt8(o + 18),     // -128 where the radio measures no noise floor
-      lqi:    v.getUint8(o + 19),
-      ptx:    v.getInt8(o + 20),
+      snr:    v.getInt8(o + 20),     // -128 where the radio measures no noise floor
+      lqi:    v.getUint8(o + 21),
+      ptx:    v.getInt8(o + 22),
       gen:    d.genN ?? 0,
       // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
       // so its age is a straight subtraction from "now" and cannot drift with arrival times.
       abs:    (d.boardMs ?? 0) - age,
     });
-    o += 21;
+    o += 23;
   }
 
   scheduleRender();

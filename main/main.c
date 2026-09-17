@@ -466,8 +466,8 @@ void app_main(void)
 
     esp_chip_info_t info;
     esp_chip_info(&info);
-    ESP_LOGI(TAG, "%s rev v%d.%d, node %02X", CONFIG_IDF_TARGET,
-             info.revision / 100, info.revision % 100, rt_node_id());
+    ESP_LOGI(TAG, "%s rev v%d.%d, node %06lX", CONFIG_IDF_TARGET,
+             info.revision / 100, info.revision % 100, (unsigned long)rt_node_id());
 
     // Why the last reset happened, printed before anything else can obscure it.
     //

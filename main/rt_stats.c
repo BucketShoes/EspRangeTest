@@ -139,9 +139,9 @@ typedef struct {
 } rt_link;
 
 static struct {
-    bool    used;
-    uint8_t node;
-    rt_link ch[CH_COUNT];
+    bool     used;
+    uint32_t node;   // rt_node_id() of the sender
+    rt_link  ch[CH_COUNT];
 } s_peers[RT_MAX_PEERS];
 
 static uint32_t s_tx_seq[CH_COUNT];
@@ -150,7 +150,7 @@ static uint32_t s_tx_ok[CH_COUNT];
 static uint32_t s_tx_fail[CH_COUNT];
 static uint32_t s_rx_offmode[CH_COUNT];     // heard while this mode said the channel was off
 static uint32_t s_rx_offmode_ms[CH_COUNT];  // and when the most recent one was
-static uint8_t  s_node_id;
+static uint32_t s_node_id;
 
 uint32_t rt_ms(void)
 {
@@ -248,12 +248,15 @@ void rt_sleep_rand(rt_sleeper_t *s, uint32_t min_ms, uint32_t max_ms)
     xSemaphoreTake(s->wake, portMAX_DELAY);
 }
 
-uint8_t rt_node_id(void)
+uint32_t rt_node_id(void)
 {
     if (s_node_id == 0) {
         uint8_t mac[6] = { 0 };
         esp_read_mac(mac, ESP_MAC_BASE);
-        s_node_id = mac[5] ? mac[5] : 1;
+        s_node_id = ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
+        if (s_node_id == 0) {
+            s_node_id = 1;  // 0 is "not read yet"
+        }
     }
     return s_node_id;
 }
@@ -262,9 +265,7 @@ const char *rt_node_name(void)
 {
     static char name[16];
     if (name[0] == '\0') {
-        uint8_t mac[6] = { 0 };
-        esp_read_mac(mac, ESP_MAC_BASE);
-        snprintf(name, sizeof(name), "ESPRT-%02X%02X%02X", mac[3], mac[4], mac[5]);
+        snprintf(name, sizeof(name), "ESPRT-%06lX", (unsigned long)rt_node_id());
     }
     return name;
 }
@@ -344,7 +345,10 @@ void rt_set_lc(int lc)
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
 {
     p->magic = RT_MAGIC;
-    p->node  = rt_node_id();
+    const uint32_t id = rt_node_id();
+    p->node[0] = (uint8_t)id;
+    p->node[1] = (uint8_t)(id >> 8);
+    p->node[2] = (uint8_t)(id >> 16);
     p->txdbm = txdbm;
     p->seq   = s_tx_seq[chan]++;
     s_tx_count[chan]++;
@@ -387,13 +391,14 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
 
     rt_pkt_t p;
     memcpy(&p, data, sizeof(p));
-    if (p.magic != RT_MAGIC || p.node == rt_node_id()) {
+    if (p.magic != RT_MAGIC) {
         return;
     }
+    const uint32_t node = rt_pkt_node(&p);
 
     int slot = -1;
     for (int i = 0; i < RT_MAX_PEERS; i++) {
-        if (s_peers[i].used && s_peers[i].node == p.node) {
+        if (s_peers[i].used && s_peers[i].node == node) {
             slot = i;
             break;
         }
@@ -402,7 +407,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
         for (int i = 0; i < RT_MAX_PEERS; i++) {
             if (!s_peers[i].used) {
                 s_peers[i].used = true;
-                s_peers[i].node = p.node;
+                s_peers[i].node = node;
                 slot = i;
                 break;
             }
@@ -470,6 +475,14 @@ static int put_u16(uint8_t *b, int n, uint32_t v)
     return n + 2;
 }
 
+static int put_u24(uint8_t *b, int n, uint32_t v)
+{
+    b[n]     = (uint8_t)(v & 0xFF);
+    b[n + 1] = (uint8_t)((v >> 8) & 0xFF);
+    b[n + 2] = (uint8_t)((v >> 16) & 0xFF);
+    return n + 3;
+}
+
 static int put_u32(uint8_t *b, int n, uint32_t v)
 {
     b[n]     = (uint8_t)(v & 0xFF);
@@ -481,7 +494,7 @@ static int put_u32(uint8_t *b, int n, uint32_t v)
 
 // Walk the peer table in the same order twice - once to count, once to emit - so the n_rows in
 // the status block cannot disagree with the rows that follow it.
-static rt_link *row_at(int want, uint8_t *peer_out, uint8_t *chan_out)
+static rt_link *row_at(int want, uint32_t *peer_out, uint8_t *chan_out)
 {
     int seen = 0;
     for (int i = 0; i < RT_MAX_PEERS; i++) {
@@ -550,7 +563,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
                                         | (g_tx_mute ? 0x40 : 0));
 
         n = put_u8(out, n, RT_RPT_VER);
-        n = put_u8(out, n, rt_node_id());
+        n = put_u24(out, n, rt_node_id());
         n = put_u8(out, n, (uint8_t)g_lc);
         n = put_u8(out, n, state);
         n = put_u32(out, n, now);
@@ -585,7 +598,8 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
     }
 
     while (st->row_next < total && n + RT_RPT_ROW <= cap) {
-        uint8_t  peer = 0, chan = 0;
+        uint32_t peer = 0;
+        uint8_t  chan = 0;
         rt_link *l = row_at(st->row_next, &peer, &chan);
         if (l == NULL) {
             break;  // table changed under us; the next report carries the truth
@@ -598,7 +612,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
         const int      snr  =(l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
 
-        n = put_u8(out, n, peer);
+        n = put_u24(out, n, peer);
         n = put_u8(out, n, chan);
         n = put_u8(out, n, (uint8_t)l->rssi_last);
         n = put_u8(out, n, (uint8_t)mean);
@@ -636,7 +650,8 @@ void rt_report(void)
     // Everything that matters, every report. A one-off startup banner is invisible to anyone
     // who was not watching at the moment it scrolled past - and the moment worth watching is
     // always the one after something went wrong, by which time the banner is long gone.
-    printf("\n== node %02X  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s  rst=%s ==\n", rt_node_id(),
+    printf("\n== node %06lX  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s  rst=%s ==\n",
+           (unsigned long)rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
            rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int", rt_reset_reason());
     // Asked-for versus achieved. They differ whenever the radio quantised the request, which
@@ -705,9 +720,9 @@ void rt_report(void)
             const int      tpdr = tot ? (int)((l->rx * 100) / tot) : -1;
             const int      mean = l->rssi_n ? (int)(l->rssi_sum / l->rssi_n) : 0;
 
-            printf("  %02X %-8s rssi %4d (avg %4d, %d..%d)  pdr %3d%% now / %3d%% all"
+            printf("  %06lX %-8s rssi %4d (avg %4d, %d..%d)  pdr %3d%% now / %3d%% all"
                    "  rx %lu miss %lu  %lums ago",
-                   s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
+                   (unsigned long)s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
                    l->rssi_min, l->rssi_max, wpdr, tpdr,
                    (unsigned long)l->rx, (unsigned long)l->missed,
                    (unsigned long)(now - l->last_ms));
