@@ -49,6 +49,7 @@ static void on_send(const uint8_t *tx_info, esp_now_send_status_t status)
 static void tx_task(void *pv)
 {
     (void)pv;
+    rt_sleeper_t *sleeper = rt_sleeper_new("espnow_tx");
     for (;;) {
         if (rt_tx_enabled(CH_ESPNOW) && !g_tx_mute) {
             // The real figure, read back from the driver, not the one we asked for: the
@@ -65,7 +66,7 @@ static void tx_task(void *pv)
                 rt_tx_failed(CH_ESPNOW);
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(rt_jitter_ms(TX_PERIOD_MS)));
+        rt_sleep_rand(sleeper, TX_PERIOD_MS / 2, TX_PERIOD_MS * 3 / 2);
     }
 }
 

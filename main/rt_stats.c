@@ -1,9 +1,14 @@
 // The results table: one row per (peer, channel), printed over serial.
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sdkconfig.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #include "esp_mac.h"
 #include "esp_system.h"
@@ -195,6 +200,54 @@ uint32_t rt_jitter_ms(uint32_t ms)
     return ms - span / 2 + (esp_random() % (span + 1));
 }
 
+struct rt_sleeper {
+    esp_timer_handle_t timer;
+    SemaphoreHandle_t  wake;
+};
+
+static void sleeper_fire(void *arg)
+{
+    xSemaphoreGive(((rt_sleeper_t *)arg)->wake);
+}
+
+rt_sleeper_t *rt_sleeper_new(const char *name)
+{
+    rt_sleeper_t *s = calloc(1, sizeof(*s));
+    if (s == NULL || (s->wake = xSemaphoreCreateBinary()) == NULL) {
+        ESP_LOGE(TAG, "%s: no memory for a sleeper, falling back to tick delays", name);
+        free(s);
+        return NULL;
+    }
+    const esp_timer_create_args_t args = {
+        .callback        = sleeper_fire,
+        .arg             = s,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name            = name,
+    };
+    const esp_err_t err = esp_timer_create(&args, &s->timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: esp_timer_create -> %s, falling back to tick delays", name,
+                 esp_err_to_name(err));
+        vSemaphoreDelete(s->wake);
+        free(s);
+        return NULL;
+    }
+    return s;
+}
+
+void rt_sleep_rand(rt_sleeper_t *s, uint32_t min_ms, uint32_t max_ms)
+{
+    const uint32_t span_us = (max_ms - min_ms) * 1000;
+    const uint64_t us      = (uint64_t)min_ms * 1000 + esp_random() % (span_us + 1);
+
+    // A failed sleeper still has to sleep, or its tx loop spins. Tick-quantised, but running.
+    if (s == NULL || esp_timer_start_once(s->timer, us) != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(us / 1000) + 1);
+        return;
+    }
+    xSemaphoreTake(s->wake, portMAX_DELAY);
+}
+
 uint8_t rt_node_id(void)
 {
     if (s_node_id == 0) {
@@ -203,6 +256,17 @@ uint8_t rt_node_id(void)
         s_node_id = mac[5] ? mac[5] : 1;
     }
     return s_node_id;
+}
+
+const char *rt_node_name(void)
+{
+    static char name[16];
+    if (name[0] == '\0') {
+        uint8_t mac[6] = { 0 };
+        esp_read_mac(mac, ESP_MAC_BASE);
+        snprintf(name, sizeof(name), "ESPRT-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    }
+    return name;
 }
 
 bool rt_tx_enabled(int chan)
@@ -256,17 +320,6 @@ void rt_stats_reset(void)
     memset(s_tx_count, 0, sizeof(s_tx_count));
     memset(s_tx_ok, 0, sizeof(s_tx_ok));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
-}
-
-const char *rt_node_name(void)
-{
-    static char name[16];
-    if (name[0] == '\0') {
-        uint8_t mac[6] = { 0 };
-        esp_read_mac(mac, ESP_MAC_BASE);
-        snprintf(name, sizeof(name), "ESPRT-%02X%02X%02X", mac[3], mac[4], mac[5]);
-    }
-    return name;
 }
 
 void rt_set_lc(int lc)

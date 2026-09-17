@@ -97,12 +97,27 @@ uint8_t  rt_node_id(void);
 const char *rt_node_name(void);
 uint32_t rt_ms(void);
 
-// ms with +/-5% of randomness. Every transmit loop delays by this rather than by a constant:
-// two boards running the same firmware would otherwise sit at exactly the same period and
-// either collide on the air every time or never, so the loss figure would be measuring the
-// timers rather than the range. It also keeps a channel's transmits from landing in permanent
-// lockstep with the phone link's connection events.
+// ms with +/-5% of randomness, tick-quantised. Only the BLE advert refresh uses this now, and
+// there the controller picks the actual advertising instants itself.
 uint32_t rt_jitter_ms(uint32_t ms);
+
+// Sleep a uniformly random time in [min_ms, max_ms], at microsecond resolution. The ESP-NOW
+// and 802.15.4 transmit loops use this so that whether any one packet lands inside some
+// receiver's listening window - the far board's BLE scan, a coex slot, a connection event -
+// is a fresh coin toss every packet, never a fixed phase.
+//
+// Two things vTaskDelay(rt_jitter_ms()) got wrong for that:
+//   - the tick is 10ms, so every transmit started on the same 10ms grid as every other
+//     tick-woken task on the board, and "250 +/-12" was really three or four fixed delays;
+//   - +/-5% moves the phase ~7ms per packet, so consecutive packets were strongly correlated:
+//     one that missed a 200ms scan window left the next few likely to miss it too.
+// Callers ask for +/-50% of their period: same mean rate, and each packet's phase against
+// anything periodic up to one full period is independent of the last.
+//
+// Backed by an esp_timer, so the wake-up is off the tick grid. One per task.
+typedef struct rt_sleeper rt_sleeper_t;
+rt_sleeper_t *rt_sleeper_new(const char *name);
+void rt_sleep_rand(rt_sleeper_t *s, uint32_t min_ms, uint32_t max_ms);
 
 // Low-contention mode: which channel gets the antenna mostly to itself. 0 = all of them
 // (normal operation); otherwise only channel (g_lc-1) transmits, and everything else that

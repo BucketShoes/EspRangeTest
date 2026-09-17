@@ -43,7 +43,7 @@ static const char *TAG = "154";
 // Backoff is randomised because two boards running this firmware would otherwise retry in
 // lockstep and keep colliding with each other's retries instead of with the gaps.
 #define TX_TRIES      6
-#define TX_BACKOFF_MS 20    // actual delay is 10..30ms; FreeRTOS tick here is 10ms
+#define TX_BACKOFF_MS 20    // actual delay is uniform over 10..30ms
 #define TX_WAIT_MS    50    // how long to wait for the radio's verdict on one attempt
 
 // Header: FCF(2) seq(1) dstpan(2) dstaddr(2) srcaddr(2) = 9 bytes, then payload, then a
@@ -188,6 +188,7 @@ static void report_tx_errors(void)
 // wake the task the instant the verdict is in, rather than the task polling for it.
 static TaskHandle_t  s_tx_task;
 static volatile bool s_tx_landed;
+static rt_sleeper_t *s_sleeper;   // tx_task only: the period and the retry backoff
 
 // One scheduled packet, up to TX_TRIES attempts at getting it on the air. Returns whether the
 // radio ever confirmed it went out.
@@ -195,7 +196,7 @@ static bool transmit_with_retries(uint8_t *frame)
 {
     for (int attempt = 0; attempt < TX_TRIES; attempt++) {
         if (attempt > 0) {
-            vTaskDelay(pdMS_TO_TICKS(TX_BACKOFF_MS / 2 + esp_random() % TX_BACKOFF_MS));
+            rt_sleep_rand(s_sleeper, TX_BACKOFF_MS / 2, TX_BACKOFF_MS * 3 / 2);
         }
 
         s_tx_landed = false;
@@ -250,6 +251,7 @@ static void tx_task(void *pv)
 {
     (void)pv;
     s_tx_task = xTaskGetCurrentTaskHandle();
+    s_sleeper = rt_sleeper_new("154_tx");
 
     for (;;) {
         report_tx_errors();
@@ -286,7 +288,7 @@ static void tx_task(void *pv)
                 rt_tx_failed(CH_154);
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(rt_jitter_ms(TX_PERIOD_MS)));
+        rt_sleep_rand(s_sleeper, TX_PERIOD_MS / 2, TX_PERIOD_MS * 3 / 2);
     }
 }
 
