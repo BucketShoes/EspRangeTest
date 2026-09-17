@@ -258,6 +258,17 @@ void rt_stats_reset(void)
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
 }
 
+const char *rt_node_name(void)
+{
+    static char name[16];
+    if (name[0] == '\0') {
+        uint8_t mac[6] = { 0 };
+        esp_read_mac(mac, ESP_MAC_BASE);
+        snprintf(name, sizeof(name), "ESPRT-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    }
+    return name;
+}
+
 void rt_set_lc(int lc)
 {
     if (lc < 0 || lc >= LC_COUNT) {

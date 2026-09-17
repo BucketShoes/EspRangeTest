@@ -91,6 +91,10 @@ typedef struct __attribute__((packed)) {
 } rt_pkt_t;
 
 uint8_t  rt_node_id(void);
+
+// "ESPRT-" + the last three MAC bytes, for the SoftAP SSID and the BLE name. Wider than the
+// node id so boards that share a low MAC byte are still told apart when picking one to connect.
+const char *rt_node_name(void);
 uint32_t rt_ms(void);
 
 // ms with +/-5% of randomness. Every transmit loop delays by this rather than by a constant:

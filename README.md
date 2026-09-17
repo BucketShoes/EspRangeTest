@@ -93,7 +93,7 @@ have no 802.15.4 radio, so that channel is skipped and the boot log says so.
 ## Phone UI
 
 `docs/index.html` — connect over Web Bluetooth and watch the same numbers on a phone while
-you walk. Each board advertises as `ESPRT-xx`; tap **Connect a board** twice to watch both
+you walk. Each board advertises as `ESPRT-xxxxxx` (last three MAC bytes); tap **Connect a board** twice to watch both
 at once. The low-contention buttons switch radio isolation remotely, and it reconnects by
 itself when a board comes back into range.
 

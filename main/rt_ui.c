@@ -392,7 +392,7 @@ static int start_adv(void)
 
 void rt_ui_init(void)
 {
-    snprintf(s_name, sizeof(s_name), "ESPRT-%02X", rt_node_id());
+    snprintf(s_name, sizeof(s_name), "%s", rt_node_name());
 
     ble_svc_gap_init();
     ble_svc_gatt_init();

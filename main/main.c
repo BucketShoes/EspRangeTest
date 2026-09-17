@@ -301,7 +301,7 @@ static void wifi_start(void)
 
     wifi_config_t ap = { 0 };
     char ssid[sizeof(ap.ap.ssid) + 1];
-    snprintf(ssid, sizeof(ssid), "ESPRT-%02X", rt_node_id());
+    snprintf(ssid, sizeof(ssid), "%s", rt_node_name());
     memcpy(ap.ap.ssid, ssid, strlen(ssid));
     ap.ap.ssid_len       = strlen(ssid);
     ap.ap.channel        = WIFI_CHAN;
