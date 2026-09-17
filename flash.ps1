@@ -1,4 +1,4 @@
-# Build once, then flash the same image to every port given. Ports on the command line override
+# Build, then flash the same image to every port given. Ports on the command line override
 # upload_port in platformio.ini, so the ini is never touched and VS Code has nothing to reload.
 #
 #   .\flash.ps1 COM32 COM24             devkitc build to both
@@ -25,8 +25,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $failed = @()
 foreach ($p in $Ports) {
     Write-Host "`n==== $p ====" -ForegroundColor Cyan
-    # nobuild: the image above is already current; this only uploads.
-    & $pio run -e $Env -t nobuild -t upload --upload-port $p
+    # Not -t nobuild: that skips the build script which tells esptool where the bootloader and
+    # partition table go, and the upload fails on bare firmware.bin. The image is already built,
+    # so the build step here is a few-second no-op.
+    & $pio run -e $Env -t upload --upload-port $p
     if ($LASTEXITCODE -ne 0) { $failed += $p }
 }
 
