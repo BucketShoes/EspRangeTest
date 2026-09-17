@@ -333,10 +333,14 @@ function onChunk(d, v) {
 
   if (type === 0x01) {
     const ver = v.getUint8(o);
-    if (ver !== 2) {
-      logMsg(`${d.name}: report format v${ver}, this page decodes v2 - update the page`, true);
+    if (ver !== 2 && ver !== 3) {
+      logMsg(`${d.name}: report format v${ver}, this page decodes v2-v3 - update the page`, true);
       return;
     }
+    // v3 widened a row's age from u16 to u32. v2 clamped at 65.5 s, so a link silent for
+    // longer read "65 s ago" forever. Remembered per board because continuation chunks carry
+    // no version of their own.
+    d.rptVer = ver;
     const node  = v.getUint8(o + 1);
     const lc    = v.getUint8(o + 2);
     const state = v.getUint8(o + 3);
@@ -411,10 +415,12 @@ function onChunk(d, v) {
   }
 
   // Rows fill whatever is left of the chunk, in both types.
-  while (o + 21 <= v.byteLength) {
+  const wide = d.rptVer === 3;
+  const rowLen = wide ? 23 : 21, t = wide ? 2 : 0;   // t: offset shift after the age field
+  while (o + rowLen <= v.byteLength) {
     const peer = v.getUint8(o).toString(16).toUpperCase().padStart(2, '0');
     const ch   = CH_NAMES[v.getUint8(o + 1)] ?? '?';
-    const age  = v.getUint16(o + 16, true);
+    const age  = wide ? v.getUint32(o + 16, true) : v.getUint16(o + 16, true);
     putRow(d, peer + '/' + ch, {
       peer, ch,
       rssi:   v.getInt8(o + 2),
@@ -426,15 +432,15 @@ function onChunk(d, v) {
       rx:     v.getUint32(o + 8, true),
       miss:   v.getUint32(o + 12, true),
       age,
-      snr:    v.getInt8(o + 18),     // -128 where the radio measures no noise floor
-      lqi:    v.getUint8(o + 19),
-      ptx:    v.getInt8(o + 20),
+      snr:    v.getInt8(o + t + 18), // -128 where the radio measures no noise floor
+      lqi:    v.getUint8(o + t + 19),
+      ptx:    v.getInt8(o + t + 20),
       gen:    d.genN ?? 0,
       // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
       // so its age is a straight subtraction from "now" and cannot drift with arrival times.
       abs:    (d.boardMs ?? 0) - age,
     });
-    o += 21;
+    o += rowLen;
   }
 
   scheduleRender();
