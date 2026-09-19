@@ -307,7 +307,7 @@ static void wifi_start(void)
     ap.ap.channel        = WIFI_CHAN;
     ap.ap.authmode       = WIFI_AUTH_OPEN;   // throwaway instrument, not a product
     ap.ap.max_connection = 4;
-    ap.ap.ftm_responder  = true;             // costs nothing to set now; FTM itself is later
+    ap.ap.ftm_responder  = true;             // needs CONFIG_ESP_WIFI_FTM_ENABLE (sdkconfig.defaults)
     RT_TRY(TAG, esp_wifi_set_config(WIFI_IF_AP, &ap));
 
     wifi_apply();  // boots non-LR (g_lr is still false); LR is opt-in, never silently on

@@ -96,3 +96,8 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # A results line is up to ~66 bytes and each one goes out as a single notification. The
 # default 23-byte ATT MTU would truncate them, so ask for a large one up front.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
+
+# 802.11mc FTM. Without this the driver is built without FTM, and the SoftAP's
+# ftm_responder = true in main.c is silently ignored. Initiator and responder support both
+# default on once this is set. (Errata WIFI-9686 says C6 initiator is broken; see CONTEXT.md.)
+CONFIG_ESP_WIFI_FTM_ENABLE=y
