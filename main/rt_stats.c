@@ -548,13 +548,13 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
                                         | (rt_wifi_active() ? 4 : 0)
                                         | (g_conn_2m ? 8 : 0)
                                         | ((rt_conn_phy_actual() & 0x03) << 4)
-                                        | (g_tx_mute ? 0x40 : 0)
-                                        | (g_led ? 0x80 : 0));
+                                        | (g_tx_mute ? 0x40 : 0));
 
         n = put_u8(out, n, RT_RPT_VER);
         n = put_u24(out, n, rt_node_id());
         n = put_u8(out, n, (uint8_t)g_lc);
         n = put_u8(out, n, state);
+        n = put_u8(out, n, g_led);
         n = put_u32(out, n, now);
         // Achieved dBm, not requested - the page should show what the radio is doing.
         for (int c = 0; c < CH_COUNT; c++) {
@@ -643,7 +643,7 @@ void rt_report(void)
            (unsigned long)rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
            rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int",
-           g_led ? "on" : "off", rt_reset_reason());
+           rt_led_name(g_led), rt_reset_reason());
     // Asked-for versus achieved. They differ whenever the radio quantised the request, which
     // is worth seeing rather than hiding behind the number that was typed.
     printf("  pwr: ");

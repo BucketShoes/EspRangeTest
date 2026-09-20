@@ -14,6 +14,7 @@
 #include "driver/gpio.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -60,17 +61,24 @@ static const char *TAG = "rt";
 
 // The XIAO's user LED on GPIO15.
 //
-// **This is the polarity knob.** LED_ON_LEVEL is the level driven while the LED is asked to be
-// on: 1 assumes the pin sources into the LED with ground on the other side. If commanding it
-// on turns the LED off, flip this one line to 0 and nothing else changes - everything else
-// here, firmware and web UI alike, talks in on/off and never in levels.
+// Active low, confirmed on the bench rather than read off a schematic. LED_ON_LEVEL is the
+// level driven while the LED is lit and is the only place in this project where a level
+// appears at all - everything else, firmware and web UI alike, speaks in off/on/blink.
 //
 // GPIO15 is a strapping pin (the C6's are 8, 9 and 15), which is part of why the LED defaults
 // to floating rather than being configured at boot: the pin is left exactly as reset found it
 // until someone asks for the LED. "Off" returns it to that same high-Z state rather than
 // driving the inactive level, so off is the boot condition itself and not a lookalike.
+//
+// The blink is a software timer toggling the pin, not LEDC. LEDC cannot reach 2Hz at any
+// useful resolution - its slowest source is the 8MHz RC oscillator into a 20-bit counter,
+// which bottoms out around 7.6Hz - and at 2Hz there is nothing for hardware PWM to buy: PWM
+// only differs from a toggle when the eye is meant to integrate it, and at half a second per
+// phase nobody's does. What is wanted here is a blink, and a blink is what this is.
 #define LED_GPIO      15
-#define LED_ON_LEVEL  1
+#define LED_ON_LEVEL  0
+#define LED_OFF_LEVEL (!LED_ON_LEVEL)
+#define LED_HALF_MS   250   // 2Hz at 50% duty: lit for one half period, dark for the other
 
 // The button has exactly two gestures, and no third is allowed to appear.
 //
@@ -386,38 +394,97 @@ void rt_set_antenna(bool external)
 
 // ---- User LED ----------------------------------------------------------------------------
 //
-// Off at boot, and off means floating rather than driven low - see LED_GPIO at the top of this
-// file for that, and for the single define to flip if the polarity turns out to be inverted.
+// Off, on, or blinking at 2Hz. Off at boot, and off means floating rather than driven - see
+// LED_GPIO at the top of this file for that and for the polarity.
 //
 // Unlike the antenna there is no readiness flag and no ordering constraint: GPIO15 goes
 // nowhere near the RF path, so the pin can be configured the moment it is first asked for and
 // never needs touching before that.
-volatile bool g_led;
+volatile uint8_t g_led;
+
+// Created on first use and then kept, because the cycle is a button someone is pressing: a
+// timer torn down and rebuilt on every pass through blink is three allocations per cycle for
+// no gain, and the handle is four bytes.
+static esp_timer_handle_t s_led_timer;
+static bool               s_led_lit;   // which half of the blink period the pin is in
+
+// Runs on the esp_timer task. One gpio_set_level and nothing else - anything that could block
+// does not belong on that task, which every other timer on the board shares.
+static void led_blink_cb(void *pv)
+{
+    (void)pv;
+    s_led_lit = !s_led_lit;
+    gpio_set_level(LED_GPIO, s_led_lit ? LED_ON_LEVEL : LED_OFF_LEVEL);
+}
+
+// Named in one place, so the log line and the serial report cannot drift apart or disagree
+// about what mode 2 is called.
+const char *rt_led_name(int mode)
+{
+    switch (mode) {
+    case RT_LED_ON:    return "on";
+    case RT_LED_BLINK: return "2Hz";
+    default:           return "off";
+    }
+}
 
 static void apply_led(void)
 {
+    // Stopping first means every mode is entered from the same place, whichever one it is
+    // leaving. Not-running is not an error worth reporting here.
+    if (s_led_timer != NULL) {
+        esp_timer_stop(s_led_timer);
+    }
+
     const gpio_config_t io = {
         .pin_bit_mask = 1ULL << LED_GPIO,
-        // Driven only while lit. Turning it off releases the pin instead of driving the
-        // inactive level, so off is byte-for-byte the state the board powered up in.
-        .mode         = g_led ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT,
+        // Driven in both lit modes, including the dark half of a blink: while the blink is
+        // running the pin is in use, and releasing it every other half period would hand the
+        // LED to whatever leakage is nearby instead of turning it off. Only the off mode
+        // releases the pin, so off is byte-for-byte the state the board powered up in.
+        .mode         = g_led == RT_LED_OFF ? GPIO_MODE_INPUT : GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&io);
-    if (g_led) {
+
+    if (g_led != RT_LED_OFF) {
+        // Both lit modes start lit, so a press always answers immediately - a blink that began
+        // on its dark half would look for a quarter second like the press did nothing.
+        s_led_lit = true;
         gpio_set_level(LED_GPIO, LED_ON_LEVEL);
     }
-    ESP_LOGI(TAG, "led: %s", g_led ? "on" : "off (floating)");
+
+    if (g_led == RT_LED_BLINK) {
+        if (s_led_timer == NULL) {
+            const esp_timer_create_args_t args = {
+                .callback = led_blink_cb,
+                .name     = "led",
+            };
+            if (esp_timer_create(&args, &s_led_timer) != ESP_OK) {
+                // Steady light is the honest fallback: the LED is lit, which is what the
+                // report will say, rather than claiming a blink that is not happening.
+                ESP_LOGW(TAG, "no timer for the LED blink; leaving it lit");
+                g_led = RT_LED_ON;
+            }
+        }
+        if (s_led_timer != NULL) {
+            esp_timer_start_periodic(s_led_timer, (uint64_t)LED_HALF_MS * 1000);
+        }
+    }
+
+    ESP_LOGI(TAG, "led: %s", rt_led_name(g_led));
 }
 
-void rt_set_led(bool on)
+void rt_set_led(int mode)
 {
-    if (on == g_led) {
+    // Out of range is ignored rather than clamped, same as every other command byte: a byte
+    // this firmware does not understand should do nothing, not the nearest thing to something.
+    if (mode < 0 || mode >= RT_LED_COUNT || (uint8_t)mode == g_led) {
         return;
     }
-    g_led = on;
+    g_led = (uint8_t)mode;
     apply_led();
 }
 

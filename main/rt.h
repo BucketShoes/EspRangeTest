@@ -243,8 +243,11 @@ void rt_set_tx_mute(bool mute);
 
 // ---- User LED ----------------------------------------------------------------------------
 //
-// The XIAO's LED on GPIO15, as a plain on/off - for finding a board in long grass, confirming
-// which of two identical boards you are holding, or marking a moment in a walk.
+// The XIAO's LED on GPIO15: off, lit, or blinking at 2Hz - for finding a board in long grass,
+// confirming which of two identical boards you are holding, or marking a moment in a walk.
+// The blink exists because steady and dark are both things a board can be by accident; a 2Hz
+// blink is unmistakably something someone asked for, which is what you want when the question
+// is "is that one mine?" across a field.
 //
 // Off at boot and never remembered, and off is *floating*, not driven: the pin is left as
 // reset found it until the LED is first asked for. GPIO15 is a strapping pin, so not driving
@@ -253,11 +256,22 @@ void rt_set_tx_mute(bool mute);
 // Nothing else depends on this. It touches no radio, claims no airtime and is not a control
 // path, which is also why the button restore leaves it alone - see restore_control() in
 // main.c. Polarity lives in one define, LED_ON_LEVEL in main.c.
-#define RT_CMD_LED_OFF 0x89
-#define RT_CMD_LED_ON  0x8A
+#define RT_LED_OFF   0
+#define RT_LED_ON    1
+#define RT_LED_BLINK 2
+#define RT_LED_COUNT 3
 
-extern volatile bool g_led;
-void rt_set_led(bool on);
+// Three explicit states, not a "next state" byte, even though the UI presents them as one
+// button that cycles. Cycling is a view; the wire carries the state itself, so a write that
+// is retried, duplicated or lost cannot leave the board one step out of phase with the button
+// that sent it - and two phones looking at the same board always agree.
+#define RT_CMD_LED_OFF   0x89
+#define RT_CMD_LED_ON    0x8A
+#define RT_CMD_LED_BLINK 0x8B
+
+extern volatile uint8_t g_led;
+void rt_set_led(int mode);
+const char *rt_led_name(int mode);
 
 // ---- Transmit power ----------------------------------------------------------------------
 //
@@ -404,13 +418,17 @@ void rt_report(void);
 //     u8  idx     chunk index within this report, from 0
 //     u8  flags   bit0 = last chunk of this report
 //
-//   status block (83 bytes, only in a 0x01 chunk, immediately after the header)
+//   status block (84 bytes, only in a 0x01 chunk, immediately after the header)
 //     u8  ver           RT_RPT_VER
 //     u24 node          rt_node_id()
 //     u8  lc
 //     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
 //                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded),
-//                       bit6 tx_mute, bit7 led
+//                       bit6 tx_mute
+//     u8  led           0 off, 1 on, 2 blinking at 2Hz. Its own byte rather than more bits
+//                       in state: state was full at bit7, and three states do not fit in one
+//                       bit. Squeezing it in beside something else would have made the
+//                       next field along someone else's problem to find.
 //     u32 up_ms         board clock when the whole snapshot was taken; every age below is
 //                       measured against it, so the page can put ages on the board's timebase
 //                       instead of on arrival times
@@ -438,11 +456,11 @@ void rt_report(void);
 //
 // Counters stay u32 rather than being squeezed: at 4 packets/s a u24 wraps in seven weeks and
 // the six bytes saved are not worth a counter that silently rolls over mid-test.
-// 35 bytes of status + 3 x 16 bytes of per-channel tx accounting. Checked against the
+// 36 bytes of status + 3 x 16 bytes of per-channel tx accounting. Checked against the
 // serialiser at runtime rather than trusted - see rt_snapshot_chunk().
-#define RT_RPT_VER      4
+#define RT_RPT_VER      5
 #define RT_RPT_HDR      4
-#define RT_RPT_STATUS   83
+#define RT_RPT_STATUS   84
 #define RT_RPT_ROW      23
 #define RT_RPT_TYPE_STATUS 0x01
 #define RT_RPT_TYPE_ROWS   0x02

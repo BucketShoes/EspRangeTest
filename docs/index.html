@@ -171,12 +171,18 @@ const CMD_ANT_INT = 0x82, CMD_ANT_EXT = 0x83;
 // Must match RT_CMD_TX_* in main/rt.h.
 const CMD_TX_UNMUTE = 0x86, CMD_TX_MUTE = 0x87;
 
-// The board's user LED (GPIO15), as a plain on/off - for finding a board in long grass or
-// telling two identical ones apart. Off at boot and never remembered, and "off" leaves the pin
-// floating rather than driven, so a power cycle always puts it out. Nothing else depends on
-// it: no radio, no airtime, not a control path. Must match RT_CMD_LED_* in main/rt.h, and the
-// polarity (which level lights it) lives in one define in the firmware, not here.
-const CMD_LED_OFF = 0x89, CMD_LED_ON = 0x8A;
+// The board's user LED (GPIO15): off, lit, or blinking at 2Hz - for finding a board in long
+// grass or telling two identical ones apart. The blink is the useful one at a distance: steady
+// and dark are both things a board can be by accident, a 2Hz blink is not. Off at boot and
+// never remembered, and "off" leaves the pin floating rather than driven, so a power cycle
+// always puts it out. Nothing else depends on it: no radio, no airtime, not a control path.
+//
+// One button that cycles, but three explicit commands - the cycling is this page's idea, and
+// the wire carries the state itself, so a lost or repeated write cannot leave the board a step
+// out of phase with the button. Must match RT_CMD_LED_* in main/rt.h; the polarity (which
+// level lights it) lives in one define in the firmware and never travels.
+const CMD_LED_OFF = 0x89, CMD_LED_ON = 0x8A, CMD_LED_BLINK = 0x8B;
+const LED_NAMES = ['led off', 'led on', 'led 2Hz'];
 
 // Control-link PHY. Coded S=8 is the default and the long-range one; 2M is the cheap one, for
 // when the phone is next to the board and the report is just overhead on someone else's test.
@@ -313,7 +319,7 @@ function disconnect(dev, d) {
 // report's grace, so a row is not flickered out while its own report is still arriving.
 // ---- notification dispatch -----------------------------------------------------------------
 //
-// The board sends a packed binary report (RT_RPT_VER 2). Older firmware sent CSV text lines.
+// The board sends a packed binary report (RT_RPT_VER 5). Older firmware sent CSV text lines.
 // Both are still decoded here, and the two can never be confused: a binary chunk starts with a
 // type byte of 0x01 or 0x02, and every CSV line starts with 'S', 'T', 'X' or 'R' - 0x53, 0x54,
 // 0x58, 0x52. So the first byte alone settles it.
@@ -350,12 +356,13 @@ function onChunk(d, v) {
 
   if (type === 0x01) {
     const ver = v.getUint8(o);
-    // v4: node ids are 3 bytes (last three of the MAC) and row ages are in 0.1 s. Older boards
-    // also send 1-byte ids in their packets, which v4 boards do not accept, so there is no
-    // mixing the two - reflash rather than decode both.
-    if (ver !== 4) {
-      logMsg(`${d.name}: report format v${ver}, this page decodes v4 - ` +
-             (ver < 4 ? 'reflash the board' : 'update the page'), true);
+    // v5 adds a one-byte LED field after the state byte, which moves every field behind it -
+    // the state byte was full at bit7 and three LED states do not fit in one bit. v4 and v5
+    // are not mixable for that reason: same fields, different offsets, and a v4 board decoded
+    // as v5 would read plausible-looking nonsense rather than fail outright. Reflash instead.
+    if (ver !== 5) {
+      logMsg(`${d.name}: report format v${ver}, this page decodes v5 - ` +
+             (ver < 5 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
     }
@@ -363,7 +370,8 @@ function onChunk(d, v) {
     const node  = u24(v, o + 1);
     const lc    = v.getUint8(o + 4);
     const state = v.getUint8(o + 5);
-    const upMs  = v.getUint32(o + 6, true);
+    const led   = v.getUint8(o + 6);
+    const upMs  = v.getUint32(o + 7, true);
 
     // Uptime going backwards is the only reliable sign the board reset - it comes back and
     // reconnects on its own and otherwise says nothing about having lost everything.
@@ -398,7 +406,7 @@ function onChunk(d, v) {
     d.conn2m  = state & 8 ? 1 : 0;
     d.connPhy = (state >> 4) & 3;
     d.txMute  = state & 0x40 ? 1 : 0;
-    d.led     = state & 0x80 ? 1 : 0;
+    d.led     = led;
 
     d.boardMs = upMs;
     // offset converts board time to browser time, as a running *minimum*: transit delay is
@@ -406,22 +414,22 @@ function onChunk(d, v) {
     const candidate = Date.now() - upMs;
     d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
 
-    d.pwr = [v.getInt8(o + 10), v.getInt8(o + 11), v.getInt8(o + 12)];
+    d.pwr = [v.getInt8(o + 11), v.getInt8(o + 12), v.getInt8(o + 13)];
 
     const prev = d.diag;
     d.diag = {
-      rst:     RST_NAMES[v.getUint8(o + 13)] ?? 'unknown',
-      heap:    v.getUint32(o + 14, true),
-      heapMin: v.getUint32(o + 18, true),
-      frames:  v.getUint32(o + 22, true),
-      ours:    v.getUint32(o + 26, true),
-      coex:    v.getUint32(o + 30, true),
+      rst:     RST_NAMES[v.getUint8(o + 14)] ?? 'unknown',
+      heap:    v.getUint32(o + 15, true),
+      heapMin: v.getUint32(o + 19, true),
+      frames:  v.getUint32(o + 23, true),
+      ours:    v.getUint32(o + 27, true),
+      coex:    v.getUint32(o + 31, true),
     };
     if (!prev || prev.rst !== d.diag.rst) {
       logMsg(`${d.name}: last reset was ${d.diag.rst}`, /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
     }
 
-    o += 35;   // status fields; tx records follow
+    o += 36;   // status fields; tx records follow
     d.tx = new Map();
     for (let c = 0; c < 3; c++, o += 16) {
       d.tx.set(CH_NAMES[c], {
@@ -1796,10 +1804,13 @@ function buildCard(d) {
   modes.appendChild(R.txm);
 
   R.led = document.createElement('button');
-  R.led.title = 'The board’s LED (GPIO15). Off at boot and never remembered - a power cycle ' +
-                'always puts it out. Costs no airtime and breaks nothing, so the board’s ' +
-                'button deliberately leaves it alone.';
-  R.led.onclick = () => cmd(d, d.led ? CMD_LED_OFF : CMD_LED_ON);
+  R.led.title = 'The board’s LED (GPIO15): cycles off, on, 2Hz blink. Off at boot and never ' +
+                'remembered - a power cycle always puts it out. Costs no airtime and breaks ' +
+                'nothing, so the board’s button deliberately leaves it alone.';
+  // Cycles, but sends the state it is cycling to rather than a "next" byte - see CMD_LED_*.
+  // A board whose state has not arrived yet starts the cycle at "on", which is what an
+  // unanswered press most likely meant.
+  R.led.onclick = () => cmd(d, CMD_LED_OFF + ((d.led ?? 0) + 1) % LED_NAMES.length);
   modes.appendChild(R.led);
 
   // Control-link PHY. Two uses, opposite answers: coded S=8 when the phone link itself is what
@@ -1979,7 +1990,7 @@ function updateCard(d) {
                     : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on';
   R.txm.className = d.txMute ? 'on' : '';
 
-  R.led.textContent = d.led === undefined ? 'led ?' : d.led ? 'led on' : 'led off';
+  R.led.textContent = LED_NAMES[d.led] ?? 'led ?';
   R.led.className = d.led ? 'on' : '';
 
   // Requested on the left, what the controller actually settled on in brackets when the two
