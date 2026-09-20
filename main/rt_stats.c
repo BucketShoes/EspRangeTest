@@ -85,9 +85,6 @@ static void apply_one(int chan, int dbm)
     if (dbm > r->max) dbm = r->max;
     g_pwr_dbm[chan] = (int8_t)dbm;
 
-    // Only this channel's history is invalidated - the other two were not touched.
-    rt_stats_reset_chan(chan);
-
     switch (chan) {
     case CH_ESPNOW:  rt_wifi_apply_power(); break;
     case CH_BLE_ADV: rt_ble_apply_power();  break;
@@ -295,23 +292,6 @@ static const char *lc_name(int lc)
     return rt_chan_name[lc - 1];
 }
 
-void rt_stats_reset_chan(int chan)
-{
-    if (chan < 0 || chan >= CH_COUNT) {
-        return;
-    }
-    for (int i = 0; i < RT_MAX_PEERS; i++) {
-        memset(&s_peers[i].ch[chan], 0, sizeof(s_peers[i].ch[chan]));
-    }
-    s_tx_seq[chan]   = 0;
-    s_tx_count[chan] = 0;
-    s_tx_ok[chan]    = 0;
-    s_tx_fail[chan]  = 0;
-    // s_rx_offmode is deliberately NOT cleared here. It counts a fault, not a measurement, and
-    // a mode change is exactly when the fault happens - clearing it on every mode change would
-    // erase the evidence at the moment it was collected.
-}
-
 void rt_stats_reset(void)
 {
     // Sequence numbers restart, so wipe what we have rather than let the restart read as a
@@ -321,6 +301,9 @@ void rt_stats_reset(void)
     memset(s_tx_count, 0, sizeof(s_tx_count));
     memset(s_tx_ok, 0, sizeof(s_tx_ok));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
+    // s_rx_offmode is deliberately NOT cleared. It counts a fault, not a measurement, and it
+    // is the one number here that is worth more the longer it has been accumulating.
+    printf("\n>>> results cleared\n");
 }
 
 void rt_set_lc(int lc)
@@ -332,12 +315,10 @@ void rt_set_lc(int lc)
     // reading g_lc, not the argument.
     g_lc = lc;
 
-    // Radios first, table second. Stopping a radio is not instant - esp_wifi_stop() unwinds a
-    // driver, and callbacks already queued still land - so wiping the table first left a window
-    // where in-flight packets were recorded into the freshly cleared table. That is how an
-    // espnow row appeared under a report header saying 154 was isolated.
+    // The table is not touched. A mode change says which channel gets the antenna; it says
+    // nothing about what this board already heard, and clearing it here threw away the other
+    // board's results every time you pressed the button. RT_CMD_STATS_RESET is the way now.
     rt_apply_lc_radios(lc);
-    rt_stats_reset();
 
     printf("\n>>> low contention = %s\n", lc_name(lc));
 }

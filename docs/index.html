@@ -177,6 +177,11 @@ const CMD_TX_UNMUTE = 0x86, CMD_TX_MUTE = 0x87;
 // Must match RT_CMD_PHY_* in main/rt.h.
 const CMD_PHY_CODED = 0x84, CMD_PHY_2M = 0x85;
 
+// Clear the board's results table. Nothing on the board does this by itself any more - power,
+// mode, LR and antenna all used to, and wiping board A's record of what it heard from board B
+// because you moved A's power slider was the wrong way round. Must match RT_CMD_STATS_RESET.
+const CMD_STATS_RESET = 0x88;
+
 // Transmit power in dBm, per radio. Two-byte write: [0xB0 + channel, dbm]; channel 3 sets all
 // three at once. Must match RT_CMD_PWR_SET and s_range[] in the firmware. Ranges are the
 // hardware's - Wi-Fi cannot go below +2dBm, the other two reach -15 - so "all" clamps each
@@ -285,9 +290,9 @@ function disconnect(dev, d) {
 }
 
 // Each report is a complete snapshot: one S line, then one R line per (peer, channel) the
-// board is still tracking. The board drops a row entirely once it stops tracking it - a mode
-// change wipes the table, so the channels that mode is not measuring simply stop being
-// reported.
+// board is still tracking. The board drops a row entirely once it stops tracking it, which now
+// happens only when someone presses that board's reset - a mode change leaves every row in
+// place, so a channel this mode is not measuring keeps its last numbers and simply ages.
 //
 // That matters because this page used to accumulate rows into a Map and never remove them. A
 // row the board had stopped sending stayed on screen forever, frozen at whatever it last said,
@@ -1795,6 +1800,20 @@ function buildCard(d) {
                 'restores coded.';
   R.phy.onclick = () => cmd(d, d.conn2m ? CMD_PHY_CODED : CMD_PHY_2M);
   modes.appendChild(R.phy);
+
+  // The only thing that clears this board's table. Per board, not global: the whole point of
+  // the change that added it is that one board's settings have no business touching another
+  // board's results, and a single page-wide "clear all" would put that straight back.
+  const rst = document.createElement('button');
+  rst.textContent = 'reset stats';
+  rst.title = 'Clear this board\u2019s results table and tx counters. Nothing else clears ' +
+              'them - changing power, mode, LR or antenna leaves them running, so a reading ' +
+              'spans whatever you want it to span.';
+  rst.onclick = () => {
+    cmd(d, CMD_STATS_RESET);
+    logMsg(`${d.name}: results cleared`);
+  };
+  modes.appendChild(rst);
 
   const disc = document.createElement('button');
   disc.textContent = 'Disconnect';

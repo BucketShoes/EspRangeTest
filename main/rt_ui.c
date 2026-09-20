@@ -224,6 +224,8 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
         rt_set_tx_mute(b[0] == RT_CMD_TX_MUTE);
     } else if (b[0] == RT_CMD_PHY_CODED || b[0] == RT_CMD_PHY_2M) {
         rt_set_conn_phy(b[0] == RT_CMD_PHY_2M);
+    } else if (b[0] == RT_CMD_STATS_RESET) {
+        rt_stats_reset();
     } else if (b[0] >= RT_CMD_PWR_SET && b[0] <= RT_CMD_PWR_SET + CH_COUNT) {
         if (len < 2) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;

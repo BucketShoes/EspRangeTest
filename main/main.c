@@ -232,8 +232,8 @@ void rt_set_lr(bool lr)
 #if RT_STAGE >= 1
     wifi_apply();
 #endif
-    // A PHY change makes prior RSSI/loss numbers incomparable to what comes next.
-    rt_stats_reset();
+    // The table is left alone - see RT_CMD_STATS_RESET in rt.h. This changes how this board
+    // transmits, and what it had received is not this toggle's to discard.
 }
 
 // Called by rt_set_lc() after every mode change - see the comment on the declaration in rt.h
@@ -365,9 +365,9 @@ void rt_set_antenna(bool external)
     }
     g_ant_ext = external;
     apply_antenna(false);
-    // A different antenna is a different link: gain, pattern and match all change, so nothing
-    // measured before this is comparable with what follows.
-    rt_stats_reset();
+    // A different antenna is a different link, and the numbers on either side of this are not
+    // comparable - but saying so is the operator's job now, with the reset button, not
+    // something to do to their table on their behalf. See RT_CMD_STATS_RESET in rt.h.
 }
 
 static void antenna_switch_on(void)

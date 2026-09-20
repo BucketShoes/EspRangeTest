@@ -53,7 +53,11 @@ interval right down, trading a laggy link for airtime. Expect low-contention tes
 anything other than `ble_adv` to be a bench-test affair with serial output, not a live walk
 with the phone connected.
 
-Switching resets the counters, since sequence numbers restart.
+Switching does **not** reset the counters, and neither does anything else — not power, LR or
+antenna either. Each board's card in the phone UI has its own **reset stats** button, and that
+is the only thing that clears it. Changing a setting on one board used to wipe that board's
+record of what it had heard from the other one, which was backwards: the slider changes what
+the board *transmits*, and the table is what it *received*.
 
 ## If it won't boot: the bring-up ladder
 

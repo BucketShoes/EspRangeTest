@@ -227,6 +227,20 @@ void rt_set_antenna(bool external);
 extern volatile bool g_tx_mute;
 void rt_set_tx_mute(bool mute);
 
+// ---- Clearing the results ----------------------------------------------------------------
+//
+// Same wipe as ever, moved to a button.
+//
+// Every setting used to do it on the way past: power, mode, LR and antenna each cleared the
+// table, on the grounds that numbers from before a change cannot be compared with numbers
+// from after it. Sound in principle, backwards in practice - the board whose slider you moved
+// is the *transmitter*, and the table it wiped was everything it had *received*, which that
+// slider did not touch. With two boards under test, nudging one board's power threw away the
+// other board's results mid-walk, and a walk cannot be repeated by standing still.
+//
+// So nothing clears itself now. The operator says when a measurement starts.
+#define RT_CMD_STATS_RESET 0x88
+
 // ---- Transmit power ----------------------------------------------------------------------
 //
 // Raw dBm per channel, over each radio's real range, set at runtime.
@@ -308,13 +322,9 @@ void rt_apply_lc_radios(int lc);
 // quietly still on while the numbers imply it is not.
 bool rt_wifi_active(void);
 
-// Shared by rt_set_lc() and rt_set_lr(): a mode or PHY change makes old RSSI/loss numbers
-// incomparable to new ones, so both wipe the table the same way.
+// Wipe the results table and the transmit counters. Driven by RT_CMD_STATS_RESET and nothing
+// else - see that define for why no setting does it on the way past any more.
 void rt_stats_reset(void);
-
-// Wipe one channel only. A power change invalidates that channel's history and nothing else,
-// so throwing away the other two channels' data alongside it would be gratuitous.
-void rt_stats_reset_chan(int chan);
 
 // Fill in a packet ready to send on this channel, advancing that channel's sequence number.
 void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
