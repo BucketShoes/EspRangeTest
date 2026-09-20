@@ -458,6 +458,15 @@ void rt_report(void);
 // the six bytes saved are not worth a counter that silently rolls over mid-test.
 // 36 bytes of status + 3 x 16 bytes of per-channel tx accounting. Checked against the
 // serialiser at runtime rather than trusted - see rt_snapshot_chunk().
+//
+// The version byte is what lets the page decode more than one layout, and v5 is the first
+// bump where that is worth doing. Every earlier one changed the packets boards send *each
+// other* - a mixed pair could not measure anything, so there was nothing to be compatible
+// with and the page simply refused the older board. v5 changed only what a board tells a
+// phone: the 12-byte measurement packet is untouched, so a v4 board and a v5 board still
+// range-test each other exactly as before, and the only difference is one byte of offset in
+// the report. The page decodes both, which is what keeps "change an LED" from meaning
+// "reflash every board in the drawer".
 #define RT_RPT_VER      5
 #define RT_RPT_HDR      4
 #define RT_RPT_STATUS   84

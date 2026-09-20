@@ -356,22 +356,36 @@ function onChunk(d, v) {
 
   if (type === 0x01) {
     const ver = v.getUint8(o);
-    // v5 adds a one-byte LED field after the state byte, which moves every field behind it -
-    // the state byte was full at bit7 and three LED states do not fit in one bit. v4 and v5
-    // are not mixable for that reason: same fields, different offsets, and a v4 board decoded
-    // as v5 would read plausible-looking nonsense rather than fail outright. Reflash instead.
-    if (ver !== 5) {
-      logMsg(`${d.name}: report format v${ver}, this page decodes v5 - ` +
-             (ver < 5 ? 'reflash the board' : 'update the page'), true);
+    // v5 adds a one-byte LED field after the state byte - the state byte was full at bit7 and
+    // three LED states do not fit in one bit - which shifts every field behind it by one.
+    //
+    // Both are decoded, and the reason is that this bump is unlike the ones before it. v4
+    // changed the packets boards send *each other*, so a mixed pair could not measure
+    // anything and "reflash rather than decode both" cost nothing. The LED changed only what
+    // a board says to a phone: a v4 board and a v5 board still range-test each other exactly
+    // as before. Refusing the older one would mean reflashing every board in the drawer to
+    // change an LED, and the page is the easy end to update - so the page carries the
+    // difference, which is one byte of offset.
+    //
+    // This is the version byte doing the job it exists for. Without it the two layouts would
+    // decode as each other and produce plausible nonsense rather than a named difference.
+    if (ver !== 4 && ver !== 5) {
+      logMsg(`${d.name}: report format v${ver}, this page decodes v4 and v5 - ` +
+             (ver < 4 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
     }
     d.rptOk = true;
+    // The byte v5 inserted after the state byte. Every offset past state carries it, so the
+    // two layouts are one variable apart rather than two copies of the same decoder.
+    const S = ver >= 5 ? 1 : 0;
     const node  = u24(v, o + 1);
     const lc    = v.getUint8(o + 4);
     const state = v.getUint8(o + 5);
-    const led   = v.getUint8(o + 6);
-    const upMs  = v.getUint32(o + 7, true);
+    // undefined, not 0, on a v4 board: it has no LED to report, which is a different
+    // thing from reporting one that is off.
+    const led   = S ? v.getUint8(o + 6) : undefined;
+    const upMs  = v.getUint32(o + 6 + S, true);
 
     // Uptime going backwards is the only reliable sign the board reset - it comes back and
     // reconnects on its own and otherwise says nothing about having lost everything.
@@ -397,6 +411,7 @@ function onChunk(d, v) {
       if (r.gen < d.genN - 1) d.rows.delete(k);
     }
 
+    d.rptVer  = ver;
     d.node    = hexId(node);
     d.uptime  = up;
     d.lc      = lc;
@@ -414,22 +429,22 @@ function onChunk(d, v) {
     const candidate = Date.now() - upMs;
     d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
 
-    d.pwr = [v.getInt8(o + 11), v.getInt8(o + 12), v.getInt8(o + 13)];
+    d.pwr = [v.getInt8(o + 10 + S), v.getInt8(o + 11 + S), v.getInt8(o + 12 + S)];
 
     const prev = d.diag;
     d.diag = {
-      rst:     RST_NAMES[v.getUint8(o + 14)] ?? 'unknown',
-      heap:    v.getUint32(o + 15, true),
-      heapMin: v.getUint32(o + 19, true),
-      frames:  v.getUint32(o + 23, true),
-      ours:    v.getUint32(o + 27, true),
-      coex:    v.getUint32(o + 31, true),
+      rst:     RST_NAMES[v.getUint8(o + 13 + S)] ?? 'unknown',
+      heap:    v.getUint32(o + 14 + S, true),
+      heapMin: v.getUint32(o + 18 + S, true),
+      frames:  v.getUint32(o + 22 + S, true),
+      ours:    v.getUint32(o + 26 + S, true),
+      coex:    v.getUint32(o + 30 + S, true),
     };
     if (!prev || prev.rst !== d.diag.rst) {
       logMsg(`${d.name}: last reset was ${d.diag.rst}`, /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
     }
 
-    o += 36;   // status fields; tx records follow
+    o += 35 + S;   // status fields; tx records follow
     d.tx = new Map();
     for (let c = 0; c < 3; c++, o += 16) {
       d.tx.set(CH_NAMES[c], {
@@ -1806,7 +1821,8 @@ function buildCard(d) {
   R.led = document.createElement('button');
   R.led.title = 'The board’s LED (GPIO15): cycles off, on, 2Hz blink. Off at boot and never ' +
                 'remembered - a power cycle always puts it out. Costs no airtime and breaks ' +
-                'nothing, so the board’s button deliberately leaves it alone.';
+                'nothing, so the board’s button deliberately leaves it alone. Boards on the ' +
+                'older v4 report have no LED control at all - reflash to get it.';
   // Cycles, but sends the state it is cycling to rather than a "next" byte - see CMD_LED_*.
   // A board whose state has not arrived yet starts the cycle at "on", which is what an
   // unanswered press most likely meant.
@@ -1990,7 +2006,11 @@ function updateCard(d) {
                     : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on';
   R.txm.className = d.txMute ? 'on' : '';
 
-  R.led.textContent = LED_NAMES[d.led] ?? 'led ?';
+  // A v4 board has no LED to command, so the button says so rather than offering a press the
+  // firmware would ignore. Nothing else on the row does this, because nothing else is missing
+  // from v4 - and once every board is reflashed this condition is simply never true.
+  R.led.disabled = d.rptVer !== undefined && d.rptVer < 5;
+  R.led.textContent = R.led.disabled ? 'led n/a' : (LED_NAMES[d.led] ?? 'led ?');
   R.led.className = d.led ? 'on' : '';
 
   // Requested on the left, what the controller actually settled on in brackets when the two
