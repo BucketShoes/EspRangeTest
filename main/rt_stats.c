@@ -548,7 +548,8 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
                                         | (rt_wifi_active() ? 4 : 0)
                                         | (g_conn_2m ? 8 : 0)
                                         | ((rt_conn_phy_actual() & 0x03) << 4)
-                                        | (g_tx_mute ? 0x40 : 0));
+                                        | (g_tx_mute ? 0x40 : 0)
+                                        | (g_led ? 0x80 : 0));
 
         n = put_u8(out, n, RT_RPT_VER);
         n = put_u24(out, n, rt_node_id());
@@ -638,10 +639,11 @@ void rt_report(void)
     // Everything that matters, every report. A one-off startup banner is invisible to anyone
     // who was not watching at the moment it scrolled past - and the moment worth watching is
     // always the one after something went wrong, by which time the banner is long gone.
-    printf("\n== node %06lX  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s  rst=%s ==\n",
+    printf("\n== node %06lX  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s  led=%s  rst=%s ==\n",
            (unsigned long)rt_node_id(),
            (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
-           rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int", rt_reset_reason());
+           rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int",
+           g_led ? "on" : "off", rt_reset_reason());
     // Asked-for versus achieved. They differ whenever the radio quantised the request, which
     // is worth seeing rather than hiding behind the number that was typed.
     printf("  pwr: ");

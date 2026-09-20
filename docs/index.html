@@ -171,6 +171,13 @@ const CMD_ANT_INT = 0x82, CMD_ANT_EXT = 0x83;
 // Must match RT_CMD_TX_* in main/rt.h.
 const CMD_TX_UNMUTE = 0x86, CMD_TX_MUTE = 0x87;
 
+// The board's user LED (GPIO15), as a plain on/off - for finding a board in long grass or
+// telling two identical ones apart. Off at boot and never remembered, and "off" leaves the pin
+// floating rather than driven, so a power cycle always puts it out. Nothing else depends on
+// it: no radio, no airtime, not a control path. Must match RT_CMD_LED_* in main/rt.h, and the
+// polarity (which level lights it) lives in one define in the firmware, not here.
+const CMD_LED_OFF = 0x89, CMD_LED_ON = 0x8A;
+
 // Control-link PHY. Coded S=8 is the default and the long-range one; 2M is the cheap one, for
 // when the phone is next to the board and the report is just overhead on someone else's test.
 // Nothing in between - 1M and S=2 are compromises for a decision that does not need one.
@@ -391,6 +398,7 @@ function onChunk(d, v) {
     d.conn2m  = state & 8 ? 1 : 0;
     d.connPhy = (state >> 4) & 3;
     d.txMute  = state & 0x40 ? 1 : 0;
+    d.led     = state & 0x80 ? 1 : 0;
 
     d.boardMs = upMs;
     // offset converts board time to browser time, as a running *minimum*: transit delay is
@@ -1787,6 +1795,13 @@ function buildCard(d) {
   R.txm.onclick = () => cmd(d, d.txMute ? CMD_TX_UNMUTE : CMD_TX_MUTE);
   modes.appendChild(R.txm);
 
+  R.led = document.createElement('button');
+  R.led.title = 'The board’s LED (GPIO15). Off at boot and never remembered - a power cycle ' +
+                'always puts it out. Costs no airtime and breaks nothing, so the board’s ' +
+                'button deliberately leaves it alone.';
+  R.led.onclick = () => cmd(d, d.led ? CMD_LED_OFF : CMD_LED_ON);
+  modes.appendChild(R.led);
+
   // Control-link PHY. Two uses, opposite answers: coded S=8 when the phone link itself is what
   // is being range-tested, 2M when the phone is in a pocket next to the board and the report is
   // pure overhead stolen from whatever channel is under test. 2M is ~16x cheaper per byte.
@@ -1963,6 +1978,9 @@ function updateCard(d) {
   R.txm.textContent = d.txMute === undefined ? 'tx ?'
                     : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on';
   R.txm.className = d.txMute ? 'on' : '';
+
+  R.led.textContent = d.led === undefined ? 'led ?' : d.led ? 'led on' : 'led off';
+  R.led.className = d.led ? 'on' : '';
 
   // Requested on the left, what the controller actually settled on in brackets when the two
   // disagree - a phone that declined 2M reads "2M (1M)" rather than silently looking applied.

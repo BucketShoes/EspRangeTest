@@ -58,6 +58,20 @@ static const char *TAG = "rt";
 #define ANT_SETTLE_MS   100   // the vendor example waits before using the switch; so do we
 #define ANT_PWR_WAIT_MS 3000  // backstop on waiting for BLE to report its power
 
+// The XIAO's user LED on GPIO15.
+//
+// **This is the polarity knob.** LED_ON_LEVEL is the level driven while the LED is asked to be
+// on: 1 assumes the pin sources into the LED with ground on the other side. If commanding it
+// on turns the LED off, flip this one line to 0 and nothing else changes - everything else
+// here, firmware and web UI alike, talks in on/off and never in levels.
+//
+// GPIO15 is a strapping pin (the C6's are 8, 9 and 15), which is part of why the LED defaults
+// to floating rather than being configured at boot: the pin is left exactly as reset found it
+// until someone asks for the LED. "Off" returns it to that same high-Z state rather than
+// driving the inactive level, so off is the boot condition itself and not a lookalike.
+#define LED_GPIO      15
+#define LED_ON_LEVEL  1
+
 // The button has exactly two gestures, and no third is allowed to appear.
 //
 // Tap = next mode, hold = restore. That is it. HOLD_MS is not a window you have to release
@@ -368,6 +382,43 @@ void rt_set_antenna(bool external)
     // A different antenna is a different link, and the numbers on either side of this are not
     // comparable - but saying so is the operator's job now, with the reset button, not
     // something to do to their table on their behalf. See RT_CMD_STATS_RESET in rt.h.
+}
+
+// ---- User LED ----------------------------------------------------------------------------
+//
+// Off at boot, and off means floating rather than driven low - see LED_GPIO at the top of this
+// file for that, and for the single define to flip if the polarity turns out to be inverted.
+//
+// Unlike the antenna there is no readiness flag and no ordering constraint: GPIO15 goes
+// nowhere near the RF path, so the pin can be configured the moment it is first asked for and
+// never needs touching before that.
+volatile bool g_led;
+
+static void apply_led(void)
+{
+    const gpio_config_t io = {
+        .pin_bit_mask = 1ULL << LED_GPIO,
+        // Driven only while lit. Turning it off releases the pin instead of driving the
+        // inactive level, so off is byte-for-byte the state the board powered up in.
+        .mode         = g_led ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    if (g_led) {
+        gpio_set_level(LED_GPIO, LED_ON_LEVEL);
+    }
+    ESP_LOGI(TAG, "led: %s", g_led ? "on" : "off (floating)");
+}
+
+void rt_set_led(bool on)
+{
+    if (on == g_led) {
+        return;
+    }
+    g_led = on;
+    apply_led();
 }
 
 static void antenna_switch_on(void)

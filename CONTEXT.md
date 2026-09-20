@@ -183,10 +183,14 @@ supply things this project pins anyway (4MB flash, custom partition table), so t
 cosmetic, but the env comments about "WROOM-1, PCB antenna" and "MINI-1, different antenna
 design" are now wrong.
 
-- **GPIO14 is the RF antenna switch. Do not configure it, read it, or drive it.** It floats
-  with an external pulldown, which selects the onboard chip antenna, and there is no IPEX
-  connected. Touching it would silently change the antenna mid-test. Only GPIO9 (BOOT) is
-  configured anywhere in this firmware; keep it that way.
+- **GPIO14 is the RF antenna switch port select.** It has an external pulldown (R24), which
+  selects the onboard chip antenna, and there is no IPEX connected on these boards. It is now
+  driven explicitly rather than left to the pulldown, so the selection is a known state rather
+  than an assumed one — but selecting external with nothing fitted still takes the board off
+  the air, which is why it boots internal every time and never remembers otherwise.
+- The pins this firmware touches are GPIO9 (BOOT button), GPIO3 (RF switch power), GPIO14
+  (port select) and GPIO15 (user LED, floating until asked for). Nothing else; keep it that
+  way.
 - The chip antenna is **worse than the IPEX**, and worse than the PCB antennas on the dev
   modules. So absolute distances from XIAO runs are not comparable with earlier DevKit runs.
   Comparisons *between channels within one run* still are, which is what matters.

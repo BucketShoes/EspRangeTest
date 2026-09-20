@@ -241,6 +241,24 @@ void rt_set_tx_mute(bool mute);
 // So nothing clears itself now. The operator says when a measurement starts.
 #define RT_CMD_STATS_RESET 0x88
 
+// ---- User LED ----------------------------------------------------------------------------
+//
+// The XIAO's LED on GPIO15, as a plain on/off - for finding a board in long grass, confirming
+// which of two identical boards you are holding, or marking a moment in a walk.
+//
+// Off at boot and never remembered, and off is *floating*, not driven: the pin is left as
+// reset found it until the LED is first asked for. GPIO15 is a strapping pin, so not driving
+// it is the quieter default, and it means an LED left on cannot survive a power cycle.
+//
+// Nothing else depends on this. It touches no radio, claims no airtime and is not a control
+// path, which is also why the button restore leaves it alone - see restore_control() in
+// main.c. Polarity lives in one define, LED_ON_LEVEL in main.c.
+#define RT_CMD_LED_OFF 0x89
+#define RT_CMD_LED_ON  0x8A
+
+extern volatile bool g_led;
+void rt_set_led(bool on);
+
 // ---- Transmit power ----------------------------------------------------------------------
 //
 // Raw dBm per channel, over each radio's real range, set at runtime.
@@ -392,7 +410,7 @@ void rt_report(void);
 //     u8  lc
 //     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
 //                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded),
-//                       bit6 tx_mute
+//                       bit6 tx_mute, bit7 led
 //     u32 up_ms         board clock when the whole snapshot was taken; every age below is
 //                       measured against it, so the page can put ages on the board's timebase
 //                       instead of on arrival times
