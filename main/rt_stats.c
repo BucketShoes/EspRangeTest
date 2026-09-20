@@ -294,10 +294,17 @@ static const char *lc_name(int lc)
 
 void rt_stats_reset(void)
 {
-    // Sequence numbers restart, so wipe what we have rather than let the restart read as a
-    // huge run of losses.
+    // s_tx_seq is deliberately left running. Everything else here is ours; that one is the
+    // number we stamp on the wire, and it is the *far end* that counts its losses from it.
+    // Restarting it made our seq jump backwards over there, where the sanity guard in rt_rx()
+    // throws the gap away - so pressing reset on this board quietly wiped a chunk of the other
+    // board's loss count. Same mistake as clearing the table on a power change, one hop away.
+    //
+    // A packet not heard is a packet lost, whatever the cause - contention, not being in rx
+    // when the tx happened, or genuinely out of range - so the far end should keep counting
+    // straight through this. Needing a higher sequence number to notice is an artefact of how
+    // loss is detected here, not a thing worth protecting.
     memset(s_peers, 0, sizeof(s_peers));
-    memset(s_tx_seq, 0, sizeof(s_tx_seq));
     memset(s_tx_count, 0, sizeof(s_tx_count));
     memset(s_tx_ok, 0, sizeof(s_tx_ok));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
