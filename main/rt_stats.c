@@ -447,7 +447,24 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
 // struct: the other end of this wire is a JavaScript DataView, and the only way to be certain
 // the two agree is for both to name every offset explicitly. See the format in rt.h.
 
+// Every age in a report is measured against one `now`, sampled when the report starts. But
+// packets keep arriving while it is being built - on other tasks, into these same rows - so a
+// row can be younger than the snapshot that is describing it, and unsigned subtraction turns
+// four milliseconds of that into 49 days. The serial report showed it as "4294967292ms ago".
+// The packed report was worse: it divides that by 100 and truncates to u16, which turned a
+// packet that had just landed into "2359s ago" - a plausible number, silently wrong, which is
+// the one kind of output this instrument must never produce.
+//
+// Clamping to zero is the right answer and not merely a safe one: a packet that beat the
+// report out of the door is not an error, and its age against this report's clock is zero.
+static uint32_t age_ms(uint32_t now, uint32_t last)
+{
+    const int32_t d = (int32_t)(now - last);
+    return d > 0 ? (uint32_t)d : 0;
+}
+
 static int put_u8(uint8_t *b, int n, uint8_t v)
+
 {
     b[n] = v;
     return n + 1;
@@ -573,7 +590,8 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
             n = put_u32(out, n, s_tx_ok[c]);
             n = put_u32(out, n, s_tx_fail[c]);
             n = put_u16(out, n, s_rx_offmode[c]);
-            n = put_u16(out, n, s_rx_offmode[c] ? (now - s_rx_offmode_ms[c]) / 1000 : 0);
+            n = put_u16(out, n, s_rx_offmode[c]
+                                ? age_ms(now, s_rx_offmode_ms[c]) / 1000 : 0);
         }
         // The page decodes this block at fixed offsets, so a field added here without updating
         // RT_RPT_STATUS - and the matching reader - would silently shift every row that
@@ -611,7 +629,12 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         n = put_u8(out, n, (uint8_t)tpdr);
         n = put_u32(out, n, l->rx);
         n = put_u32(out, n, l->missed);
-        n = put_u16(out, n, (now - l->last_ms + 50) / 100);
+        // u16 of 0.1s units runs out at 6553.5s. Truncating there would have wrapped a link
+        // silent for two hours back round to "fresh", so it saturates instead - the age stops
+        // being exact long before it stops being honest.
+        const uint32_t age_ds = (age_ms(now, l->last_ms) + 50) / 100;
+        n = put_u16(out, n, age_ds > 0xFFFF ? 0xFFFF : age_ds);
+
         n = put_u8(out, n, (uint8_t)snr);
         n = put_u8(out, n, l->lqi);
         n = put_u8(out, n, (uint8_t)l->peer_txdbm);
@@ -689,7 +712,7 @@ void rt_report(void)
             printf("  !! %s: %lu packets received while this mode says it is OFF"
                    " (most recent %lus ago)\n",
                    rt_chan_name[c], (unsigned long)s_rx_offmode[c],
-                   (unsigned long)((now - s_rx_offmode_ms[c]) / 1000));
+                   (unsigned long)(age_ms(now, s_rx_offmode_ms[c]) / 1000));
         }
     }
 
@@ -715,7 +738,7 @@ void rt_report(void)
                    (unsigned long)s_peers[i].node, rt_chan_name[c], l->rssi_last, mean,
                    l->rssi_min, l->rssi_max, wpdr, tpdr,
                    (unsigned long)l->rx, (unsigned long)l->missed,
-                   (unsigned long)(now - l->last_ms));
+                   (unsigned long)age_ms(now, l->last_ms));
             // txdbm - rssi. Independent of either end's power setting, so it is the figure to
             // compare against free-space loss for the distance, and the one that says whether
             // an antenna change actually did anything.
