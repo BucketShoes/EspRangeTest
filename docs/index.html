@@ -141,6 +141,10 @@
   For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
   and walk. Every packet gets pinned to where you were standing when it arrived, so bare
   track is ground where nothing got through.<br><br>
+  A board with a GNSS module (its TX to GPIO20) draws its own track, and every packet to or
+  from it is pinned to where <em>it</em> was instead. Connect to any board - the one with the
+  GNSS or one that heard it - and the track fills in from whatever each has seen; a board that
+  was out of reach sends what it stockpiled once you reconnect.<br><br>
   Needs Chrome on Android or desktop. Web Bluetooth won't work from a
   <code>file://</code> page — use the GitHub Pages URL, or <code>python3 -m http.server</code>
   and open <code>http://localhost:8000</code>.
@@ -197,6 +201,12 @@ const CMD_PHY_CODED = 0x84, CMD_PHY_2M = 0x85;
 // mode, LR and antenna all used to, and wiping board A's record of what it heard from board B
 // because you moved A's power slider was the wrong way round. Must match RT_CMD_STATS_RESET.
 const CMD_STATS_RESET = 0x88;
+
+// "Send me your packet log from here": [0x8C, u32 session, u32 block, u16 offset]. Only ever sent
+// to a v6 board, which then streams its log alongside the report until the link drops. Must
+// match RT_CMD_LOG_FROM in main/rt.h; the log format is documented there too.
+const CMD_LOG_FROM = 0x8C;
+const LOG_HDR = 12;
 
 // Transmit power in dBm, per radio. Two-byte write: [0xB0 + channel, dbm]; channel 3 sets all
 // three at once. Must match RT_CMD_PWR_SET and s_range[] in the firmware. Ranges are the
@@ -319,7 +329,10 @@ async function connect(dev) {
   try { cmd = await svc.getCharacteristic(CMD); } catch (e) { /* older firmware */ }
 
   const d = devs.get(dev.name) || { rows: new Map() };
-  Object.assign(d, { name: dev.name, dev, cmd, live: true, userDisconnected: false, seen: Date.now() });
+  // logAsked: every connection has to ask for the log afresh - the board forgets the request
+  // when the link drops, and where this page is up to may have moved since.
+  Object.assign(d, { name: dev.name, dev, cmd, live: true, userDisconnected: false,
+                     seen: Date.now(), logAsked: false });
   devs.set(dev.name, d);
 
   tx.addEventListener('characteristicvaluechanged', ev => onNotify(d, ev.target.value));
@@ -384,6 +397,7 @@ function onNotify(d, view) {
   d.seen = Date.now();
   const t = view.getUint8(0);
   if (t === 0x01 || t === 0x02) return onChunk(d, view);
+  if (t === 0x03) return onLog(d, view);
   // Older firmware: CSV text, one line per notification.
   for (const line of new TextDecoder().decode(view).split('\n')) {
     if (line.trim()) onLine(d, line);
@@ -416,8 +430,13 @@ function onChunk(d, v) {
     //
     // This is the version byte doing the job it exists for. Without it the two layouts would
     // decode as each other and produce plausible nonsense rather than a named difference.
-    if (ver !== 4 && ver !== 5) {
-      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 and v5 - ` +
+    //
+    // v6 appends GNSS and packet-log status to the end of the status block and flags rows whose
+    // peer carries its position; nothing before the tail moves. Unlike v5, v6 boards also send a
+    // longer measurement packet once they have a fix, which a v4/v5 board cannot hear - so the
+    // page reads all three, but a mixed fleet is only whole while nobody has a fix.
+    if (ver < 4 || ver > 6) {
+      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v6 - ` +
              (ver < 4 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
@@ -436,8 +455,16 @@ function onChunk(d, v) {
 
     // Uptime going backwards is the only reliable sign the board reset - it comes back and
     // reconnects on its own and otherwise says nothing about having lost everything.
+    //
+    // Except that it is not reliable when the board was out of reach for longer than it had been
+    // up: a drone that browns out mid-flight and is reconnected ten minutes later is further
+    // along than it was. v6 carries the log session, which is new on every boot, so a v6 board
+    // is caught either way. Checked here, before the clock offset is touched, because a reboot
+    // missed is a clock offset that is wrong from then on.
     const up = Math.floor(upMs / 1000);
-    if (d.uptime !== undefined && up < d.uptime) {
+    const sess = ver >= 6 ? v.getUint32(o + 88, true) : undefined;
+    const newLife = sess !== undefined && d.logSt !== undefined && sess !== d.logSt.session;
+    if (d.uptime !== undefined && (up < d.uptime || newLife)) {
       logMsg(`${labelOf(d.name)}: REBOOTED after ${d.uptime}s` +
              (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
       d.rebootAt = Date.now();
@@ -503,6 +530,19 @@ function onChunk(d, v) {
         offmodeAge: v.getUint16(o + 14, true),
       });
     }
+
+    if (ver >= 6) {
+      const gb = v.getUint8(o);
+      d.gnss = { state: gb & 3, had: !!(gb & 4), sats: v.getUint8(o + 1),
+                 hdop: v.getUint8(o + 2), baud: v.getUint8(o + 3) * 1200 };
+      d.logSt = { session: v.getUint32(o + 4, true), oldest: v.getUint32(o + 8, true),
+                  newest: v.getUint32(o + 12, true), cap: v.getUint16(o + 16, true),
+                  bsize: v.getUint16(o + 18, true) };
+      o += 20;
+      // Once per connection, and only now: the request carries this page's cursor into the
+      // board's log, and the status just read is what says which log that is.
+      if (!d.logAsked) askLog(d);
+    }
   }
 
   // Rows fill whatever is left of the chunk, in both types.
@@ -510,10 +550,11 @@ function onChunk(d, v) {
   if (!d.rptOk) return;
   while (o + 23 <= v.byteLength) {
     const peer = hexId(u24(v, o));
-    const ch   = CH_NAMES[v.getUint8(o + 3)] ?? '?';
+    const cb   = v.getUint8(o + 3);                  // v6: bit7 = peer carries its position
+    const ch   = CH_NAMES[cb & 0x7f] ?? '?';
     const age  = v.getUint16(o + 18, true) * 100;   // 0.1 s units on the wire
     putRow(d, peer + '/' + ch, {
-      peer, ch,
+      peer, ch, geo: !!(cb & 0x80),
       rssi:   v.getInt8(o + 4),
       avg:    v.getInt8(o + 5),
       min:    v.getInt8(o + 6),
@@ -761,6 +802,8 @@ const SAMP_MAX = 150000;
 const samples = [];
 const series  = new Map();   // key -> {key, dev, peer, ch, n, has:{metric -> bool}}
 let seriesRev = 0;
+// Series drawn from a packet log rather than from the report - see noteSample().
+const geoSeries = new Set();
 
 function putRow(d, key, r) {
   noteSample(d, key, r, d.rows.get(key));
@@ -787,6 +830,14 @@ function noteSample(d, key, r, prev) {
   // Two boards can be connected at once and both can hear the same peer, so the series a mark
   // belongs to is which board heard it as well as which link it came in on.
   const skey = d.name + '/' + key;
+
+  // A link with a GNSS end is drawn from the board's packet log instead, one mark per packet at
+  // wherever the GNSS end was - not here, at wherever the phone was, once a report. Both at once
+  // would put every packet on the map twice, in two different places. Sticky, so a drone that
+  // loses its fix for a moment does not have its packets start landing on the phone.
+  if (r.geo || (d.gnss && d.gnss.had)) geoSeries.add(skey);
+  if (geoSeries.has(skey)) return;
+
   const t = d.offset + r.abs;
   const s = {
     t, t0: (t0 === null || t0 > t) ? t : t0,
@@ -798,23 +849,450 @@ function noteSample(d, key, r, prev) {
     pos: undefined, mpos: null, mprov: false,
   };
 
+  addSample(ensureSeries(skey, d.name, r.peer, r.ch), s);
+}
+
+function ensureSeries(skey, dev, peer, ch) {
   let S = series.get(skey);
   if (!S) {
-    S = { key: skey, dev: d.name, peer: r.peer, ch: r.ch, n: 0,
+    S = { key: skey, dev, peer, ch, n: 0,
           // rssi and the two pdr figures exist on every radio; the rest have to prove they
           // exist on this one before they clutter the menu with a column of dashes.
           has: { rssi: true, pdr: true, pdrall: true, hit: true,
-                 loss: false, snr: false, lqi: r.ch === '154' } };
+                 loss: false, snr: false, lqi: ch === '154' } };
     series.set(skey, S);
     seriesRev++;
   }
+  return S;
+}
+
+function addSample(S, s) {
   S.n++;
   if (s.loss !== undefined && !S.has.loss) { S.has.loss = true; seriesRev++; }
   if (s.snr !== -128 && !S.has.snr)        { S.has.snr  = true; seriesRev++; }
-
   samples.push(s);
   if (samples.length > SAMP_MAX) samples.splice(0, 20000);
   mapRedraw();
+}
+
+// ---- GNSS tracks ------------------------------------------------------------------------------
+//
+// A board with a GNSS module is a second thing moving about the map, independent of the phone -
+// typically a drone. Everything about where it was reaches this page by one of three routes, and
+// all three are merged into one track per board, so it makes no difference which board the phone
+// happens to be connected to:
+//
+//   - its own log, if connected to it: every fix it had, and the sequence counters at each one,
+//     which says exactly which fix every packet it sent was carrying;
+//   - any other board's log: every packet it heard from the GNSS board carried that board's fix;
+//   - interpolation, between packets somebody did hear, for the ones nobody did.
+//
+// Fixes are identified by their GNSS time, which is the same on every board, so three receivers
+// each hearing a third of the packets still produce one track through all of them, not three
+// tracks with shortcuts across each other's gaps.
+//
+// Each receiver's marks then sit on that shared track: a mark per packet heard, a miss per packet
+// not, each at the place that packet was sent from. A board with GNSS hearing boards without it
+// is the other way round - its marks sit where *it* was when each packet arrived.
+
+const gtr = new Map();   // node id -> G, see gOf()
+let gRev = 0;            // bumped whenever anything a position lookup could use changes
+const GNSS_COLS = ['#f59e0b', '#e879f9', '#22d3ee', '#fb923c'];
+// Average spacing of sequence numbers per channel, CH_ order - the transmit periods in the
+// firmware. Only used to spread a board's own misses back in time from the packet that revealed
+// them, when there is nothing better.
+const NOM_MS = [250, 500, 250];
+// Sequence numbers restart when a board does. A candidate this far away in time from what is
+// being looked up belongs to another boot of the same board, not to this packet.
+const SEQ_NEAR_MS = 300000;
+const DAY_MS = 86400000;
+
+function gOf(node) {
+  let G = gtr.get(node);
+  if (!G) {
+    G = { node,
+          byKey: new Map(),        // fix time (0.1 s) -> F
+          list: [], dirty: false,  // every fix, in time order once sorted
+          own: [],                 // fixes from its own log, by board time, for its own rx
+          iv: [[], [], []],        // per channel: {s0, F|null, t} - "from s0 on, it carried F"
+          ex: [[], [], []],        // per channel: {seq, F, t} - "someone heard seq carrying F"
+          live: null, col: null };
+    gtr.set(node, G);
+  }
+  return G;
+}
+
+// GNSS time of day to a full timestamp: whichever day puts it nearest the hint.
+function utcAbs(ds, hint) {
+  let t = Math.floor(hint / DAY_MS) * DAY_MS + ds * 100;
+  if (t - hint > DAY_MS / 2) t -= DAY_MS;
+  else if (hint - t > DAY_MS / 2) t += DAY_MS;
+  return t;
+}
+
+// f: {utc, lat, lon, alt, hdop, sats?}. bt is set when this is the board's own fix: the time,
+// on this page's clock, that the board had it - which is what its own receptions are placed by.
+function addFix(node, f, hint, bt) {
+  const G = gOf(node);
+  const tabs = utcAbs(f.utc, hint);
+  const key = Math.round(tabs / 100);
+  let F = G.byKey.get(key);
+  if (!F) {
+    const p = project(f.lat, f.lon);
+    F = { key, tabs, lat: f.lat, lon: f.lon, alt: f.alt, hdop: f.hdop, sats: f.sats,
+          x: p.x, y: p.y, bt: undefined };
+    G.byKey.set(key, F);
+    const last = G.list[G.list.length - 1];
+    G.list.push(F);
+    if (last && last.tabs > F.tabs) G.dirty = true;
+    if (!G.live || F.tabs > G.live.tabs) G.live = F;
+    gRev++;
+    if (!view.seeded && !geo.fixes.length) { view.cx = F.x; view.cy = F.y; view.seeded = true; }
+    mapRedraw();
+  }
+  if (f.sats !== undefined && F.sats === undefined) F.sats = f.sats;
+  if (bt !== undefined && F.bt === undefined) {
+    F.bt = bt;
+    sortedPut(G.own, F, 'bt');
+    gRev++;
+  }
+  return F;
+}
+
+// First index whose [k] is >= v.
+function lowerBound(a, v, k) {
+  let lo = 0, hi = a.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m][k] < v) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+// Nearly always an append - logs arrive in order, apart from backfill.
+function sortedPut(a, e, k) {
+  if (!a.length || a[a.length - 1][k] <= e[k]) a.push(e);
+  else a.splice(lowerBound(a, e[k] + 1e-9, k), 0, e);
+}
+
+const near = (t, h) => Math.abs(t - h) < SEQ_NEAR_MS;
+
+// The sender's own record: from sequence number s0 on this channel, packets carried F (or no
+// position at all, for F = null). A later record for the same s0 wins.
+function ivPut(G, ch, s0, F, t) {
+  const a = G.iv[ch];
+  const i = lowerBound(a, s0, 's0');
+  if (a[i] && a[i].s0 === s0 && near(a[i].t, t)) {
+    if (t >= a[i].t) { a[i].F = F; a[i].t = t; gRev++; }
+    return;
+  }
+  a.splice(i, 0, { s0, F, t });
+  gRev++;
+}
+
+function exPut(G, ch, seq, F, t) {
+  const a = G.ex[ch];
+  for (let i = lowerBound(a, seq, 'seq'); i < a.length && a[i].seq === seq; i++) {
+    if (near(a[i].t, t)) return;   // another receiver heard the same packet
+  }
+  sortedPut(a, { seq, F, t }, 'seq');
+  gRev++;
+}
+
+const posOf = (F, prov) => ({ x: F.x, y: F.y, alt: F.alt, prov });
+
+// Where the GNSS board `node` was when it sent sequence number `seq` on channel `ch`, around
+// page time tH. {x, y, alt, prov} - prov meaning better information could still arrive - or null
+// if nothing is known yet, or false if it is known that the packet carried no position.
+function seqPos(node, ch, seq, tH) {
+  const G = gtr.get(node);
+  if (!G) return null;
+  const ex = G.ex[ch];
+  const i = lowerBound(ex, seq, 'seq');
+
+  // Somebody heard exactly this packet, so it said where it was.
+  for (let k = i; k < ex.length && ex[k].seq === seq; k++) {
+    if (near(ex[k].t, tH)) return posOf(ex[k].F, false);
+  }
+
+  // The nearest packets either side that somebody did hear.
+  let lo = null, hi = null;
+  for (let k = i - 1; k >= 0 && k >= i - 8; k--) if (near(ex[k].t, tH)) { lo = ex[k]; break; }
+  for (let k = i; k < ex.length && k < i + 8; k++) {
+    if (ex[k].seq > seq && near(ex[k].t, tH)) { hi = ex[k]; break; }
+  }
+
+  // The sender's own log says what it was carrying from which sequence number.
+  const iv = G.iv[ch];
+  const j = lowerBound(iv, seq + 1, 's0') - 1;
+  if (j >= 0 && near(iv[j].t, tH)) {
+    const nx = iv[j + 1], F = iv[j].F;
+    if (nx && near(nx.t, tH)) return F ? posOf(F, false) : false;
+    if (!nx && seq - iv[j].s0 < 40) {
+      // The newest record, with nothing yet to say where it ends - unless a later packet was
+      // heard carrying this same fix, which closes it at least that far.
+      if (F && hi && hi.F === F) return posOf(F, false);
+      return F ? posOf(F, true) : false;
+    }
+  }
+
+  // Between two packets that somebody did hear.
+  if (lo && hi && hi.seq - lo.seq <= 80) {
+    // Same fix either side: it carried that one in between too, since a board's fix only moves
+    // forward. So that is not a guess.
+    if (lo.F === hi.F) return posOf(lo.F, false);
+    const u = (seq - lo.seq) / (hi.seq - lo.seq);
+    return { x: lo.F.x + (hi.F.x - lo.F.x) * u, y: lo.F.y + (hi.F.y - lo.F.y) * u,
+             alt: Math.round(lo.F.alt + (hi.F.alt - lo.F.alt) * u), prov: true };
+  }
+  if (lo && seq - lo.seq <= 8) return posOf(lo.F, true);
+  if (hi && hi.seq - seq <= 8) return posOf(hi.F, true);
+  return null;
+}
+
+// Where the GNSS board `node` was at page time t, from its own fixes. For its own receptions.
+function timePos(node, t) {
+  const G = gtr.get(node);
+  const A = G ? G.own : null;
+  if (!A || !A.length) return null;
+  const a0 = A[0], aN = A[A.length - 1];
+  if (t < a0.bt) return a0.bt - t < 1500 ? posOf(a0, false) : null;
+  if (t >= aN.bt) return t - aN.bt < 2000 ? posOf(aN, true) : null;
+  const i = lowerBound(A, t + 1e-9, 'bt');
+  const a = A[i - 1], b = A[i];
+  // Fixes come once a second. A wider bracket is a gap - lost fix, or a block not here yet.
+  if (b.bt - a.bt > 5000) return null;
+  const u = (t - a.bt) / (b.bt - a.bt);
+  return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u,
+           alt: Math.round(a.alt + (b.alt - a.alt) * u), prov: false };
+}
+
+// Position a log-drawn sample, and its misses. Called again, a second at a time at most, while
+// anything about it is provisional - so a miss nobody could place becomes placed the moment
+// another receiver's log, or the sender's own, says where that packet was sent from.
+let gResolvedRev = -1, gResolvedAt = 0, gTimer = 0;
+
+function resolveG(s) {
+  s.grev = gRev;
+  const g = s.g;
+  let done = true;
+  if (g.mode === 'time') {
+    const p = timePos(g.node, s.t);
+    s.pos = p || undefined;
+    if (p) s.alt = p.alt;
+    if (!p || p.prov) done = false;
+  }
+  if (s.miss) {
+    // Up to 40 drawn, spread evenly over the gap when it is bigger than that.
+    const n = Math.min(s.miss, 40);
+    s.mpos = [];
+    for (let k = 1; k <= n; k++) {
+      const j = Math.round(k * (s.miss + 1) / (n + 1));   // 1 .. miss
+      const q = g.mode === 'seq'
+        ? seqPos(g.node, g.ch, (g.seq - (s.miss + 1) + j) >>> 0, s.t)
+        : timePos(g.node, s.t - (s.miss + 1 - j) * NOM_MS[g.ch]);
+      if (q === false) continue;             // it carried no position; nothing to draw
+      if (!q || q.prov) done = false;
+      if (q) s.mpos.push(q);
+    }
+  }
+  s.gdone = done;
+}
+
+function newestG() {
+  let best = null;
+  for (const G of gtr.values()) if (G.live && (!best || G.live.tabs > best.tabs)) best = G.live;
+  return best;
+}
+
+// ---- packet logs --------------------------------------------------------------------------
+//
+// Format in main/rt.h. Each board's log arrives as blocks, possibly out of order - the newest
+// first so the live picture is never waiting on a download, then the backlog behind it - and
+// possibly more than once after a reconnect. A block stands alone, so none of that matters:
+// bytes are kept per block by offset, anything already had is dropped, and records are decoded
+// as soon as they are complete.
+
+const LOG_REC = { 0x01: 3, 0x02: 29, 0x03: 14, 0x04: 15, 0x05: 18 };
+
+// The lowest block not yet complete - where to ask the board to start from. Complete blocks at
+// the bottom are forgotten as the cursor passes them, and so is anything the board no longer
+// holds, which it says in every report.
+function logCursor(L, oldest) {
+  let c = Math.max(L.floor, oldest ?? 0);
+  for (const k of L.blocks.keys()) if (k < c) L.blocks.delete(k);
+  while (L.blocks.get(c)?.closed) { L.blocks.delete(c); c++; }
+  L.floor = c;
+  const b = L.blocks.get(c);
+  return { block: c, off: b ? b.have : 0 };
+}
+
+function askLog(d) {
+  const st = d.logSt;
+  if (!d.cmd || !st || !st.cap) return;
+  d.logAsked = true;
+  // A page that has never seen this board, or has only seen an earlier life of it, sends session
+  // 0 - which the board answers with everything it has.
+  let session = 0, block = 0, off = 0;
+  if (d.log && d.log.session === st.session) {
+    session = st.session;
+    ({ block, off } = logCursor(d.log, st.oldest));
+  }
+  const b = new Uint8Array(11), w = new DataView(b.buffer);
+  b[0] = CMD_LOG_FROM;
+  w.setUint32(1, session, true);
+  w.setUint32(5, block, true);
+  w.setUint16(9, off, true);
+  d.cmd.writeValue(b).catch(e => {
+    d.logAsked = false;   // the next report tries again
+    fail(`${labelOf(d.name)}: log request failed: ${e.message}`);
+  });
+}
+
+function onLog(d, v) {
+  if (v.byteLength < LOG_HDR) return;
+  const flags = v.getUint8(1), session = v.getUint32(2, true);
+  const block = v.getUint32(6, true), off = v.getUint16(10, true);
+
+  let L = d.log;
+  if (!L || L.session !== session) {
+    // A new board, or a new boot of this one. What was drawn from the last one stays drawn.
+    L = d.log = { session, floor: 0, blocks: new Map(), bytes: 0 };
+  }
+  if (block < L.floor) return;
+  let b = L.blocks.get(block);
+  if (!b) { b = { buf: null, have: 0, closed: false, p: null }; L.blocks.set(block, b); }
+  if (b.closed) return;
+
+  const n = v.byteLength - LOG_HDR;
+  if (off > b.have) return;   // a hole; the next request after a reconnect fills it in order
+  const skip = b.have - off;
+  if (n > skip) {
+    const need = off + n;
+    if (!b.buf || b.buf.length < need) {
+      const nb = new Uint8Array(Math.max(need, d.logSt?.bsize || 1024));
+      if (b.buf) nb.set(b.buf.subarray(0, b.have));
+      b.buf = nb;
+    }
+    b.buf.set(new Uint8Array(v.buffer, v.byteOffset + LOG_HDR + skip, n - skip), b.have);
+    b.have = need;
+    L.bytes += n - skip;
+    parseBlock(d, block, b);
+  }
+  if (flags & 1) { b.closed = true; b.buf = null; b.p = null; }
+}
+
+// Board time to page time. Undefined until a report has taught us the offset - and the log is
+// only ever asked for after one has.
+const b2t = (d, bt) => d.offset === undefined ? undefined : d.offset + bt;
+
+function parseBlock(d, bn, b) {
+  const u = b.buf, have = b.have;
+  const dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
+  if (!b.p) {
+    if (have < 4) return;
+    b.p = { pos: 4, clk: dv.getUint32(0, true), refs: [], nf: new Map() };
+  }
+  const P = b.p;
+  const me = idOf(d.name);
+
+  while (P.pos < have) {
+    const o = P.pos, t = u[o];
+    const len = t >= 0x80 ? 5 : LOG_REC[t];
+    if (!len) {
+      logMsg(`${labelOf(d.name)}: log block ${bn} has an unknown record 0x` +
+             `${t.toString(16)} - rest of that block skipped`, true);
+      P.pos = Infinity;
+      return;
+    }
+    if (o + len > have) return;   // the rest of it is still on its way
+    P.pos += len;
+
+    if (t === 0x01) {
+      P.clk += dv.getUint16(o + 1, true);
+    } else if (t === 0x02 || t === 0x03) {
+      P.clk += u[o + 1] * 4;
+      const tB = b2t(d, P.clk);
+      if (tB === undefined) continue;
+      const G = gOf(me);
+      let F = null, so = o + 2;
+      if (t === 0x02) {
+        F = addFix(me, { lat: dv.getInt32(o + 2, true) / 1e7, lon: dv.getInt32(o + 6, true) / 1e7,
+                         alt: dv.getInt16(o + 10, true), utc: u24(dv, o + 12),
+                         hdop: u[o + 15], sats: u[o + 16] }, tB, tB);
+        so = o + 17;
+      }
+      for (let c = 0; c < 3; c++) ivPut(G, c, dv.getUint32(so + c * 4, true), F, tB);
+    } else if (t === 0x05) {
+      const node = hexId(u24(dv, o + 1));
+      const tB = b2t(d, P.clk);
+      if (tB === undefined) continue;
+      P.nf.set(node, addFix(node, { lat: dv.getInt32(o + 4, true) / 1e7,
+                                    lon: dv.getInt32(o + 8, true) / 1e7,
+                                    alt: dv.getInt16(o + 12, true), utc: u24(dv, o + 14),
+                                    hdop: u[o + 17] }, tB));
+    } else if (t === 0x04) {
+      P.clk += u[o + 1] * 4;
+      const R = { node: hexId(u24(dv, o + 2)), ch: u[o + 5] & 0x7f,
+                  ptx: dv.getInt8(o + 6), seq: dv.getUint32(o + 7, true) };
+      P.refs.push(R);
+      logRx(d, R, R.seq, dv.getUint16(o + 11, true), dv.getInt8(o + 13), u[o + 14],
+            (u[o + 5] & 0x80) ? P.nf.get(R.node) : null, P.clk);
+    } else {
+      P.clk += u[o + 1] * 4;
+      const R = P.refs[t & 0x3f];
+      if (!R) {
+        logMsg(`${labelOf(d.name)}: log block ${bn} refers to a link it never named`, true);
+        P.pos = Infinity;
+        return;
+      }
+      const gap = u[o + 2];
+      R.seq = (R.seq + gap) >>> 0;
+      logRx(d, R, R.seq, gap, dv.getInt8(o + 3), u[o + 4],
+            (t & 0x40) ? P.nf.get(R.node) : null, P.clk);
+    }
+  }
+}
+
+// One packet a board heard. pfix is the sender's position as that packet carried it, or null if
+// it carried none - in which case the board logged it because it has GNSS itself.
+function logRx(d, R, seq, gap, rssi, q, pfix, bt) {
+  const t = b2t(d, bt);
+  if (t === undefined) return;
+  const ch = CH_NAMES[R.ch] ?? '?';
+  const skey = d.name + '/' + R.node + '/' + ch;
+  geoSeries.add(skey);
+  const S = ensureSeries(skey, d.name, R.node, ch);
+
+  let g, pos, alt;
+  if (pfix) {
+    exPut(gOf(R.node), R.ch, seq, pfix, t);
+    g = { mode: 'seq', node: R.node, ch: R.ch, seq };
+    pos = posOf(pfix, false);
+    alt = pfix.alt;
+  } else {
+    g = { mode: 'time', node: idOf(d.name), ch: R.ch, seq };
+  }
+  const miss = gap > 1 ? gap - 1 : 0;
+
+  // pdr, from this page's own view of the link: the last 40 sequence numbers, and everything.
+  // In arrival order, which during a backfill is not quite sequence order - near enough for a
+  // ray length.
+  const w = (S.gw ||= []);
+  for (let k = 0; k < Math.min(miss, 40); k++) w.push(0);
+  w.push(1);
+  if (w.length > 40) w.splice(0, w.length - 40);
+  S.gh = (S.gh || 0) + 1;
+  S.gm = (S.gm || 0) + miss;
+
+  addSample(S, {
+    t, t0: t, key: skey, dev: d.name, peer: R.node, ch,
+    rssi, ptx: R.ptx, loss: R.ptx - rssi,
+    snr: R.ch === 0 ? (q << 24 >> 24) : -128,
+    lqi: R.ch === 2 ? q : 0,
+    pdr: Math.round(100 * w.reduce((a, x) => a + x, 0) / w.length),
+    pdrall: Math.round(100 * S.gh / (S.gh + S.gm)),
+    hits: 1, miss,
+    pos, mpos: null, mprov: false, alt,
+    g, grev: -1, gdone: false,
+  });
 }
 
 // ---- what gets drawn --------------------------------------------------------------------------
@@ -1288,6 +1766,7 @@ function niceStep(target) {
 }
 const fmtM = m => m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 2) + ' km'
                             : (m >= 100 ? m.toFixed(0) : m.toFixed(1)) + ' m';
+const fmtAge = s => s < 3600 ? Math.floor(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h';
 
 function mapRedraw() {
   if (mapQueued) return;
@@ -1317,7 +1796,8 @@ function drawMap() {
   g.font = '11px ui-sans-serif,system-ui,sans-serif';
   g.textBaseline = 'top';
 
-  if (!geo.fixes.length) {
+  const anyG = [...gtr.values()].some(G => G.list.length);
+  if (!geo.fixes.length && !anyG) {
     g.fillStyle = '#6b7488';
     g.textAlign = 'center';
     g.fillText(geo.watch === null ? 'GPS off - tap GPS to start the track'
@@ -1325,7 +1805,9 @@ function drawMap() {
     g.textAlign = 'left';
     return;
   }
-  if (view.follow && geo.live) { view.cx = geo.live.x; view.cy = geo.live.y; }
+  // Follow the phone - or, with the phone's GPS off, whichever GNSS board moved last.
+  const lead = geo.live || newestG();
+  if (view.follow && lead) { view.cx = lead.x; view.cy = lead.y; }
 
   const act = activeSources();
   const rank = new Map(act.map((S, i) => [S.key, i]));
@@ -1360,6 +1842,30 @@ function drawMap() {
   }
   g.stroke();
 
+  // GNSS tracks, one per board, through every fix anybody knows about - see "GNSS tracks".
+  // A shade heavier than the phone's so the two are not mistaken for each other where they
+  // overlap, which with the drone overhead is most of the time.
+  let gi = 0;
+  g.lineWidth = 1.5 / dpr;
+  for (const G of gtr.values()) {
+    if (G.dirty) { G.list.sort((a, b) => a.tabs - b.tabs); G.dirty = false; }
+    G.col = GNSS_COLS[gi++ % GNSS_COLS.length];
+    if (G.list.length < 2) continue;
+    g.strokeStyle = G.col;
+    g.globalAlpha = 0.6;
+    g.beginPath();
+    G.list.forEach((F, i) => i ? g.lineTo(sxOf(F.x), syOf(F.y)) : g.moveTo(sxOf(F.x), syOf(F.y)));
+    g.stroke();
+    g.globalAlpha = 1;
+  }
+  g.lineWidth = 1 / dpr;
+
+  // Log-drawn samples are re-placed a second at a time at most while any of them is still
+  // provisional - a whole backfill arriving would otherwise redo every one of them per record.
+  const tnow = performance.now();
+  const redo = gRev !== gResolvedRev && tnow - gResolvedAt > 1000;
+  if (redo) { gResolvedRev = gRev; gResolvedAt = tnow; }
+
   // Marks. One path per radio, so a walk's worth of rays is a handful of strokes rather than
   // tens of thousands.
   const pMiss = new Path2D();
@@ -1373,7 +1879,11 @@ function drawMap() {
   let drawn = 0;
   for (let i = 0; i < samples.length; i++) {
     const s = samples[i];
-    if (!s.pos || s.pos.prov) s.pos = posAt(s.t);
+    if (s.g) {
+      if (s.grev < 0 || (!s.gdone && redo)) resolveG(s);
+    } else if (!s.pos || s.pos.prov) {
+      s.pos = posAt(s.t);
+    }
     if (!s.pos) continue;
     const px = sxOf(s.pos.x), py = syOf(s.pos.y);
     if (px < -pad || px > W + pad || py < -pad || py > H + pad) continue;
@@ -1391,8 +1901,9 @@ function drawMap() {
 
     if (showMiss && s.miss) {
       // Positions resolved once and kept, since re-interpolating every lost packet on every
-      // frame is the one thing here that would actually cost something.
-      if (!s.mpos || s.mprov) {
+      // frame is the one thing here that would actually cost something. Log-drawn samples
+      // have theirs from resolveG().
+      if (!s.g && (!s.mpos || s.mprov)) {
         const n = Math.min(s.miss, 40);
         s.mpos = []; s.mprov = false;
         for (let k = 1; k <= n; k++) {
@@ -1402,7 +1913,7 @@ function drawMap() {
           s.mpos.push(q);
         }
       }
-      for (const q of s.mpos) {
+      for (const q of s.mpos || []) {
         const qx = sxOf(q.x), qy = syOf(q.y);
         pMiss.moveTo(qx, qy - 2.5); pMiss.lineTo(qx, qy + 2.5);
       }
@@ -1432,6 +1943,24 @@ function drawMap() {
     }
     g.fillStyle = '#4ade80';
     g.beginPath(); g.arc(lx, ly, 3.5, 0, Math.PI * 2); g.fill();
+  }
+
+  // Each GNSS board's newest known position: a diamond, so it cannot be taken for the phone's
+  // dot, named, with its altitude - the one thing the flat map cannot show.
+  for (const G of gtr.values()) {
+    const F = G.live;
+    if (!F) continue;
+    const px = sxOf(F.x), py = syOf(F.y);
+    g.fillStyle = G.col;
+    g.beginPath();
+    g.moveTo(px, py - 5); g.lineTo(px + 5, py); g.lineTo(px, py + 5); g.lineTo(px - 5, py);
+    g.closePath();
+    g.fill();
+    g.fillText(`${labelOf(G.node)} ${F.alt}m`, px + 8, py - 6);
+  }
+  // Finish placing whatever is still provisional, even if nothing else arrives to cause a redraw.
+  if (gRev !== gResolvedRev && !gTimer) {
+    gTimer = setTimeout(() => { gTimer = 0; mapRedraw(); }, 1100);
   }
 
   // ---- overlay: scale bar, north, legend --------------------------------------------------
@@ -1617,7 +2146,8 @@ cv.addEventListener('wheel', e => {
 }, { passive: false });
 
 function fitMap() {
-  const pts = geo.base ? [...geo.fixes, geo.base] : geo.fixes;
+  const pts = geo.base ? [...geo.fixes, geo.base] : [...geo.fixes];
+  for (const G of gtr.values()) for (const F of G.list) pts.push(F);
   if (!pts.length || !sizeCanvas()) return;
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const p of pts) {
@@ -1682,6 +2212,19 @@ function paintMapStat() {
     bits.push('waiting for a fix');
   }
   if (geo.err) bits.push(`<b class="bad">${esc(geo.err)}</b>`);
+  // Each GNSS board: how high, how stale, and how far from you. Staleness is on GNSS time
+  // against this phone's clock, which is network time - both are UTC, so it is honest to a
+  // second or so without either board's clock being involved.
+  for (const G of gtr.values()) {
+    const F = G.live;
+    if (!F) continue;
+    const age = Math.max(0, (Date.now() - F.tabs) / 1000);
+    let b = `<b style="color:${G.col}">${esc(labelOf(G.node))}</b> ${F.alt}m alt · ` +
+            `<span class="${age > 5 ? 'warn' : ''}">${age < 100 ? age.toFixed(0) + 's' :
+                                                    fmtAge(age)} old</span>`;
+    if (geo.live) b += ` · ${fmtM(Math.hypot(F.x - geo.live.x, F.y - geo.live.y))} from you`;
+    bits.push(b);
+  }
   if (geo.fixes.length) {
     let walked = 0;
     for (let i = 1; i < geo.fixes.length; i++) {
@@ -1708,7 +2251,7 @@ function paintMapStat() {
 // timeline.
 
 function exportCsv() {
-  if (!samples.length && !geo.fixes.length) return fail('Nothing recorded yet.');
+  if (!samples.length && !geo.fixes.length && !gtr.size) return fail('Nothing recorded yet.');
   // dev_name and peer_name are whatever the operator called those boards, carried alongside the
   // ids rather than in place of them: the ids are the record, the names are how the walk was
   // actually thought about, and they only exist in a browser nobody will have open in a month.
@@ -1716,7 +2259,11 @@ function exportCsv() {
   const head = ['type', 'iso', 'ms', 'dev', 'dev_name', 'peer', 'peer_name', 'ch',
                 'lat', 'lon', 'acc_m',
                 'east_m', 'north_m', 'base_m', 'rssi_dbm', 'ptx_dbm', 'loss_db',
-                'snr_db', 'lqi', 'pdr_now', 'pdr_all', 'hits', 'misses'];
+                'snr_db', 'lqi', 'pdr_now', 'pdr_all', 'hits', 'misses',
+                // Appended, so a script written against the older columns still lines up.
+                // alt_m is the GNSS board's altitude; src says what placed the row - the
+                // phone's GPS, or a GNSS board.
+                'alt_m', 'src'];
   const rows = [];
   const n6 = v => v === undefined || v === '' ? '' : (+v).toFixed(6);
   const n1 = v => v === undefined || v === null ? '' : (+v).toFixed(1);
@@ -1726,10 +2273,19 @@ function exportCsv() {
     rows.push(['fix', new Date(f.t).toISOString(), f.t, '', '', '', '', '',
                n6(f.lat), n6(f.lon), f.acc === undefined ? '' : f.acc.toFixed(1),
                n1(f.x), n1(f.y), baseOf(f.x, f.y),
-               '', '', '', '', '', '', '', '', '']);
+               '', '', '', '', '', '', '', '', '', '', 'phone']);
+  }
+  // Every fix of every GNSS board, from whichever log it came in on. dev is the GNSS board.
+  for (const G of gtr.values()) {
+    for (const F of G.list) {
+      rows.push(['gfix', new Date(F.tabs).toISOString(), F.tabs, G.node, nameOf(G.node) ?? '',
+                 '', '', '', n6(F.lat), n6(F.lon), '',
+                 n1(F.x), n1(F.y), baseOf(F.x, F.y),
+                 '', '', '', '', '', '', '', '', '', F.alt, 'gnss']);
+    }
   }
   for (const s of samples) {
-    const p = s.pos || posAt(s.t);
+    const p = s.pos || (s.g ? null : posAt(s.t));
     const ll = p ? unproject(p.x, p.y) : { lat: '', lon: '' };
     rows.push(['rx', new Date(s.t).toISOString(), s.t,
                s.dev, nameOf(s.dev) ?? '', s.peer, nameOf(s.peer) ?? '', s.ch,
@@ -1739,7 +2295,8 @@ function exportCsv() {
                s.loss === undefined ? '' : s.loss,
                s.snr === -128 ? '' : s.snr,
                s.ch === '154' ? s.lqi : '',
-               s.pdr, s.pdrall, s.hits, s.miss]);
+               s.pdr, s.pdrall, s.hits, s.miss,
+               s.alt ?? '', s.g ? 'gnss' : 'phone']);
   }
   rows.sort((a, b) => a[2] - b[2]);
 
@@ -1786,10 +2343,16 @@ document.getElementById('csv').onclick = exportCsv;
 // The radio list survives too, and so does the projection origin: dropping those would take the
 // per-radio scales and the base marker with them, which are exactly the things worth keeping.
 document.getElementById('wipe').onclick = () => {
-  if (samples.length && !confirm(`Throw away ${samples.length} marks and the track?`)) return;
+  if ((samples.length || gtr.size) &&
+      !confirm(`Throw away ${samples.length} marks and the tracks?`)) return;
   samples.length = 0;
   geo.fixes.length = 0;
   geo.live = null;
+  // GNSS tracks too. The boards' logs are not asked for again - where this page is up to in
+  // each one is kept - so a clear really is a fresh start rather than the whole stockpile
+  // arriving back a moment later.
+  gtr.clear();
+  gRev++;
   view.seeded = false;
   paintMapBar();
   mapRedraw();
@@ -2144,6 +2707,38 @@ function updateCard(d) {
     diag.push(`<span class="ch">heap</span> ${(x.heap / 1024).toFixed(0)}k free, ` +
               `${(x.heapMin / 1024).toFixed(0)}k min`);
   }
+  // Always said on a v6 board, "none" included: a module that is wired but silent and one that
+  // is not fitted look the same everywhere else, and the difference is a loose wire.
+  if (d.gnss) {
+    const G = d.gnss;
+    const hd = G.hdop === 255 ? '?' : (G.hdop / 10).toFixed(1);
+    diag.push('<span class="ch">gnss</span> ' +
+      (G.state === 0 ? 'no NMEA on GPIO20' :
+       G.state === 1 ? `${G.baud} baud · <b class="warn">no fix</b> · ${G.sats} sats` :
+                       `<b class="ok">fix</b> · ${G.sats} sats · hdop ${hd} · ${G.baud} baud` +
+                       ' · packets carry it'));
+  }
+  if (d.logSt) {
+    const L = d.logSt;
+    if (!L.cap) {
+      diag.push('<span class="ch">log</span> <b class="warn">none - no memory for one</b>');
+    } else {
+      const held = L.newest - L.oldest + 1;
+      let t = `${held}/${L.cap} blocks · ${(held * L.bsize / 1024).toFixed(0)} of ` +
+              `${(L.cap * L.bsize / 1024).toFixed(0)} kB`;
+      // How much of it this page still has to fetch. The board backfills at a deliberately slow
+      // rate, so this is worth being able to watch go down.
+      const my = d.log && d.log.session === L.session ? d.log : null;
+      if (my) {
+        let behind = 0;
+        for (let b = Math.max(my.floor, L.oldest); b < L.newest; b++) {
+          if (!my.blocks.get(b)?.closed) behind++;
+        }
+        t += behind ? ` · <b class="warn">fetching, ${behind} behind</b>` : ' · all fetched';
+      }
+      diag.push(`<span class="ch">log</span> ${t}`);
+    }
+  }
   R.diag.innerHTML = diag.length
     ? '<div class="diaghead">diagnostics</div>' +
       diag.map(s => `<div>${s}</div>`).join('')
@@ -2173,7 +2768,9 @@ function updateCard(d) {
         // is still the bare id it always was.
         `<td><span class="ch">${r.ch}</span> ` +
         `<span class="peer nameable ${nameOf(r.peer) ? '' : 'dim'}" data-id="${esc(r.peer)}" ` +
-        `title="Click to name this board">${esc(labelOf(r.peer))}</span></td>` +
+        `title="Click to name this board">${esc(labelOf(r.peer))}</span>` +
+        (r.geo ? ' <span class="dim" title="Its packets carry its GNSS position">⌖</span>' : '') +
+        '</td>' +
         `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
         `<td class="dim">${r.ptx === undefined ? '–' : (r.ptx - r.rssi) + 'dB'}</td>` +
         `<td class="dim">${q}</td>` +
