@@ -101,7 +101,7 @@ static inline uint32_t rt_pkt_node(const rt_pkt_t *p)
 
 // ---- Where the sender was ----------------------------------------------------------------
 //
-// A board with a GNSS fix appends its position to every packet it sends: 10 bytes, 22 in all.
+// A board with a GNSS fix appends its position to every packet it sends: 6 bytes, 18 in all.
 // A board without one sends the plain 12, exactly as before. Receivers accept those two lengths
 // and nothing else, so the exact-length filter against foreign traffic still holds.
 //
@@ -111,14 +111,25 @@ static inline uint32_t rt_pkt_node(const rt_pkt_t *p)
 // sender's own log can reproduce it for every seq it sent - heard or not - from one record per
 // fix. See rt_geo_at() for how.
 //
-// No GNSS time and no HDOP on the wire: nothing a receiver does needs them, and every byte here
-// is a longer target for a bit error at the edge of range. That cost is real even at 10 bytes -
-// a board with coordinates in its packets delivers very slightly worse than one without - and is
-// accepted because the owner asked for coordinates in the packet.
+// Only the fraction of a degree travels. The whole degrees are the same for every board in a
+// range test and for the phone standing among them, so the page supplies them from whatever
+// full position it has - the phone's GPS, the GNSS board's own log, or the last one it saw -
+// picking the degree that lands nearest. That is safe while everything is within half a degree
+// (~50km) of the reference, which a radio range test always is.
+//
+// Resolution is 1e-5 degree: 1.1m of latitude, less of longitude. Finer than that would be finer
+// than the GNSS; coarser starts to show as steps. Marks that do land on the same spot are spread
+// by the page when it draws them, which is a display problem and solved there.
+//
+//   48 bits, little-endian:  bits 0-16  latitude,  1e-5 degree units mod 100000 (0..99999)
+//                            bits 17-33 longitude, the same
+//                            bits 34-47 altitude,  metres above mean sea level, signed, clamped
+//
+// Every byte here is a longer target for a bit error at the edge of range, which is why it is
+// packed this tight: a board with coordinates in its packets delivers very slightly worse than
+// one without, and that cost was accepted when the owner asked for coordinates in the packet.
 typedef struct __attribute__((packed)) {
-    int32_t lat_e7;     // degrees x 1e7
-    int32_t lon_e7;
-    int16_t alt_m;      // metres above mean sea level, from GGA
+    uint8_t b[6];
 } rt_geo_wire_t;
 
 typedef struct __attribute__((packed)) {
@@ -127,51 +138,118 @@ typedef struct __attribute__((packed)) {
 } rt_pkt_geo_t;
 
 #define RT_PKT_LEN     ((int)sizeof(rt_pkt_t))       // 12
-#define RT_PKT_GEO_LEN ((int)sizeof(rt_pkt_geo_t))   // 22
+#define RT_PKT_GEO_LEN ((int)sizeof(rt_pkt_geo_t))   // 18
 #define RT_PKT_MAX     RT_PKT_GEO_LEN
 
-// A fix as the GNSS reader produces it. vlat/vlon are its motion since the fix before, in
-// 1e-7 degrees per second, 0 when there is no recent fix to difference against. utc_ds is used
-// only on the board, to work that out; it goes nowhere.
+#define RT_GEO_FRAC  100000   // 1e-5 degree units per degree
+
+// What a receiver gets out of a packet: fractions of a degree, and altitude.
+typedef struct {
+    int32_t latf, lonf;   // 0..99999
+    int16_t alt_m;
+} rt_pos_t;
+
+// Floor division, so negative coordinates quantise and wrap the same way as positive ones.
+static inline int32_t rt_floordiv(int64_t a, int64_t b)
+{
+    int64_t q = a / b;
+    if ((a % b != 0) && ((a < 0) != (b < 0))) {
+        q--;
+    }
+    return (int32_t)q;
+}
+
+// Full position in 1e-7 degrees to the wire: rounded to 1e-5, then only the fraction kept.
+static inline void rt_geo_pack(uint8_t out[6], int32_t lat_e7, int32_t lon_e7, int16_t alt_m)
+{
+    const int32_t lat = rt_floordiv((int64_t)lat_e7 + 50, 100);
+    const int32_t lon = rt_floordiv((int64_t)lon_e7 + 50, 100);
+    const uint64_t la = (uint64_t)(lat - rt_floordiv(lat, RT_GEO_FRAC) * RT_GEO_FRAC);
+    const uint64_t lo = (uint64_t)(lon - rt_floordiv(lon, RT_GEO_FRAC) * RT_GEO_FRAC);
+    const int32_t  al = alt_m < -8192 ? -8192 : alt_m > 8191 ? 8191 : alt_m;
+    const uint64_t v  = la | (lo << 17) | ((uint64_t)(al & 0x3FFF) << 34);
+    for (int i = 0; i < 6; i++) {
+        out[i] = (uint8_t)(v >> (8 * i));
+    }
+}
+
+static inline void rt_geo_unpack(const uint8_t in[6], rt_pos_t *p)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < 6; i++) {
+        v |= (uint64_t)in[i] << (8 * i);
+    }
+    p->latf = (int32_t)(v & 0x1FFFF);
+    p->lonf = (int32_t)((v >> 17) & 0x1FFFF);
+    const int32_t a = (int32_t)((v >> 34) & 0x3FFF);
+    p->alt_m = (int16_t)(a >= 0x2000 ? a - 0x4000 : a);
+}
+
+// ---- Momentum ------------------------------------------------------------------------------
+//
+// Fixes come once a second and packets four times a second, and a fix can go missing, so what a
+// packet carries is not the last fix but a smooth track through them: velocity tracked over
+// time, and a position that eases from wherever the track was toward each new fix.
+//
+// The GNSS reader keeps velocity as an EMA of fix-to-fix motion with a 2s time constant, in
+// floating point relative to the first good fix (rt_gnss.c). What it publishes with each fix is
+// the fix F, the velocity V, and E - where the track was, minus F, at the moment F arrived - so
+// the track never jumps. For a packet sent time t after the fix:
+//
+//     position = F + E x w(t) + V x g(t)      w(t) = e^(-t/1s)      g(t) = t e^(-t^2 / 2(2s)^2)
+//
+// w eases the track onto the fix, over a second: a 2s ease on top of a velocity that itself
+// takes a couple of seconds to die away left a stopped drone drawn 5m past where it stopped for
+// several seconds. g is the velocity term: close to t for the first second, so
+// steady flight is followed closely; peaking at 1.2s of travel two seconds on; back to zero by
+// about eight. So with fixes arriving, it runs a little behind and occasionally overshoots and
+// comes back, and if fixes stop it coasts on briefly and returns to the last real fix instead
+// of running off along a straight line, or stopping dead and piling everything up on one spot.
+//
+// t is counted in sequence numbers times each channel's nominal period, never read off a clock,
+// and w and g are tables rather than exp(): so the position is a pure function of (fix, seq), in
+// integers, and the sender's log, every receiver and the page all arrive at the same fake
+// location for the same seq, exactly. The page carries identical tables and arithmetic.
+#define RT_GEO_K_MAX 60   // table length - 1, in 250ms steps: 15s, past any use
+
+static const uint16_t RT_GEO_W[RT_GEO_K_MAX + 1] = {   // 32768 e^(-k/4)
+    32768, 25520, 19875, 15479, 12055, 9388, 7312, 5694, 4435, 3454, 2690, 2095, 1631, 1271,
+    990, 771, 600, 467, 364, 283, 221, 172, 134, 104, 81, 63, 49, 38, 30, 23, 18, 14, 11, 9, 7,
+    5, 4, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const uint16_t RT_GEO_G[RT_GEO_K_MAX + 1] = {   // 1000 t e^(-t^2/8), t = k/4 seconds
+    0, 248, 485, 699, 882, 1028, 1132, 1193, 1213, 1195, 1145, 1069, 974, 868, 757, 647, 541,
+    444, 358, 283, 220, 167, 125, 92, 67, 47, 33, 23, 15, 10, 7, 4, 3, 2, 1, 1, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+// The fix as published: F in 1e-7 degrees, E and V in 1e-7 degrees and 1e-7 degrees per second.
+// utc_ds is used only on the board, to time the velocity; it goes nowhere.
 typedef struct {
     int32_t  lat_e7, lon_e7;
     int16_t  alt_m;
+    int16_t  elat, elon;
     int16_t  vlat, vlon;
     uint32_t utc_ds;
     uint8_t  hdop_ds;
     uint8_t  sats;
 } rt_geo_t;
 
-// ---- Momentum ------------------------------------------------------------------------------
-//
-// Fixes come once a second and packets four times a second, so without this every packet sent
-// between two fixes carries the same position, and a receiver's marks for them land exactly on
-// top of each other. So a packet carries the fix pushed forward along the fix's own motion, by
-// how far the channel's sequence number has moved on since the fix arrived, capped at
-// RT_GEO_COAST_MS - enough to spread the marks out, never enough to fly off on its own if fixes
-// stop.
-//
-// Counted in sequence numbers times each channel's nominal period rather than in real time,
-// deliberately: that makes the position a pure function of (fix, seq), so the sender's log,
-// every receiver and the page all arrive at the same fake location for the same seq, to the
-// 1e-7 degree, without a clock anywhere. The page carries an exact copy of this arithmetic.
-#define RT_GEO_COAST_MS 2000
-
-static inline uint32_t rt_seq_ms(int chan)
+// Time since the fix in table steps, from how far this channel's seq has moved on since it.
+static inline uint32_t rt_geo_k(uint32_t steps, int chan)
 {
-    return chan == CH_BLE_ADV ? 500 : 250;   // the transmit periods in rt_ble.c / rt_espnow.c / rt_154.c
+    const uint32_t per = chan == CH_BLE_ADV ? 2 : 1;   // 500ms or 250ms a seq, in 250ms steps
+    return steps > RT_GEO_K_MAX ? RT_GEO_K_MAX + 1 : steps * per;
 }
 
-// steps = seq - (that channel's seq_next when the fix was published).
-static inline void rt_geo_at(const rt_geo_t *g, uint32_t steps, int chan,
-                             int32_t *lat, int32_t *lon)
+static inline void rt_geo_at(const rt_geo_t *g, uint32_t k, int32_t *lat, int32_t *lon)
 {
-    uint32_t dt = RT_GEO_COAST_MS;
-    if (steps < RT_GEO_COAST_MS / rt_seq_ms(chan)) {
-        dt = steps * rt_seq_ms(chan);
+    *lat = g->lat_e7;
+    *lon = g->lon_e7;
+    if (k <= RT_GEO_K_MAX) {
+        *lat += (int32_t)((int64_t)g->elat * RT_GEO_W[k] / 32768)
+              + (int32_t)((int64_t)g->vlat * RT_GEO_G[k] / 1000);
+        *lon += (int32_t)((int64_t)g->elon * RT_GEO_W[k] / 32768)
+              + (int32_t)((int64_t)g->vlon * RT_GEO_G[k] / 1000);
     }
-    *lat = g->lat_e7 + (int32_t)((int64_t)g->vlat * dt / 1000);
-    *lon = g->lon_e7 + (int32_t)((int64_t)g->vlon * dt / 1000);
 }
 
 // ---- GNSS (rt_gnss.c) ----------------------------------------------------------------------
@@ -606,10 +684,10 @@ void rt_report(void);
 // other while no board has a GNSS fix, and stop hearing a board the moment it gets one. Reflash
 // the lot.
 //
-// v7 is v6 reworked the same day: positions keyed by seq instead of GNSS time, so the packet
-// extension is 10 bytes instead of 14 (22 in all, and v6 and v7 cannot hear each other's), the
-// status tail lost log_bsize (18 bytes, not 20), and the log records changed. The page reads a
-// v6 report but does not ask a v6 board for its log.
+// v7 is v6 reworked: positions keyed by seq instead of GNSS time and carried as fractions of a
+// degree, so the packet extension is 6 bytes instead of 14 (18 in all, and v6 and v7 cannot hear
+// each other's), the status tail lost log_bsize (18 bytes, not 20), and the log records changed.
+// The page reads a v6 report but does not ask a v6 board for its log.
 #define RT_RPT_VER      7
 #define RT_RPT_HDR      4
 #define RT_RPT_STATUS   102
@@ -649,9 +727,12 @@ int rt_snapshot_rows(void);
 // first, and it is streamed to the phone over the same notify characteristic as the report.
 //
 // Not flash: flash writes stall the chip, and a stalled receiver is its own source of lost
-// packets. So the log holds what fits in the heap that is left over once every mode has been
-// run through at boot - see the boot line, or log_cap in the report - and on a long flight it
-// keeps the most recent part. Hence the compact records: every byte saved is flight time kept.
+// packets. So the log is a fixed RT_LOG_BYTES of RAM, taken first thing at boot, before any radio
+// has allocated anything - one clean block, nothing for later mode changes to fragment around.
+// The size is set by hand from the heap figures the serial report prints (free, lowest ever,
+// largest free block) once a board has been through real use, phone connections included. On a
+// long flight it keeps the most recent part; hence the compact records - every byte saved is
+// flight time kept.
 //
 // Every block stands alone: it starts with its own clock and names every link it refers to, so
 // a block can be decoded without the one before it. That is what lets the board send the newest
@@ -665,11 +746,12 @@ int rt_snapshot_rows(void);
 //   raw time, so the error never accumulates past 2ms.
 //
 //   0x01 TIME   (3)  u16 ms             clock += ms. For gaps too long for a u8 dt.
-//   0x02 FIX    (30) dt, i32 lat_e7, i32 lon_e7, i16 alt_m, i16 vlat, i16 vlon, u8 hdop_ds,
-//                    u8 sats, u32 seq_next[3]
-//                    This board's own new fix. seq_next is each channel's next sequence
-//                    number at that instant: from there until the next FIX or NOFIX, packet seq
-//                    on channel c carried rt_geo_at(fix, seq - seq_next[c], c).
+//   0x02 FIX    (34) dt, i32 lat_e7, i32 lon_e7, i16 alt_m, i16 elat, i16 elon, i16 vlat,
+//                    i16 vlon, u8 hdop_ds, u8 sats, u32 seq_next[3]
+//                    This board's own new fix, as published (see Momentum). seq_next is each
+//                    channel's next sequence number at that instant: from there until the next
+//                    FIX or NOFIX, packet seq on channel c carried
+//                    rt_geo_pack(rt_geo_at(fix, rt_geo_k(seq - seq_next[c], c))).
 //   0x03 NOFIX  (14) dt, u32 seq_next[3]
 //                    Fix lost; packets from seq_next onward carry no position.
 //   0x04 RX     (15) dt, u24 node, u8 chan (bit7 = carried a position: the node's current POS),
@@ -680,14 +762,15 @@ int rt_snapshot_rows(void);
 //                    arithmetic as the results table, done where the table is. 0 = the same seq
 //                    heard again (a BLE advert goes out 2-3 times per seq, and each one heard
 //                    counts, as in the table), or unknown.
-//   0x05 POS    (14) u24 node, i32 lat_e7, i32 lon_e7, i16 alt_m
-//                    Where that node's next packet said it was, in full. Sets the node's
-//                    current POS for the records after it in this block.
-//   0x40+ RXD   (10) type = 0x40 | ref, dt, u8 gap, i8 rssi, u8 q, i16 dlat, i16 dlon, i8 dalt
+//   0x05 POS    (10) u24 node, 6 bytes exactly as on the wire (rt_geo_wire_t)
+//                    Where that node's next packet said it was. Sets the node's current POS
+//                    for the records after it in this block.
+//   0x40+ RXD   (8)  type = 0x40 | ref, dt, u8 gap, i8 rssi, u8 q, i8 dlat, i8 dlon, i8 dalt
 //                    A packet heard on an existing ref that carried a position this far from
-//                    the node's current POS - which it then becomes. With momentum on, this is
-//                    the usual record for a moving sender; a jump too big for the deltas is a
-//                    POS and then an RXS instead.
+//                    the node's current POS - which it then becomes. Deltas in wire units
+//                    (1e-5 degree, metres), latitude and longitude wrapping at 100000. With
+//                    momentum this is the usual record for a moving sender; a jump too big for
+//                    the deltas is a POS and then an RXS instead.
 //   0x80+ RXS   (5)  type = 0x80 | geo << 6 | ref, dt, u8 gap, i8 rssi, u8 q
 //                    A packet heard on an existing ref: seq = that ref's last seq + gap. geo: it
 //                    carried exactly the node's current POS.
@@ -702,20 +785,25 @@ int rt_snapshot_rows(void);
 #define RT_LOG_HDR         12
 #define RT_LOG_TYPE        0x03
 
+// The ring's size. A placeholder until real heap figures say otherwise: a moving drone heard by
+// a board costs that board ~8 bytes a packet, 4 packets a second - about 2KB a minute - and the
+// drone logs ~5 bytes per packet it hears plus 34 a second for its fixes.
+#define RT_LOG_BYTES       (32 * 1024)
+
 typedef struct {
     uint32_t block;
     uint16_t off;
 } rt_log_cur_t;
 
-// Allocate the ring from whatever heap is left once the radios are up. Before this - or if
-// there was no memory - every appender below is a no-op.
+// Allocate the ring. Called first thing in app_main, before any radio. Before this - or if the
+// allocation failed - every appender below is a no-op.
 void rt_log_init(void);
 
 // Appenders. Safe from any context including ISRs: 802.15.4 delivers packets from one.
 void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT]);
 void rt_log_nofix(const uint32_t seq_next[CH_COUNT]);
 void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, int8_t rssi,
-               uint8_t q, const rt_geo_t *sender);
+               uint8_t q, const rt_geo_wire_t *sender);
 
 typedef struct {
     uint32_t session, oldest, newest;

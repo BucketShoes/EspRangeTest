@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_random.h"
@@ -141,7 +142,7 @@ static struct {
     uint32_t node;   // rt_node_id() of the sender
     rt_link  ch[CH_COUNT];
     bool     has_geo;
-    rt_geo_t geo;    // the most recent position it sent, on any channel
+    rt_pos_t geo;    // the most recent position it sent, on any channel
     uint32_t geo_ms;
 } s_peers[RT_MAX_PEERS];
 
@@ -343,14 +344,6 @@ void rt_set_lc(int lc)
     printf("\n>>> low contention = %s\n", lc_name(lc));
 }
 
-static void geo_from_wire(rt_geo_t *g, const rt_geo_wire_t *w)
-{
-    memset(g, 0, sizeof(*g));   // only the position travels; see rt_geo_wire_t
-    g->lat_e7 = w->lat_e7;
-    g->lon_e7 = w->lon_e7;
-    g->alt_m  = w->alt_m;
-}
-
 void rt_geo_publish(const rt_geo_t *g)
 {
     uint32_t seq_next[CH_COUNT];
@@ -406,10 +399,8 @@ int rt_fill(void *out, int chan, int8_t txdbm)
     const bool geo = s_geo_valid;
     if (geo) {
         int32_t lat, lon;
-        rt_geo_at(&s_geo, p.p.seq - s_geo_s0[chan], chan, &lat, &lon);
-        p.g.lat_e7 = lat;
-        p.g.lon_e7 = lon;
-        p.g.alt_m  = s_geo.alt_m;
+        rt_geo_at(&s_geo, rt_geo_k(p.p.seq - s_geo_s0[chan], chan), &lat, &lon);
+        rt_geo_pack(p.g.b, lat, lon, s_geo.alt_m);
     }
     portEXIT_CRITICAL(&s_geo_mux);
 
@@ -463,9 +454,9 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     }
     const uint32_t node = rt_pkt_node(&p);
     const bool     has_geo = (len == RT_PKT_GEO_LEN);
-    rt_geo_t       geo;
+    rt_pos_t       geo;
     if (has_geo) {
-        geo_from_wire(&geo, &pg.g);
+        rt_geo_unpack(pg.g.b, &geo);
     }
 
     int slot = -1;
@@ -547,7 +538,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
         const uint8_t q = chan == CH_154              ? lqi
                         : noise != RT_NOISE_NONE      ? (uint8_t)(int8_t)(rssi - noise)
                                                       : 0;
-        rt_log_rx(node, chan, p.txdbm, p.seq, log_gap, rssi, q, has_geo ? &geo : NULL);
+        rt_log_rx(node, chan, p.txdbm, p.seq, log_gap, rssi, q, has_geo ? &pg.g : NULL);
     }
 }
 
@@ -793,6 +784,13 @@ static void print_geo(const rt_geo_t *g)
     }
 }
 
+// What a receiver knows: the fraction of a degree only (see rt_geo_wire_t), so the degrees are
+// shown as "xx" rather than guessed.
+static void print_pos(const rt_pos_t *p)
+{
+    printf("xx.%05ld,xx.%05ld %dm (degrees not carried)", (long)p->latf, (long)p->lonf, p->alt_m);
+}
+
 void rt_report(void)
 {
     const uint32_t now = rt_ms();
@@ -842,9 +840,13 @@ void rt_report(void)
 
     printf("  154 rx: %lu frames, %lu ours, %lu coex-refused tx\n",
            (unsigned long)f154, (unsigned long)o154, (unsigned long)coex);
-    printf("  heap: %lu free, %lu min\n",
+    // The largest free block is the fragmentation figure: free can look healthy while no single
+    // piece of it is big enough for what a mode change or a phone connection wants next. These
+    // three, watched across real use, are what RT_LOG_BYTES gets set from.
+    printf("  heap: %lu free, %lu min, %lu largest block\n",
            (unsigned long)esp_get_free_heap_size(),
-           (unsigned long)esp_get_minimum_free_heap_size());
+           (unsigned long)esp_get_minimum_free_heap_size(),
+           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
     // Said every report, including "none": a GNSS that is wired but silent and one that is not
     // fitted look identical from everywhere else, and the difference is a loose wire.
@@ -925,7 +927,7 @@ void rt_report(void)
         }
         if (s_peers[i].has_geo) {
             printf("  %06lX was at ", (unsigned long)s_peers[i].node);
-            print_geo(&s_peers[i].geo);
+            print_pos(&s_peers[i].geo);
             printf("  (%lus ago)\n",
                    (unsigned long)(age_ms(now, s_peers[i].geo_ms) / 1000));
         }

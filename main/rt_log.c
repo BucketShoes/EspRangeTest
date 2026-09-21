@@ -12,16 +12,6 @@
 
 static const char *TAG = "log";
 
-// Sized from the heap's low-water mark, not from what happens to be free right now.
-//
-// rt_log_init() runs after app_main has put the radios through every mode (see
-// exercise_modes() in main.c), so the minimum ever free already includes the Wi-Fi driver's
-// buffers on a restart, LR, the BLE UI advert being stopped and started, and whatever else a
-// mode change allocates. Everything the radios will ever want at once has already been wanted
-// once. HEAP_KEEP is then only for what that could not exercise - a phone connecting, heap
-// fragmentation - and is small on purpose: the log is the thing a long flight runs out of.
-#define LOG_MAX_BYTES (160 * 1024)
-#define HEAP_KEEP     (20 * 1024)
 #define MIN_BLOCKS    4
 
 // A block closes when it is full, when its reference table is, or when it has been open this
@@ -41,11 +31,11 @@ static const char *TAG = "log";
 #define REC_RXS    0x80
 
 #define LEN_TIME   3
-#define LEN_FIX    30
+#define LEN_FIX    34
 #define LEN_NOFIX  14
 #define LEN_RX     15
-#define LEN_POS    14
-#define LEN_RXD    10
+#define LEN_POS    10
+#define LEN_RXD    8
 #define LEN_RXS    5
 
 // One lock for everything below: appenders run in the Wi-Fi task, the NimBLE host task and the
@@ -72,8 +62,7 @@ static struct {
     uint32_t npos;
     struct {
         uint32_t node;
-        int32_t  lat, lon;
-        int16_t  alt;
+        rt_pos_t p;
     } pos[NPOS_MAX];           // each node's current POS, as the reader has it
 } s_b;
 
@@ -146,34 +135,18 @@ static uint8_t tick(uint32_t now)
 
 void rt_log_init(void)
 {
-    const size_t free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    const size_t low      = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
-    const size_t largest  = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-
-    size_t want = low > HEAP_KEEP ? low - HEAP_KEEP : 0;
-    if (want > LOG_MAX_BYTES) want = LOG_MAX_BYTES;
-    if (want > largest)       want = largest;
-    uint32_t n = want / (RT_LOG_BLOCK + sizeof(uint16_t));
-
-    uint8_t  *ring = NULL;
-    uint16_t *fl   = NULL;
-    while (n >= MIN_BLOCKS) {
-        ring = heap_caps_malloc((size_t)n * RT_LOG_BLOCK, MALLOC_CAP_8BIT);
-        fl   = heap_caps_calloc(n, sizeof(uint16_t), MALLOC_CAP_8BIT);
-        if (ring && fl) {
-            break;
-        }
+    // One allocation, before anything else has touched the heap, so it is one clean block and
+    // nothing the radios do later can fragment around it.
+    const uint32_t n = RT_LOG_BYTES / RT_LOG_BLOCK;
+    uint8_t  *ring = n >= MIN_BLOCKS ? heap_caps_malloc((size_t)n * RT_LOG_BLOCK, MALLOC_CAP_8BIT)
+                                     : NULL;
+    uint16_t *fl   = ring ? heap_caps_calloc(n, sizeof(uint16_t), MALLOC_CAP_8BIT) : NULL;
+    if (ring == NULL || fl == NULL) {
         free(ring);
-        free(fl);
-        ring = NULL;
-        fl   = NULL;
-        n    = n * 3 / 4;
-    }
-    if (ring == NULL) {
         // Not fatal: the board still measures and reports exactly as before, it just cannot
         // say where anything happened.
-        ESP_LOGE(TAG, "no memory for a packet log (%u free, %u at the lowest) - positions "
-                      "will not be recorded", (unsigned)free_now, (unsigned)low);
+        ESP_LOGE(TAG, "no memory for a %d KB packet log - positions will not be recorded",
+                 RT_LOG_BYTES / 1024);
         return;
     }
 
@@ -187,11 +160,8 @@ void rt_log_init(void)
     open_block(rt_ms(), true);
     portEXIT_CRITICAL(&s_mux);
 
-    ESP_LOGI(TAG, "%lu blocks of %d bytes (%lu KB), session %08lX; heap was %u free, %u at "
-                  "the lowest across every mode, %u free now",
-             (unsigned long)n, RT_LOG_BLOCK, (unsigned long)(n * RT_LOG_BLOCK / 1024),
-             (unsigned long)s_session, (unsigned)free_now, (unsigned)low,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    ESP_LOGI(TAG, "%lu blocks of %d bytes (%d KB), session %08lX", (unsigned long)n,
+             RT_LOG_BLOCK, RT_LOG_BYTES / 1024, (unsigned long)s_session);
 }
 
 void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT])
@@ -208,6 +178,8 @@ void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT])
     put32((uint32_t)g->lat_e7);
     put32((uint32_t)g->lon_e7);
     put16((uint16_t)g->alt_m);
+    put16((uint16_t)g->elat);
+    put16((uint16_t)g->elon);
     put16((uint16_t)g->vlat);
     put16((uint16_t)g->vlon);
     put8(g->hdop_ds);
@@ -235,8 +207,17 @@ void rt_log_nofix(const uint32_t seq_next[CH_COUNT])
     portEXIT_CRITICAL_SAFE(&s_mux);
 }
 
+// Wrap a difference of two 0..99999 fractions into -50000..49999, so a sender crossing a
+// whole degree is a small step and not a jump of nearly a degree.
+static int32_t wrapd(int32_t d)
+{
+    if (d >= RT_GEO_FRAC / 2)  d -= RT_GEO_FRAC;
+    if (d < -RT_GEO_FRAC / 2)  d += RT_GEO_FRAC;
+    return d;
+}
+
 void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, int8_t rssi,
-               uint8_t q, const rt_geo_t *sender)
+               uint8_t q, const rt_geo_wire_t *sender)
 {
     if (s_ring == NULL) {
         return;
@@ -259,24 +240,26 @@ void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, 
     const bool short_ok = r >= 0 && gap <= 255 && s_b.ref[r].seq + gap == seq;
 
     // Where the reader thinks this node is, and how far the packet says it has moved from there.
-    // A moving sender with momentum on moves a little every packet, so the usual case is a
-    // small delta on a short record - 10 bytes a packet rather than a full POS and an RX.
-    int  p = -1;
-    bool same = false, delta = false;
-    int32_t dlat = 0, dlon = 0, dalt = 0;
+    // A moving sender moves a little every packet, so the usual case is a small delta on a
+    // short record - 8 bytes a packet rather than a full POS and an RX.
+    int      p = -1;
+    bool     same = false, delta = false;
+    int32_t  dlat = 0, dlon = 0, dalt = 0;
+    rt_pos_t pos;
     if (sender != NULL) {
+        rt_geo_unpack(sender->b, &pos);
         for (int i = 0; i < (int)s_b.npos; i++) {
             if (s_b.pos[i].node == node) {
                 p = i;
             }
         }
         if (p >= 0) {
-            dlat = sender->lat_e7 - s_b.pos[p].lat;
-            dlon = sender->lon_e7 - s_b.pos[p].lon;
-            dalt = sender->alt_m - s_b.pos[p].alt;
+            dlat = wrapd(pos.latf - s_b.pos[p].p.latf);
+            dlon = wrapd(pos.lonf - s_b.pos[p].p.lonf);
+            dalt = pos.alt_m - s_b.pos[p].p.alt_m;
             same  = dlat == 0 && dlon == 0 && dalt == 0;
             delta = !same && short_ok
-                 && dlat >= -32768 && dlat <= 32767 && dlon >= -32768 && dlon <= 32767
+                 && dlat >= -128 && dlat <= 127 && dlon >= -128 && dlon <= 127
                  && dalt >= -128 && dalt <= 127;
         }
         if (!same && !delta) {
@@ -287,15 +270,11 @@ void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, 
             }
             put8(REC_POS);
             put24(node);
-            put32((uint32_t)sender->lat_e7);
-            put32((uint32_t)sender->lon_e7);
-            put16((uint16_t)sender->alt_m);
+            put(sender->b, 6);
         }
         if (p >= 0) {
             s_b.pos[p].node = node;
-            s_b.pos[p].lat  = sender->lat_e7;
-            s_b.pos[p].lon  = sender->lon_e7;
-            s_b.pos[p].alt  = sender->alt_m;
+            s_b.pos[p].p    = pos;
         }
     }
 
@@ -308,8 +287,8 @@ void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, 
         put8((uint8_t)gap);
         put8((uint8_t)rssi);
         put8(q);
-        put16((uint16_t)dlat);
-        put16((uint16_t)dlon);
+        put8((uint8_t)dlat);
+        put8((uint8_t)dlon);
         put8((uint8_t)dalt);
         s_b.ref[r].seq = seq;
     } else if (short_ok) {

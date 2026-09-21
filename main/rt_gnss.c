@@ -7,6 +7,7 @@
 // Nothing here is required. With no module fitted, GPIO20 idles on its pull-up, no sentence
 // ever validates, and the board behaves exactly as it did before this file existed.
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,10 +36,11 @@ static const uint32_t BAUDS[] = { 9600, 38400, 115200, 57600, 4800, 19200 };
 #define DWELL_MS 2500
 // Locked, but gone quiet this long: unplugged, or browned out and rebooted at another rate.
 #define LOST_MS  5000
-// No new fix epoch this long, while still talking. The module has dropped its fix without
-// saying so in a way GGA reports, or has stopped sending GGA. Either way, stop putting an old
-// position into new packets - a drone that has moved on is not where its last fix says.
-#define STALE_MS 3000
+// No new fix this long - whether GGA says so or the module has gone quiet - and packets stop
+// carrying a position. Until then they carry the tracked one (see Momentum in rt.h), which by
+// now has coasted and eased back to the last real fix. Past this, a drone that has moved on is
+// not where its last fix says, and saying nothing is more honest than saying that.
+#define STALE_MS 10000
 
 #define NMEA_MAX 100   // NMEA says 82; some modules exceed it with extra precision
 
@@ -164,24 +166,86 @@ static bool utc(const char *s, uint32_t *out)
     return true;
 }
 
-// The fix before this one, for velocity.
-static rt_geo_t s_prev;
-static bool     s_prev_ok;
+// ---- the track ------------------------------------------------------------------------------
+//
+// Velocity is an EMA of fix-to-fix motion with a 2s time constant, weighted by the actual time
+// between fixes so a missed epoch counts for what it was. It is kept in floating point, relative
+// to the first good fix since boot, so small motions are not lost to the size of the numbers;
+// what goes out is integers (rt_geo_t), and everything downstream of that is exact.
+//
+// E, the other half of the track, is where the published track had got to when this fix
+// arrived, minus the fix: so the track never jumps, and eases onto each fix instead.
+#define TRACK_TAU_S  2.0f
+#define TRACK_GAP_DS 100    // 10s: across a longer gap there is no velocity to speak of
 
-// 32767 x 1e-7 degrees a second is ~360 m/s of latitude; anything past it is a glitch, and a
-// clamped glitch coasts for at most RT_GEO_COAST_MS.
-static int16_t clamp16(int64_t v)
+static bool     s_ref_ok;
+static int32_t  s_ref_lat, s_ref_lon;   // the first good fix: the origin of everything float
+static bool     s_trk_ok;               // s_pub is a fix the track can continue from
+static rt_geo_t s_pub;                  // the last fix published, exactly as published
+static float    s_flat, s_flon;         // that fix, relative to s_ref
+static float    s_vlat, s_vlon;         // 1e-7 degrees a second
+
+static int16_t clamp16(float v)
 {
-    return (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+    return (int16_t)(v > 32767.0f ? 32767 : v < -32767.0f ? -32767 : lroundf(v));
+}
+
+static void track(rt_geo_t *g)
+{
+    if (!s_ref_ok) {
+        s_ref_lat = g->lat_e7;
+        s_ref_lon = g->lon_e7;
+        s_ref_ok  = true;
+    }
+    const float flat = (float)(g->lat_e7 - s_ref_lat);
+    const float flon = (float)(g->lon_e7 - s_ref_lon);
+
+    int32_t dt = s_trk_ok ? (int32_t)g->utc_ds - (int32_t)s_pub.utc_ds : 0;   // 0.1s
+    if (dt < 0) {
+        dt += 864000;   // midnight
+    }
+    if (s_trk_ok && dt > 0 && dt <= TRACK_GAP_DS) {
+        const float dts = dt / 10.0f;
+        const float a   = 1.0f - expf(-dts / TRACK_TAU_S);
+        s_vlat += a * ((flat - s_flat) / dts - s_vlat);
+        s_vlon += a * ((flon - s_flon) / dts - s_vlon);
+
+        // Where the published track is now, on the same integer arithmetic packets use.
+        int32_t tlat, tlon;
+        rt_geo_at(&s_pub, (uint32_t)lroundf(dts * 4.0f), &tlat, &tlon);
+        const int64_t elat = (int64_t)tlat - g->lat_e7;
+        const int64_t elon = (int64_t)tlon - g->lon_e7;
+        // A gap too big for the field is a jump, not an error to ease out: take the fix.
+        if (elat >= -32767 && elat <= 32767 && elon >= -32767 && elon <= 32767) {
+            g->elat = (int16_t)elat;
+            g->elon = (int16_t)elon;
+        }
+    } else {
+        s_vlat = s_vlon = 0.0f;
+    }
+    g->vlat = clamp16(s_vlat);
+    g->vlon = clamp16(s_vlon);
+    s_flat  = flat;
+    s_flon  = flon;
+    s_pub   = *g;
+    s_trk_ok = true;
 }
 
 static void fix_lost(const char *why)
 {
-    s_prev_ok = false;
+    s_trk_ok = false;
     if (s_state == RT_GNSS_FIX) {
         s_state = RT_GNSS_NMEA;
         rt_geo_lost();
         ESP_LOGW(TAG, "fix lost (%s) - packets stop carrying a position", why);
+    }
+}
+
+// Called with the time, from the reader's loop: a fix too old to use is withdrawn.
+static void stale_check(uint32_t now)
+{
+    if (s_state == RT_GNSS_FIX && (int32_t)(now - s_fix_ms) > STALE_MS) {
+        fix_lost("no new fix for 10s");
     }
 }
 
@@ -205,7 +269,8 @@ static void on_gga(char **f, int nf)
     rt_geo_t g = { 0 };
     const int q = atoi(f[6]);
     if (q == 0 || !coord(f[2], f[3], &g.lat_e7) || !coord(f[4], f[5], &g.lon_e7)) {
-        fix_lost("no fix in GGA");
+        // No fix this epoch. Packets go on carrying the track, which eases back to the last real
+        // fix, until stale_check() says it has been too long.
         return;
     }
     if (t == s_last_utc) {
@@ -221,21 +286,7 @@ static void on_gga(char **f, int nf)
     g.hdop_ds = s_hdop;
     g.sats    = s_sats;
 
-    // Motion since the previous fix, for momentum (see rt_geo_at). Over GNSS time, which is
-    // exact, rather than when the sentences happened to arrive. Only from a fix at most 3s
-    // back: across a longer gap the difference is a jump, not a velocity.
-    if (s_prev_ok) {
-        int32_t dt = (int32_t)t - (int32_t)s_prev.utc_ds;   // 0.1s
-        if (dt < 0) {
-            dt += 864000;   // midnight
-        }
-        if (dt > 0 && dt <= 30) {
-            g.vlat = clamp16(((int64_t)g.lat_e7 - s_prev.lat_e7) * 10 / dt);
-            g.vlon = clamp16(((int64_t)g.lon_e7 - s_prev.lon_e7) * 10 / dt);
-        }
-    }
-    s_prev    = g;
-    s_prev_ok = true;
+    track(&g);
 
     if (s_state != RT_GNSS_FIX) {
         ESP_LOGI(TAG, "fix: %u sats - packets now carry a position", s_sats);
@@ -354,9 +405,7 @@ static void gnss_task(void *pv)
             dwell   = now;
         }
 
-        if (s_state == RT_GNSS_FIX && (int32_t)(now - s_fix_ms) > STALE_MS) {
-            fix_lost("no new fix");
-        }
+        stale_check(now);
     }
 }
 

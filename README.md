@@ -76,22 +76,23 @@ board behaves exactly as before, and its card says `gnss no NMEA on GPIO20`.
 
 With a fix:
 
-- **Its packets carry its position** — lat/lon/alt, 22 bytes instead of 12. Every board that
-  hears it knows where it was when it sent that packet. The longer packet is slightly easier to
-  lose at the edge of range; that is the price.
-- **Positions have momentum.** Fixes come once a second and packets four times, so between
-  fixes each packet's position is pushed along the drone's own motion (from its last two fixes),
-  by how many seqs have gone out since the fix — capped at 2 s. Marks spread out along the
-  flight path instead of stacking four deep, and the same seq gets the same position everywhere.
+- **Its packets carry its position** — 18 bytes instead of 12: the fraction of a degree of
+  lat/lon at 1e-5° (~1 m) plus altitude. The whole degrees are filled in by the page from the
+  phone's GPS, the drone's own log, or the last position it saw. The longer packet is slightly
+  easier to lose at the edge of range; that is the price.
+- **Positions have momentum.** Velocity is tracked as a 2 s EMA of fix-to-fix motion, and each
+  packet's position runs smoothly along it between fixes, easing onto each new fix. If fixes
+  stop it coasts on for about a second's worth and comes back to the last real fix; after 10 s
+  without a fix the position is withdrawn. The same seq gets the same position everywhere.
 - **It logs where it was when it heard things.** Every packet it receives is recorded against
   its own track, and its own fixes are recorded with its sequence counters, so it can later say
   exactly which position every packet it *sent* carried — including the ones nobody heard.
 - **Every board logs packets that have a position attached** — from a GNSS sender, or heard
-  by a GNSS receiver. The log is a RAM ring (no flash writes). At boot the board runs through
-  every mode once, before the antenna is powered, and then takes what the heap's low-water mark
-  says is spare, so no later mode change can run short. The card shows it as `log n/N blocks`.
-  When it fills, the oldest goes first. A moving drone costs a board hearing it about 10 bytes
-  a packet; the drone logs about 5 bytes per packet it hears, plus 30 a second for its fixes.
+  by a GNSS receiver. The log is a fixed 32 KB RAM ring (`RT_LOG_BYTES`, no flash writes),
+  taken first thing at boot. When it fills, the oldest goes first. A moving drone costs a board
+  hearing it about 8 bytes a packet; the drone logs about 5 bytes per packet it hears, plus 34 a
+  second for its fixes. The serial report prints heap free, lowest and largest free block, to
+  size it from.
 
 On the page, each GNSS board gets its own track and a ◆ marker with its altitude, separate from
 the phone's. Everything is matched by sequence number — the one thing the sender and every
@@ -105,8 +106,9 @@ newest first, so the live picture is immediate, then the backlog as fast as the 
 the rate grows while NimBLE accepts every notification and halves the moment it refuses one,
 report or log. The card shows `fetching, n behind` until it is done.
 
-**Every board needs v7 firmware and the page redeployed.** An older board discards the 22-byte
-packets as foreign, so it stops hearing a GNSS board the moment that board gets a fix.
+**Every board needs v7 firmware and the page redeployed.** An older board discards the 18-byte
+packets as foreign, so it stops hearing a GNSS board the moment that board gets a fix. Marks that
+land on the same spot are spread by up to a metre when drawn, so they stay distinct.
 
 ## If it won't boot: the bring-up ladder
 

@@ -206,37 +206,41 @@ together.
 
 Decisions, and why:
 
-- **Coordinates go in the measurement packet** (the owner's call): lat/lon/alt, a 10-byte
-  extension, 22 bytes instead of 12, only while the sender has a fix. Receivers accept exactly
-  those two lengths. The cost is real — a longer frame is a bigger target for bit errors at the
-  edge — and is accepted. A toggle to send the plain 12 bytes from a GNSS board would be easy to
-  add if the bias ever matters.
+- **Coordinates go in the measurement packet** (the owner's call): 6 bytes, 18 in all, only
+  while the sender has a fix. Only the fraction of a degree travels, at 1e-5° (~1 m) — the owner's
+  idea: the whole degrees are the same for everything in a range test, so the page supplies them
+  from the nearest full position it knows (the GNSS board's own log, the phone, or the last seen).
+  The cost of any extension is real — a longer frame is a bigger target for bit errors at the
+  edge — and is accepted.
 - **Everything is keyed by (sender, channel, seq)** — the owner's correction of a first version
   that keyed fixes by GNSS time. The seq is the one thing the sender and every receiver already
   agree on with no arithmetic, and GNSS time would have had to ride in every packet for the
   receivers to know it. That keying is what lets the page merge every receiver's view of one
   sender into one track: "if A heard 1,3,5 and B heard 1,2,6, the line goes 1,2,3,5,6", with a
   miss per receiver for what it did not hear — the owner's words, and a hard requirement.
-- **Momentum** (owner's request): between fixes, a packet carries the fix pushed along the
-  motion between the last two fixes, by (seq - seq at the fix) x the channel's nominal period,
-  capped at 2 s. Just enough that marks between fixes do not stack; never enough to fly off.
-  Computed from the seq, not the clock, so it is a pure function of (fix, seq): `rt_geo_at()` in
-  `rt.h`, copied exactly (integer, truncating) as `geoAt()` in the page. The same seq has the same
-  fake position in the packet, in every receiver's log and in the sender's own.
+- **Momentum** (owner's request, and their correction of a first version that extrapolated from
+  the last two fixes and stopped dead after 2 s — which is exactly the pile-up it was meant to
+  prevent). Velocity is a 2 s EMA of fix-to-fix motion, tracked in floats relative to the first
+  good fix. The published track eases onto each new fix (1 s) from wherever it was, so it never
+  jumps, and carries on along the velocity with a profile that follows steady flight closely,
+  overshoots a little when the drone stops, and returns to the last real fix within a few
+  seconds when fixes stop. Evaluated per packet from (fix, seq) with integer lookup tables
+  (`RT_GEO_W`/`RT_GEO_G` in `rt.h`, copied number for number into the page), so the same seq has
+  the same position in the packet, in every receiver's log and in the sender's own. Marks that
+  still coincide are spread by up to a metre at draw time — display only.
 - **The sender's own log records the sequence counters at each fix**, not a record per packet
   sent. One lock covers the fix and the counters (`rt_stats.c`), so "from seq N on, packets
   carried fix F, moved on by momentum" reproduces exactly what went on the air, at one record per
   second instead of ten.
-- **The log is RAM only.** The standing rule is no flash logging — flash writes stall the chip,
-  and a stalled receiver is its own source of lost packets. So the ring must fit alongside the
-  radios, and it is sized only **after every mode has been exercised**: at boot, before the
-  antenna switch is powered, `exercise_modes()` in `main.c` runs every low-contention mode and an
-  LR on/off, and the log then takes the heap's *low-water mark* minus a small margin. Everything
-  the radios will ever want at once has already been wanted once. It costs ~6 s of boot. The log
-  keeps the newest data, which for a flight means the part since you lost the link.
+- **The log is RAM only**, a fixed `RT_LOG_BYTES` (32 KB for now), allocated first thing at
+  boot so it is one clean block nothing can fragment around. The size is to be set by the owner
+  from the heap figures the serial report prints (free, lowest ever, largest free block) after
+  real use — a phone connection is exactly the kind of load nothing at boot can fake. An earlier
+  version sized it by cycling every mode at boot; that cost 6 s of boot and still could not see a
+  phone, so it was dropped. The log keeps the newest data.
 - **Compact, because the log's length is flight time.** A received packet is 5 bytes (a short
-  record against a per-block link reference), 10 when it carried a position that moved (a delta
-  on the previous one), 15 when the block has not seen that link yet. A fix is 30 bytes.
+  record against a per-block link reference), 8 when it carried a position that moved (a delta
+  on the previous one), 15 when the block has not seen that link yet. A fix is 34 bytes.
 - **Only packets with a position are logged**: from a GNSS sender, or heard by a board that has
   had a fix. Two plain boards have nothing to add to the results table, which the page already
   pins to the phone's GPS. BLE adverts heard twice for one seq (the beacon holds a seq for
@@ -265,10 +269,10 @@ seq — exactly, if anyone heard it or the sender's own log covers it, interpola
 neighbours until then. Links with no GNSS end are drawn at the phone, as before. The track is
 ordered by when each point was heard (page time), which with momentum is smooth.
 
-Known limits: 1 Hz fixes by default, so a packet's position is a fix up to ~1 s old projected
-forward — close for steady flight, briefly wrong on a sharp turn. GPIO19 is wired so a faster
-rate can be requested later. v6 (the first, GNSS-time version, live for a day) and v7 cannot hear
-each other's positioned packets; the page reads a v6 report but does not fetch a v6 log.
+Known limits: 1 Hz fixes by default, so between fixes the position is the track's estimate —
+close for steady flight, briefly wrong on a sharp turn. GPIO19 is wired so a faster rate can be
+requested later. v6 (the first, GNSS-time version) and v7 cannot hear each other's positioned
+packets; the page reads a v6 report but does not fetch a v6 log.
 
 ## The XIAO RF switch is unpowered out of reset — root cause of everything below
 
