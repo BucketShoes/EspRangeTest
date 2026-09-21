@@ -57,12 +57,12 @@ static void tx_task(void *pv)
             int8_t qdbm = 0;
             esp_wifi_get_max_tx_power(&qdbm);
 
-            rt_pkt_t p;
-            rt_fill(&p, CH_ESPNOW, (int8_t)(qdbm / 4));
+            uint8_t p[RT_PKT_MAX];
+            const int n = rt_fill(p, CH_ESPNOW, (int8_t)(qdbm / 4));
             // A non-OK return here means the driver would not even queue it - the common
             // case is ESP_ERR_ESPNOW_NO_MEM under heavy contention. A queued send that fails
             // in the air is reported later, in on_send().
-            if (esp_now_send(BCAST, (const uint8_t *)&p, sizeof(p)) != ESP_OK) {
+            if (esp_now_send(BCAST, p, n) != ESP_OK) {
                 rt_tx_failed(CH_ESPNOW);
             }
         }

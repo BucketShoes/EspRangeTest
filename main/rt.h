@@ -99,6 +99,84 @@ static inline uint32_t rt_pkt_node(const rt_pkt_t *p)
     return p->node[0] | ((uint32_t)p->node[1] << 8) | ((uint32_t)p->node[2] << 16);
 }
 
+// ---- Where the sender was ----------------------------------------------------------------
+//
+// A board with a GNSS fix appends this to every packet it sends: 14 bytes, 26 in all. A board
+// without one sends the plain 12, exactly as before. Receivers accept those two lengths and
+// nothing else, so the exact-length filter against foreign traffic still holds.
+//
+// It is the fix the sender held at the instant it stamped the sequence number - the same fix,
+// byte for byte, that its own log records against that sequence number (see RT_LOG_* below).
+// That is what lets every receiver's view of one sender be merged into one track: a sequence
+// number means the same place whichever board heard it.
+//
+// utc_ds identifies the fix. It is GNSS time, not either board's clock, so it means the same
+// thing on every receiver and to the phone, and the page uses it to merge the fixes it hears
+// about from different boards into one ordered track.
+//
+// The cost is real and deliberate: a 26-byte packet is a longer target for a bit error than a
+// 12-byte one, so at the edge of range a board with a GNSS fix delivers slightly worse than one
+// without. The owner asked for coordinates in the packet; this is the price, stated.
+typedef struct __attribute__((packed)) {
+    int32_t lat_e7;     // degrees x 1e7
+    int32_t lon_e7;
+    int16_t alt_m;      // metres above mean sea level, from GGA
+    uint8_t utc_ds[3];  // time of the fix, 0.1s units since UTC midnight, little-endian
+    uint8_t hdop_ds;    // HDOP x 10; 255 = unknown or >= 25.5
+} rt_geo_wire_t;
+
+typedef struct __attribute__((packed)) {
+    rt_pkt_t      p;
+    rt_geo_wire_t g;
+} rt_pkt_geo_t;
+
+#define RT_PKT_LEN     ((int)sizeof(rt_pkt_t))       // 12
+#define RT_PKT_GEO_LEN ((int)sizeof(rt_pkt_geo_t))   // 26
+#define RT_PKT_MAX     RT_PKT_GEO_LEN
+
+// The same fix, unpacked, as the GNSS reader produces it and the log records it.
+typedef struct {
+    int32_t  lat_e7, lon_e7;
+    int16_t  alt_m;
+    uint32_t utc_ds;
+    uint8_t  hdop_ds;
+    uint8_t  sats;
+} rt_geo_t;
+
+// ---- GNSS (rt_gnss.c) ----------------------------------------------------------------------
+//
+// Optional. NMEA on UART1: the module's TX goes to GPIO20, its RX to GPIO19. Nothing is sent to
+// the module yet, so the GPIO19 wire is optional. The baud rate is found by trying each common
+// one until a sentence with a valid checksum arrives; with nothing fitted the pin idles on its
+// pull-up and the board simply never has a fix, which is the same as every board before this.
+//
+// The reader publishes each new fix through rt_geo_publish() below, and withdraws it with
+// rt_geo_lost() when the fix drops or goes stale. Between those two calls every packet this
+// board sends carries the fix.
+#define RT_GNSS_NONE 0   // no valid NMEA seen at any baud rate - no module, or not wired
+#define RT_GNSS_NMEA 1   // talking, but no fix
+#define RT_GNSS_FIX  2
+
+typedef struct {
+    uint8_t  state;     // RT_GNSS_*
+    bool     had_fix;   // at some point since boot
+    uint8_t  sats;
+    uint8_t  hdop_ds;
+    uint32_t baud;      // 0 while still searching
+} rt_gnss_st_t;
+
+void rt_gnss_start(void);
+void rt_gnss_status(rt_gnss_st_t *out);
+bool rt_gnss_had_fix(void);
+
+// Hand a new fix to the transmit path, atomically with a snapshot of the sequence counters, and
+// log it. Every sequence number handed out after this call carries this fix, every one before it
+// carried the previous one - which is exactly what the log's fix record says.
+void rt_geo_publish(const rt_geo_t *g);
+void rt_geo_lost(void);
+// The fix packets are currently carrying, if any.
+bool rt_geo_get(rt_geo_t *out);
+
 // 24 bits: mac[3] << 16 | mac[4] << 8 | mac[5]. Printed as six hex digits, matching the name.
 uint32_t rt_node_id(void);
 
@@ -241,6 +319,14 @@ void rt_set_tx_mute(bool mute);
 // So nothing clears itself now. The operator says when a measurement starts.
 #define RT_CMD_STATS_RESET 0x88
 
+// ---- The packet log ----------------------------------------------------------------------
+//
+// Eleven bytes: { 0x8C, u32 session, u32 block, u16 offset }, all little-endian. "I have
+// everything of yours before this point - send me the rest." The board streams its log from
+// there (see RT_LOG_* below) until the connection drops, and does nothing until asked, so a
+// page that does not know about the log costs nothing.
+#define RT_CMD_LOG_FROM 0x8C
+
 // ---- User LED ----------------------------------------------------------------------------
 //
 // The XIAO's LED on GPIO15: off, lit, or blinking at 2Hz - for finding a board in long grass,
@@ -359,7 +445,9 @@ bool rt_wifi_active(void);
 void rt_stats_reset(void);
 
 // Fill in a packet ready to send on this channel, advancing that channel's sequence number.
-void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm);
+// out must hold RT_PKT_MAX bytes. Returns the length to send: RT_PKT_GEO_LEN while this board
+// has a GNSS fix, RT_PKT_LEN otherwise.
+int rt_fill(void *out, int chan, int8_t txdbm);
 
 // The two halves of "did it actually transmit". Both are driven by the radio's own completion
 // callback, not by what we asked for, so together they answer the only question that matters
@@ -443,8 +531,20 @@ void rt_report(void);
 //     tx[3], 16 bytes each, CH_ order:
 //       u32 queued, u32 ok, u32 rejected, u16 offmode_rx, u16 offmode_age_s
 //
+//   v6 appends 20 bytes to the status block, after tx[3] - nothing before it moves:
+//     u8  gnss          bits 0-1 RT_GNSS_* state, bit2 has had a fix since boot
+//     u8  gnss_sats
+//     u8  gnss_hdop     x10, 255 unknown
+//     u8  gnss_baud     baud / 1200, 0 while still searching
+//     u32 log_session   random per boot, never 0 - a board that rebooted has a new log
+//     u32 log_oldest    oldest block still held
+//     u32 log_newest    the block being written now
+//     u16 log_cap       blocks the ring holds, 0 if there was no memory for one
+//     u16 log_bsize     bytes per block
+//
 //   row record (23 bytes, packed end to end after whichever block precedes them)
-//     u24 peer, u8 chan
+//     u24 peer, u8 chan            v6: bit7 of chan = this peer's last packet on this channel
+//                                  carried its position
 //     i8  rssi_last, i8 rssi_avg, i8 rssi_min, i8 rssi_max
 //     i8  pdr_now, i8 pdr_all      -1 where there is no data yet
 //     u32 rx, u32 missed
@@ -467,9 +567,14 @@ void rt_report(void);
 // range-test each other exactly as before, and the only difference is one byte of offset in
 // the report. The page decodes both, which is what keeps "change an LED" from meaning
 // "reflash every board in the drawer".
-#define RT_RPT_VER      5
+//
+// v6 is not that kind of bump, and says so: the measurement packet grew a second length (see
+// rt_pkt_geo_t), and a v5 board discards 26-byte packets as foreign. Mixed v5/v6 fleets still
+// range-test each other while no board has a GNSS fix, and stop hearing a board the moment it
+// gets one. Reflash the lot.
+#define RT_RPT_VER      6
 #define RT_RPT_HDR      4
-#define RT_RPT_STATUS   84
+#define RT_RPT_STATUS   104
 #define RT_RPT_ROW      23
 #define RT_RPT_TYPE_STATUS 0x01
 #define RT_RPT_TYPE_ROWS   0x02
@@ -495,6 +600,87 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st);
 // How many rows this report will contain. Needed up front, because n_rows goes in the status
 // block and the status block goes out first.
 int rt_snapshot_rows(void);
+
+// ---- The packet log (rt_log.c) ---------------------------------------------------------
+//
+// The report above says how each link is doing *now*. It cannot say where anything happened,
+// and it cannot say anything at all about the minutes a drone spent out of range of the phone.
+// The log does both: one record per packet this board heard that has a position attached -
+// either because the sender carried one, or because this board has a GNSS fix of its own -
+// plus this board's own fixes. It lives in RAM, a ring of fixed-size blocks, oldest dropped
+// first, and it is streamed to the phone over the same notify characteristic as the report.
+//
+// Not flash: flash writes stall the chip, and a stalled receiver is its own source of lost
+// packets. So the log holds what fits in the heap that is left over - see the boot line, or
+// log_cap in the report - and on a long flight it keeps the most recent part.
+//
+// Every block stands alone: it starts with its own clock and names every link it refers to, so
+// a block can be decoded without the one before it. That is what lets the board send the newest
+// block first and backfill the older ones behind it, and lets a block dropped off the end of the
+// ring cost only its own records.
+//
+// Block (RT_LOG_BLOCK bytes, used from the front):
+//   u32 t0             board ms when the block was opened; "clock" starts here
+//   records, packed, each starting with a type byte. Event records carry u8 dt: clock advances
+//   by dt x 4ms first. The board rounds against the clock it has already emitted rather than the
+//   raw time, so the error never accumulates past 2ms.
+//
+//   0x01 TIME   (3)  u16 ms             clock += ms. For gaps too long for a u8 dt.
+//   0x02 FIX    (29) dt, i32 lat_e7, i32 lon_e7, i16 alt_m, u24 utc_ds, u8 hdop_ds, u8 sats,
+//                    u32 seq_next[3]
+//                    This board's own new fix. seq_next is each channel's next sequence
+//                    number at that instant: from there until the next FIX or NOFIX, every
+//                    packet on that channel carried this fix.
+//   0x03 NOFIX  (14) dt, u32 seq_next[3]
+//                    Fix lost; packets from seq_next onward carry no position.
+//   0x04 RX     (15) dt, u24 node, u8 chan (bit7 = carried the sender's current PFIX),
+//                    i8 ptx, u32 seq, u16 gap, i8 rssi, u8 q
+//                    A packet heard, and a new link reference: the Nth RX record in a block
+//                    is ref N, for the RXS records that follow. gap is seq minus the previous
+//                    sequence number heard on this link (0 = unknown), so gap-1 were missed -
+//                    the same arithmetic as the results table, done where the table is.
+//   0x05 PFIX   (18) u24 node, i32 lat_e7, i32 lon_e7, i16 alt_m, u24 utc_ds, u8 hdop_ds
+//                    Where that node said it was. Written once per fix per block, before the
+//                    first packet carrying it.
+//   0x80+ RXS   (5)  type = 0x80 | geo << 6 | ref, dt, u8 gap, i8 rssi, u8 q
+//                    A packet heard on an existing ref: seq = that ref's last seq + gap.
+//
+//   q is the channel's quality figure: SNR in dB (as i8) on espnow, LQI on 154, 0 on ble_adv.
+//
+// Streamed as notifications of type 0x03, alongside the report's 0x01/0x02 chunks:
+//   u8 0x03, u8 flags (bit0 = this reaches the end of a closed block), u32 session, u32 block,
+//   u16 offset, then block bytes [offset, offset + n). n may be 0 when all that is left to say
+//   is that the block closed.
+#define RT_LOG_BLOCK       1024
+#define RT_LOG_HDR         12
+#define RT_LOG_TYPE        0x03
+
+typedef struct {
+    uint32_t block;
+    uint16_t off;
+} rt_log_cur_t;
+
+// Allocate the ring from whatever heap is left once the radios are up. Before this - or if
+// there was no memory - every appender below is a no-op.
+void rt_log_init(void);
+
+// Appenders. Safe from any context including ISRs: 802.15.4 delivers packets from one.
+void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT]);
+void rt_log_nofix(const uint32_t seq_next[CH_COUNT]);
+void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, int8_t rssi,
+               uint8_t q, const rt_geo_t *sender);
+
+typedef struct {
+    uint32_t session, oldest, newest;
+    uint16_t cap, bsize;
+} rt_log_st_t;
+
+void rt_log_status(rt_log_st_t *out);
+
+// Build one notification's worth of log starting at *c, at most cap bytes. Returns the length,
+// or 0 if there is nothing to send from there yet. Does not move *c: on a successful send the
+// caller copies *adv into it, so a notification that fails to queue is simply built again.
+int rt_log_chunk(const rt_log_cur_t *c, uint8_t *out, int cap, rt_log_cur_t *adv);
 
 void rt_espnow_start(void);
 void rt_ble_start(void);

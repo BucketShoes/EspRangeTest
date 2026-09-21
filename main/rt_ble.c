@@ -115,22 +115,20 @@ void rt_ble_apply_power(void)
 static bool    s_scanning;
 static bool    s_scan_solo;   // which duty cycle s_scanning is currently running at
 
-// Advertising payload: one manufacturer-specific AD structure wrapping rt_pkt_t.
+// Advertising payload: one manufacturer-specific AD structure wrapping the packet - 12 bytes, or
+// 26 while this board has a GNSS fix.
 static int set_adv_data(void)
 {
-    rt_pkt_t p;
-    rt_fill(&p, CH_BLE_ADV, s_adv_power);
+    uint8_t ad[2 + RT_PKT_MAX];
+    const int n = rt_fill(&ad[2], CH_BLE_ADV, s_adv_power);
+    ad[0] = (uint8_t)(1 + n);  // length of what follows
+    ad[1] = 0xFF;              // manufacturer specific data
 
-    uint8_t ad[2 + sizeof(rt_pkt_t)];
-    ad[0] = 1 + sizeof(rt_pkt_t);  // length of what follows
-    ad[1] = 0xFF;                  // manufacturer specific data
-    memcpy(&ad[2], &p, sizeof(p));
-
-    struct os_mbuf *buf = os_msys_get_pkthdr(sizeof(ad), 0);
+    struct os_mbuf *buf = os_msys_get_pkthdr(2 + n, 0);
     if (buf == NULL) {
         return BLE_HS_ENOMEM;
     }
-    int rc = os_mbuf_append(buf, ad, sizeof(ad));
+    int rc = os_mbuf_append(buf, ad, 2 + n);
     if (rc != 0) {
         os_mbuf_free_chain(buf);
         return rc;
@@ -200,10 +198,10 @@ static void handle_adv_report(const struct ble_gap_ext_disc_desc *d)
         if (len < 1 || len > rem - 1) {
             return;
         }
-        // Exactly our length, not merely long enough. Manufacturer-specific adverts are
-        // everywhere and vary in size; insisting on the one length we emit throws away almost
+        // Exactly one of our lengths, not merely long enough. Manufacturer-specific adverts are
+        // everywhere and vary in size; insisting on the two lengths we emit throws away almost
         // all of them before the magic is even looked at.
-        if (type == 0xFF && len - 1 == (int)sizeof(rt_pkt_t)) {
+        if (type == 0xFF && (len - 1 == RT_PKT_LEN || len - 1 == RT_PKT_GEO_LEN)) {
             rt_rx(&p[2], len - 1, CH_BLE_ADV, d->rssi, 0, RT_NOISE_NONE);  // no noise floor
             return;
         }

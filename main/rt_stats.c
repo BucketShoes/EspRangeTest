@@ -132,6 +132,7 @@ typedef struct {
     uint8_t  lqi;
     int8_t   noise;      // RT_NOISE_NONE where the radio does not measure one
     int8_t   peer_txdbm; // what the far end said it transmitted at, from the packet itself
+    bool     geo;        // the last packet on this link carried the sender's position
     uint32_t last_ms;
 } rt_link;
 
@@ -139,7 +140,18 @@ static struct {
     bool     used;
     uint32_t node;   // rt_node_id() of the sender
     rt_link  ch[CH_COUNT];
+    bool     has_geo;
+    rt_geo_t geo;    // the most recent position it sent, on any channel
+    uint32_t geo_ms;
 } s_peers[RT_MAX_PEERS];
+
+// The fix every packet sent from here carries, while s_geo_valid. Published by the GNSS reader;
+// read by rt_fill(). One lock covers the fix *and* the sequence counters, which is the whole
+// point of it: a fix and the counter snapshot logged with it have to describe the same instant,
+// or the log would claim a packet carried a fix it did not.
+static portMUX_TYPE s_geo_mux = portMUX_INITIALIZER_UNLOCKED;
+static rt_geo_t     s_geo;
+static bool         s_geo_valid;
 
 static uint32_t s_tx_seq[CH_COUNT];
 static uint32_t s_tx_count[CH_COUNT];
@@ -330,16 +342,86 @@ void rt_set_lc(int lc)
     printf("\n>>> low contention = %s\n", lc_name(lc));
 }
 
-void rt_fill(rt_pkt_t *p, int chan, int8_t txdbm)
+static void geo_to_wire(rt_geo_wire_t *w, const rt_geo_t *g)
 {
-    p->magic = RT_MAGIC;
+    w->lat_e7    = g->lat_e7;
+    w->lon_e7    = g->lon_e7;
+    w->alt_m     = g->alt_m;
+    w->utc_ds[0] = (uint8_t)g->utc_ds;
+    w->utc_ds[1] = (uint8_t)(g->utc_ds >> 8);
+    w->utc_ds[2] = (uint8_t)(g->utc_ds >> 16);
+    w->hdop_ds   = g->hdop_ds;
+}
+
+static void geo_from_wire(rt_geo_t *g, const rt_geo_wire_t *w)
+{
+    g->lat_e7  = w->lat_e7;
+    g->lon_e7  = w->lon_e7;
+    g->alt_m   = w->alt_m;
+    g->utc_ds  = w->utc_ds[0] | ((uint32_t)w->utc_ds[1] << 8) | ((uint32_t)w->utc_ds[2] << 16);
+    g->hdop_ds = w->hdop_ds;
+    g->sats    = 0;   // not carried; only the sender's own log has it
+}
+
+void rt_geo_publish(const rt_geo_t *g)
+{
+    uint32_t seq_next[CH_COUNT];
+    portENTER_CRITICAL(&s_geo_mux);
+    s_geo       = *g;
+    s_geo_valid = true;
+    memcpy(seq_next, s_tx_seq, sizeof(seq_next));
+    portEXIT_CRITICAL(&s_geo_mux);
+    rt_log_fix(g, seq_next);
+}
+
+void rt_geo_lost(void)
+{
+    uint32_t seq_next[CH_COUNT];
+    portENTER_CRITICAL(&s_geo_mux);
+    const bool was = s_geo_valid;
+    s_geo_valid = false;
+    memcpy(seq_next, s_tx_seq, sizeof(seq_next));
+    portEXIT_CRITICAL(&s_geo_mux);
+    if (was) {
+        rt_log_nofix(seq_next);
+    }
+}
+
+bool rt_geo_get(rt_geo_t *out)
+{
+    portENTER_CRITICAL(&s_geo_mux);
+    const bool v = s_geo_valid;
+    if (v) {
+        *out = s_geo;
+    }
+    portEXIT_CRITICAL(&s_geo_mux);
+    return v;
+}
+
+int rt_fill(void *out, int chan, int8_t txdbm)
+{
+    rt_pkt_geo_t p;
+    p.p.magic = RT_MAGIC;
     const uint32_t id = rt_node_id();
-    p->node[0] = (uint8_t)id;
-    p->node[1] = (uint8_t)(id >> 8);
-    p->node[2] = (uint8_t)(id >> 16);
-    p->txdbm = txdbm;
-    p->seq   = s_tx_seq[chan]++;
+    p.p.node[0] = (uint8_t)id;
+    p.p.node[1] = (uint8_t)(id >> 8);
+    p.p.node[2] = (uint8_t)(id >> 16);
+    p.p.txdbm = txdbm;
+
+    // The sequence number and the fix are taken together, under the lock rt_geo_publish() holds
+    // while it snapshots the counters - see s_geo_mux.
+    portENTER_CRITICAL(&s_geo_mux);
+    p.p.seq = s_tx_seq[chan]++;
+    const bool geo = s_geo_valid;
+    if (geo) {
+        geo_to_wire(&p.g, &s_geo);
+    }
+    portEXIT_CRITICAL(&s_geo_mux);
+
     s_tx_count[chan]++;
+    const int n = geo ? RT_PKT_GEO_LEN : RT_PKT_LEN;
+    memcpy(out, &p, n);
+    return n;
 }
 
 void rt_tx_ok(int chan)
@@ -358,9 +440,10 @@ void rt_tx_failed(int chan)
 
 void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t noise)
 {
-    // Exact length, on every channel. Our packets are always exactly this size, so anything
-    // else is somebody else's - one more filter applied before the magic, for free.
-    if (len != (int)sizeof(rt_pkt_t) || chan < 0 || chan >= CH_COUNT) {
+    // Exact length, on every channel. Our packets are always exactly one of these two sizes -
+    // plain, or carrying the sender's position - so anything else is somebody else's: one more
+    // filter applied before the magic, for free.
+    if ((len != RT_PKT_LEN && len != RT_PKT_GEO_LEN) || chan < 0 || chan >= CH_COUNT) {
         return;
     }
     // A reception on a channel this mode is not measuring is a bug caught red-handed, not
@@ -377,12 +460,18 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
         return;
     }
 
-    rt_pkt_t p;
-    memcpy(&p, data, sizeof(p));
+    rt_pkt_geo_t pg;
+    memcpy(&pg, data, len);
+    const rt_pkt_t p = pg.p;
     if (p.magic != RT_MAGIC) {
         return;
     }
     const uint32_t node = rt_pkt_node(&p);
+    const bool     has_geo = (len == RT_PKT_GEO_LEN);
+    rt_geo_t       geo;
+    if (has_geo) {
+        geo_from_wire(&geo, &pg.g);
+    }
 
     int slot = -1;
     for (int i = 0; i < RT_MAX_PEERS; i++) {
@@ -408,6 +497,12 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     rt_link *l = &s_peers[slot].ch[chan];
     rt_pdr_bucket *b = pdr_bucket(l, rt_ms());
 
+    // For the log: the same gap the table counts losses from, 0 where the table would not trust
+    // it either. And whether this is the same sequence number again - BLE reports an advert
+    // every time it is repeated, and the log records packets, not repeats.
+    uint32_t log_gap = 0;
+    bool     repeat  = false;
+
     if (l->seen) {
         const uint32_t gap = p.seq - l->last_seq;
         // Sane gaps only; a reboot or a mode change restarts numbering and would otherwise
@@ -415,6 +510,11 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
         if (gap > 1 && gap < 1000) {
             l->missed  += gap - 1;
             b->missed  += gap - 1;
+        }
+        if (gap == 0) {
+            repeat = true;
+        } else if (gap < 1000) {
+            log_gap = gap;
         }
     } else {
         l->seen     = true;
@@ -439,6 +539,22 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     // is, and the number to watch when walking.
     l->peer_txdbm = p.txdbm;
     l->last_ms = rt_ms();
+    l->geo = has_geo;
+    if (has_geo) {
+        s_peers[slot].has_geo = true;
+        s_peers[slot].geo     = geo;
+        s_peers[slot].geo_ms  = l->last_ms;
+    }
+
+    // Into the log only when it has somewhere to be: the sender said where it was, or this
+    // board knows where *it* is. Two boards without GNSS have nothing to add over the table,
+    // which the page already pins to the phone's own position.
+    if (!repeat && (has_geo || rt_gnss_had_fix())) {
+        const uint8_t q = chan == CH_154              ? lqi
+                        : noise != RT_NOISE_NONE      ? (uint8_t)(int8_t)(rssi - noise)
+                                                      : 0;
+        rt_log_rx(node, chan, p.txdbm, p.seq, log_gap, rssi, q, has_geo ? &geo : NULL);
+    }
 }
 
 // ---- packed report -------------------------------------------------------------------------
@@ -593,6 +709,21 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
             n = put_u16(out, n, s_rx_offmode[c]
                                 ? age_ms(now, s_rx_offmode_ms[c]) / 1000 : 0);
         }
+
+        // v6: GNSS and the log, appended so nothing before them moves.
+        rt_gnss_st_t gs;
+        rt_gnss_status(&gs);
+        rt_log_st_t ls;
+        rt_log_status(&ls);
+        n = put_u8(out, n, (uint8_t)((gs.state & 3) | (gs.had_fix ? 4 : 0)));
+        n = put_u8(out, n, gs.sats);
+        n = put_u8(out, n, gs.hdop_ds);
+        n = put_u8(out, n, (uint8_t)(gs.baud / 1200 > 255 ? 255 : gs.baud / 1200));
+        n = put_u32(out, n, ls.session);
+        n = put_u32(out, n, ls.oldest);
+        n = put_u32(out, n, ls.newest);
+        n = put_u16(out, n, ls.cap);
+        n = put_u16(out, n, ls.bsize);
         // The page decodes this block at fixed offsets, so a field added here without updating
         // RT_RPT_STATUS - and the matching reader - would silently shift every row that
         // follows. Say so loudly instead; a wrong offset is not a thing to discover from a
@@ -620,7 +751,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         const int      snr  =(l->noise == RT_NOISE_NONE) ? -128 : (l->rssi_last - l->noise);
 
         n = put_u24(out, n, peer);
-        n = put_u8(out, n, chan);
+        n = put_u8(out, n, (uint8_t)(chan | (l->geo ? 0x80 : 0)));
         n = put_u8(out, n, (uint8_t)l->rssi_last);
         n = put_u8(out, n, (uint8_t)mean);
         n = put_u8(out, n, (uint8_t)l->rssi_min);
@@ -647,6 +778,26 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
     out[3] = last ? 0x01 : 0x00;
     st->chunk++;
     return n;
+}
+
+// Degrees to seven places without the float formatter, which CONFIG_NEWLIB_NANO_FORMAT leaves
+// out of the image.
+static void print_e7(int32_t v)
+{
+    const uint32_t a = v < 0 ? (uint32_t)(-(int64_t)v) : (uint32_t)v;
+    printf("%s%lu.%07lu", v < 0 ? "-" : "", (unsigned long)(a / 10000000),
+           (unsigned long)(a % 10000000));
+}
+
+static void print_geo(const rt_geo_t *g)
+{
+    print_e7(g->lat_e7);
+    printf(",");
+    print_e7(g->lon_e7);
+    printf(" %dm", g->alt_m);
+    if (g->hdop_ds != 255) {
+        printf(" hdop %u.%u", g->hdop_ds / 10, g->hdop_ds % 10);
+    }
 }
 
 void rt_report(void)
@@ -702,6 +853,31 @@ void rt_report(void)
            (unsigned long)esp_get_free_heap_size(),
            (unsigned long)esp_get_minimum_free_heap_size());
 
+    // Said every report, including "none": a GNSS that is wired but silent and one that is not
+    // fitted look identical from everywhere else, and the difference is a loose wire.
+    rt_gnss_st_t gs;
+    rt_gnss_status(&gs);
+    rt_geo_t me;
+    if (gs.state == RT_GNSS_NONE) {
+        printf("  gnss: no NMEA on GPIO20 at any baud rate\n");
+    } else if (!rt_geo_get(&me)) {
+        printf("  gnss: %lu baud, no fix (%u sats)\n", (unsigned long)gs.baud, gs.sats);
+    } else {
+        printf("  gnss: fix ");
+        print_geo(&me);
+        printf("  %u sats, %lu baud - packets carry it\n", me.sats, (unsigned long)gs.baud);
+    }
+    rt_log_st_t ls;
+    rt_log_status(&ls);
+    if (ls.cap) {
+        const uint32_t held = ls.newest - ls.oldest + 1;
+        printf("  log: %lu/%u blocks (%lu of %lu KB), session %08lX\n", (unsigned long)held,
+               ls.cap, (unsigned long)(held * ls.bsize / 1024),
+               (unsigned long)((uint32_t)ls.cap * ls.bsize / 1024), (unsigned long)ls.session);
+    } else {
+        printf("  log: none (no memory)\n");
+    }
+
     // Loud, and repeated for as long as it stands. A packet arriving on a channel this mode
     // says is off is a bug, and it is spending airtime that another channel was promised.
     // With the age of the most recent one, because a count on its own cannot say whether this
@@ -749,7 +925,16 @@ void rt_report(void)
             if (c == CH_154) {
                 printf(" lqi %u", l->lqi);
             }
+            if (l->geo) {
+                printf(" +pos");
+            }
             printf("\n");
+        }
+        if (s_peers[i].has_geo) {
+            printf("  %06lX was at ", (unsigned long)s_peers[i].node);
+            print_geo(&s_peers[i].geo);
+            printf("  (%lus ago)\n",
+                   (unsigned long)(age_ms(now, s_peers[i].geo_ms) / 1000));
         }
     }
     if (!any) {

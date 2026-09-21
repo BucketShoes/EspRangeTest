@@ -189,11 +189,67 @@ design" are now wrong.
   than an assumed one — but selecting external with nothing fitted still takes the board off
   the air, which is why it boots internal every time and never remembers otherwise.
 - The pins this firmware touches are GPIO9 (BOOT button), GPIO3 (RF switch power), GPIO14
-  (port select) and GPIO15 (user LED, floating until asked for). Nothing else; keep it that
-  way.
+  (port select), GPIO15 (user LED, floating until asked for), and GPIO19/20 for an optional
+  GNSS on UART1 (owner's choice, 2026-09-22: module TX → GPIO20, module RX ← GPIO19). Nothing
+  else; keep it that way. UART0 (GPIO16/17) is the console.
 - The chip antenna is **worse than the IPEX**, and worse than the PCB antennas on the dev
   modules. So absolute distances from XIAO runs are not comparable with earlier DevKit runs.
   Comparisons *between channels within one run* still are, which is what matters.
+
+## GNSS and the packet log (2026-09-22)
+
+The use case, from the owner: a GNSS module on a drone's board, flown around boards on the
+ground, measuring range in both directions — what the drone hears from them and what they hear
+from it. The drone will be out of control-channel range for much of a flight. Usually there is
+only one GNSS in the network. Altitude filtering may come later; for now everything is plotted
+together.
+
+Decisions, and why:
+
+- **Coordinates go in the measurement packet** (the owner's call), as a 14-byte extension:
+  26 bytes instead of 12, only while the sender has a fix. Receivers accept exactly those two
+  lengths. The cost is real — a longer frame is a bigger target for bit errors at the edge — and
+  is accepted. A toggle to send the plain 12 bytes from a GNSS board would be easy to add if the
+  bias ever matters.
+- **The fix is identified by its GNSS UTC time**, which every board and the phone agree on
+  without any clock sync. That is what lets the page merge every receiver's view of one sender
+  into one track: "if A heard 1,3,5 and B heard 1,2,6, the line goes 1,2,3,5,6", with a miss
+  per receiver for what it did not hear — the owner's words, and a hard requirement.
+- **The sender's own log records the sequence counters at each fix**, not a record per packet
+  sent. The fix a packet carries is always the latest one published before its sequence number
+  was stamped (one lock covers both, in `rt_stats.c`), so "from seq N on, packets carried fix F"
+  reproduces exactly what went on the air, at one record per second instead of ten.
+- **The log is RAM only.** The standing rule is no flash logging — flash writes stall the chip,
+  and a stalled receiver is its own source of lost packets. So the ring is whatever heap is left
+  after the radios plus a margin (`HEAP_KEEP` in `rt_log.c`, 56 KB, because Wi-Fi reallocates
+  buffers on every mode change). It keeps the newest data, which for a flight means the part
+  since you lost the link. Its size is in every report.
+- **Only packets with a position are logged**: from a GNSS sender, or heard by a board that has
+  had a fix. Two plain boards have nothing to add to the results table, which the page already
+  pins to the phone's GPS.
+- **Blocks stand alone.** Each 1 KB block carries its own clock and names every link it uses,
+  and every received-packet record carries its own gap (misses before it, from the same
+  arithmetic as the table). So blocks can be sent out of order, twice, or lost off the end of
+  the ring, and each still decodes. That is what allows **live first, backlog behind**: connect
+  to a grounded board mid-flight and the drone's position is on the map within a second, not
+  after the board has described the last twenty minutes.
+- **The download is rationed**, per the "control channel is sacred" rule: 2 notifications per
+  report on coded PHY (~3% of air), 6 on 2M, 1 in the espnow/154 isolation modes — and never
+  when that would leave the next report short of buffers. The report is never skipped for it.
+- **The page only asks.** A board streams nothing until the page sends `RT_CMD_LOG_FROM` with
+  its cursor, so older pages cost nothing, and a reconnect resumes where the page actually got
+  to rather than where the board thinks it got to.
+
+Placement rules on the page: a packet that carried the sender's position is drawn there (the
+sender is the GNSS end). Otherwise, a packet heard by a GNSS board is drawn where the receiver
+was. A missed packet from a GNSS sender is placed by sequence number — exactly, if anyone heard
+it or the sender's own log covers it, and interpolated between neighbours until then. Links with
+no GNSS end are drawn at the phone, as before.
+
+Known limits: 1 Hz fixes by default, so a packet carries a position up to ~1 s old (plus NMEA
+latency) — around 10 m at drone speed. GPIO19 is wired so a faster rate can be requested later.
+Stockpile length depends on the heap left and on traffic: a drone hearing three boards on three
+channels logs roughly 200 bytes a second.
 
 ## The XIAO RF switch is unpowered out of reset — root cause of everything below
 

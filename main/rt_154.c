@@ -257,7 +257,7 @@ static void tx_task(void *pv)
         report_tx_errors();
         apply_rx_gate();
         if (rt_tx_enabled(CH_154) && !g_tx_mute) {
-            uint8_t frame[1 + HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN];
+            uint8_t frame[1 + HDR_LEN + RT_PKT_MAX + FCS_LEN];
             uint8_t *f = &frame[1];
 
             // Data frame, short dest + short src, PAN ID compressed, no ack requested
@@ -272,11 +272,9 @@ static void tx_task(void *pv)
             f[7] = (uint8_t)rt_node_id();          // short source address: the low two bytes
             f[8] = (uint8_t)(rt_node_id() >> 8);   // of the node id, which the payload has all of
 
-            rt_pkt_t p;
-            rt_fill(&p, CH_154, s_txpower);
-            memcpy(&f[HDR_LEN], &p, sizeof(p));
+            const int n = rt_fill(&f[HDR_LEN], CH_154, s_txpower);
 
-            frame[0] = HDR_LEN + sizeof(rt_pkt_t) + FCS_LEN;  // PSDU length incl. FCS
+            frame[0] = (uint8_t)(HDR_LEN + n + FCS_LEN);  // PSDU length incl. FCS
 
             // ok/failed is the verdict on the packet, not on an attempt - so queued still
             // equals ok + failed however many refusals happened along the way. The refusals
@@ -309,7 +307,8 @@ static void tx_task(void *pv)
 // that as well as the magic.
 static bool frame_is_ours(const uint8_t *f, int psdu)
 {
-    if (psdu != HDR_LEN + (int)sizeof(rt_pkt_t) + FCS_LEN) {
+    // Plain, or carrying the sender's position - see rt_pkt_geo_t.
+    if (psdu != HDR_LEN + RT_PKT_LEN + FCS_LEN && psdu != HDR_LEN + RT_PKT_GEO_LEN + FCS_LEN) {
         return false;
     }
     // FCF: type = data, PAN ID compression set.

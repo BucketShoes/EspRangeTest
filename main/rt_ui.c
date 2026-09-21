@@ -80,6 +80,27 @@ static const char *TAG = "ui";
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
 #define CONN_TIMEOUT_SLOW 1000 // -> 10s. Must clear (1+4)*750ms*2 = 7.5s; 8s left no margin.
 
+// The packet log rides behind the report, and is rationed.
+//
+// Two cursors. The live one follows the block being written, so what is happening now reaches
+// the phone within a report period whatever else is queued - connect to a grounded board and
+// the drone's latest position is on the map at once, not after the board has finished
+// describing the last twenty minutes. The backfill one works through whatever the page is
+// missing, oldest first, at a fixed number of notifications per report - never enough to
+// matter to whatever channel is under test. On coded S=8 a full notification is ~16ms of air,
+// so two a second is ~3%; 2M is ~16x cheaper, so it gets more.
+//
+// Every block stands alone (see rt.h), which is what makes sending them out of order safe.
+#define LOG_LIVE_MAX   2   // per report; live is small, this only bounds a burst
+#define LOG_BACK_CODED 2
+#define LOG_BACK_FAST  6   // 2M or 1M actually in use
+#define LOG_BACK_SLOW  1   // the espnow/154 isolation modes, where this link is meant to idle
+
+// Log notifications stop while fewer than this many mbufs are free, so a backfill can never
+// leave the next report without buffers to go out in. The report is the one that must not be
+// skipped; the log waits.
+#define LOG_MBUF_KEEP  8
+
 // The report is never skipped, in any mode. A run whose numbers were not delivered did not
 // happen, and a low-contention mode whose results never arrive is the most expensive kind of
 // nothing - so airtime is bought by *slowing* this link (interval, advert rate), never by
@@ -100,6 +121,23 @@ static bool     s_subscribed;
 static uint8_t  s_own_addr_type;
 static char     s_name[16];
 static int      s_last_lc = -1;  // forces the first apply_lc_ble_params() to actually run
+
+// Bumped on every connection. A log request belongs to the connection it arrived on; one left
+// over from a phone that has since gone is not something to keep streaming for.
+static volatile uint32_t s_conn_gen;
+
+// A log request, from the host task, picked up by rt_ui_notify() on the report task - which owns
+// the stream and is the only thing that touches it.
+static volatile bool     s_log_req;
+static volatile uint32_t s_log_req_gen, s_log_req_session, s_log_req_block;
+static volatile uint16_t s_log_req_off;
+
+static struct {
+    bool         on;
+    uint32_t     gen;
+    rt_log_cur_t live, back;
+    uint32_t     back_end;    // backfill stops here; the live cursor started from it
+} s_log;
 
 static int start_adv(void);
 
@@ -209,14 +247,28 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
     (void)conn_handle; (void)attr_handle; (void)arg;
 
     // One byte for the mode and LR commands, two for a power set - a dBm value does not fit
-    // usefully in the spare bits of the first byte, and signed.
-    uint8_t  b[2] = { 0, 0 };
-    uint16_t len  = 0;
+    // usefully in the spare bits of the first byte, and signed - and eleven for a log request.
+    uint8_t  b[16] = { 0 };
+    uint16_t len   = 0;
     if (ble_hs_mbuf_to_flat(ctxt->om, b, sizeof(b), &len) != 0 || len < 1) {
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    if (b[0] == RT_CMD_LR_OFF || b[0] == RT_CMD_LR_ON) {
+    if (b[0] == RT_CMD_LOG_FROM) {
+        if (len < 11) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        uint32_t session, block;
+        uint16_t off;
+        memcpy(&session, &b[1], 4);
+        memcpy(&block, &b[5], 4);
+        memcpy(&off, &b[9], 2);
+        s_log_req_session = session;
+        s_log_req_block   = block;
+        s_log_req_off     = off;
+        s_log_req_gen     = s_conn_gen;
+        s_log_req         = true;
+    } else if (b[0] == RT_CMD_LR_OFF || b[0] == RT_CMD_LR_ON) {
         rt_set_lr(b[0] == RT_CMD_LR_ON);
     } else if (b[0] == RT_CMD_ANT_INT || b[0] == RT_CMD_ANT_EXT) {
         rt_set_antenna(b[0] == RT_CMD_ANT_EXT);
@@ -279,6 +331,7 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
             s_conn_phy_actual = 0;
+            s_conn_gen++;
             ESP_LOGI(TAG, "phone connected");
             // Whichever PHY is currently selected. If the phone declines, the link simply
             // stays on 1M - this must never be allowed to cost us the UI connection, so the
@@ -424,6 +477,74 @@ void rt_ui_on_sync(uint8_t own_addr_type)
     }
 }
 
+// Start streaming from where the page says it is up to. A request from another life of this
+// board - it rebooted, and the page is holding a cursor into a log that no longer exists - or
+// from before the oldest block still held, gets everything there is instead.
+static void log_begin(uint32_t session, uint32_t block, uint16_t off)
+{
+    rt_log_st_t ls;
+    rt_log_status(&ls);
+    if (ls.cap == 0) {
+        s_log.on = false;
+        return;
+    }
+    if (session != ls.session || block > ls.newest || block < ls.oldest) {
+        block = ls.oldest;
+        off   = 0;
+    }
+    s_log.on       = true;
+    s_log.gen      = s_conn_gen;
+    s_log.back_end = ls.newest;
+    s_log.back     = (rt_log_cur_t){ block, off };
+    s_log.live     = (rt_log_cur_t){ ls.newest, block == ls.newest ? off : 0 };
+    ESP_LOGI(TAG, "log to phone from block %lu+%u, %lu blocks to backfill",
+             (unsigned long)block, off, (unsigned long)(ls.newest - block));
+}
+
+static void log_stream(int cap)
+{
+    if (s_log_req) {
+        s_log_req = false;
+        if (s_log_req_gen == s_conn_gen) {
+            log_begin(s_log_req_session, s_log_req_block, s_log_req_off);
+        }
+    }
+    if (!s_log.on || s_log.gen != s_conn_gen) {
+        s_log.on = false;
+        return;
+    }
+
+    const uint8_t phy  = rt_conn_phy_actual();
+    const int back_max = UI_SLOW()             ? LOG_BACK_SLOW
+                       : (phy == 1 || phy == 2) ? LOG_BACK_FAST
+                                                : LOG_BACK_CODED;   // coded, or not yet known
+    int live_n = 0, back_n = 0;
+    uint8_t buf[RT_RPT_CHUNK_MAX];
+
+    for (;;) {
+        if (os_msys_num_free() < LOG_MBUF_KEEP) {
+            return;
+        }
+        rt_log_cur_t *c = NULL, adv;
+        int len = 0;
+        if (live_n < LOG_LIVE_MAX && (len = rt_log_chunk(&s_log.live, buf, cap, &adv)) > 0) {
+            c = &s_log.live;
+            live_n++;
+        } else if (back_n < back_max && s_log.back.block < s_log.back_end
+                   && (len = rt_log_chunk(&s_log.back, buf, cap, &adv)) > 0) {
+            c = &s_log.back;
+            back_n++;
+        } else {
+            return;
+        }
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
+        if (om == NULL || ble_gatts_notify_custom(s_conn, s_tx_handle, om) != 0) {
+            return;   // cursor not moved; the same bytes go next time
+        }
+        *c = adv;
+    }
+}
+
 // One notification per line. Each line is complete and independent, so a marginal link
 // gives a partial update rather than nothing at all.
 void rt_ui_notify(void)
@@ -481,4 +602,7 @@ void rt_ui_notify(void)
             return;
         }
     }
+
+    // After the report, never before it - see LOG_MBUF_KEEP.
+    log_stream(cap);
 }

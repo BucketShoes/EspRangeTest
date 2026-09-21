@@ -635,6 +635,15 @@ void app_main(void)
     ESP_LOGW(TAG, "no 802.15.4 radio on this target - that channel is disabled");
 #endif
 #endif
+#if RT_STAGE >= 1
+    // After every radio, so the log is sized from what they left over rather than competing
+    // with them for it - see HEAP_KEEP in rt_log.c. The GNSS reader after that, so the log
+    // exists to record its first fix.
+    ESP_LOGI(TAG, "init: log");
+    rt_log_init();
+    ESP_LOGI(TAG, "init: gnss");
+    rt_gnss_start();
+#endif
     ESP_LOGI(TAG, "init: done");
 
     antenna_switch_on();

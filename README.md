@@ -59,6 +59,47 @@ is the only thing that clears it. Changing a setting on one board used to wipe t
 record of what it had heard from the other one, which was backwards: the slider changes what
 the board *transmits*, and the table is what it *received*.
 
+## GNSS (optional)
+
+Any board can carry a GNSS module — typically one on a drone, flown around a set of boards on
+the ground. Wire it to the XIAO's UART pins:
+
+| GNSS pin | board pin |
+|---|---|
+| **TX** | **GPIO20** (D9) — the one that matters |
+| RX | GPIO19 (D8) — optional; nothing is sent to the module yet |
+| VCC / GND | 3V3 / GND |
+
+The baud rate is found automatically (9600, 38400, 115200, 57600, 4800, 19200). Any module
+that outputs NMEA `GGA` works, which is nearly all of them by default. With nothing fitted the
+board behaves exactly as before, and its card says `gnss no NMEA on GPIO20`.
+
+With a fix:
+
+- **Its packets carry its position** — lat/lon/alt, the fix's UTC time and HDOP, 26 bytes
+  instead of 12. Every board that hears it knows where it was when it sent that packet. The
+  longer packet is slightly easier to lose at the edge of range; that is the price.
+- **It logs where it was when it heard things.** Every packet it receives is recorded against
+  its own track, and its own fixes are recorded with its sequence counters, so it can later say
+  exactly which position every packet it *sent* carried — including the ones nobody heard.
+- **Every board logs packets that have a position attached** — from a GNSS sender, or heard
+  by a GNSS receiver. The log is a RAM ring (no flash writes), sized at boot from what heap is
+  left; the card shows it as `log n/N blocks`. When it fills, the oldest goes first.
+
+On the page, each GNSS board gets its own track and a ◆ marker with its altitude, separate from
+the phone's. Connect to *any* board — the drone, or any board that heard it — and the track is
+built from everything every connected board knows, keyed by GNSS time: if A heard packets 1, 3,
+5 and B heard 1, 2, 6, the track runs 1-2-3-5-6, with each receiver's misses drawn at the
+positions of the packets it missed. Connecting to the drone fills in the rest.
+
+A board that was out of range keeps logging, and sends its stockpile when you reconnect —
+newest first, so the live picture is immediate, then the backlog at 2 notifications a second
+on coded PHY (6 on 2M) so the download never crowds out the channel under test. The card shows
+`fetching, n behind` until it is done.
+
+**Every board needs v6 firmware and the page redeployed.** An older board discards the 26-byte
+packets as foreign, so it stops hearing a GNSS board the moment that board gets a fix.
+
 ## If it won't boot: the bring-up ladder
 
 `build_flags = -DRT_STAGE=n` in `platformio.ini` controls how much starts up:
