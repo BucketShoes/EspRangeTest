@@ -752,6 +752,7 @@ function onFix(p) {
   const c = p.coords;
   const q = project(c.latitude, c.longitude);
   const prev = geo.fixes[geo.fixes.length - 1];
+  setRef(c.latitude, c.longitude);   // whole degrees for GNSS positions - see "whole degrees"
 
   // Standing still still produces a fix a second, each a few metres off the last, so keeping
   // them all turns a pause into a scribble and makes the stillest part of the walk look like
@@ -870,7 +871,17 @@ function ensureSeries(skey, dev, peer, ch) {
   return S;
 }
 
+// Marks that land on the same spot - a board hovering, or a walk paused - would draw as one. So
+// each mark is nudged by up to a metre, fixed per mark so nothing shimmers. Display only: nothing
+// that is measured, exported or looked up is touched.
+// In metres, about the resolution the wire carries (1e-5 degree), so zoomed in the spread is
+// no more than the position was ever known to, and zoomed out it vanishes along with the error.
+const JIT_M = 1;
+const jit = () => (Math.random() * 2 - 1) * JIT_M;
+
 function addSample(S, s) {
+  s.jx = jit();
+  s.jy = jit();
   S.n++;
   if (s.loss !== undefined && !S.has.loss) { S.has.loss = true; seriesRev++; }
   if (s.snr !== -128 && !S.has.snr)        { S.has.snr  = true; seriesRev++; }
@@ -902,10 +913,19 @@ function addSample(S, s) {
 const gtr = new Map();   // node id -> G, see gOf()
 let gRev = 0;            // bumped whenever anything a position lookup could use changes
 const GNSS_COLS = ['#f59e0b', '#e879f9', '#22d3ee', '#fb923c'];
-// rt_seq_ms() and RT_GEO_COAST_MS in main/rt.h: each channel's nominal ms per seq, and how far
-// momentum may carry a fix. Also used to spread a GNSS board's own misses back in time.
+// rt_seq_ms() in main/rt.h: each channel's nominal ms per seq. Also used to spread a GNSS
+// board's own misses back in time.
 const SEQ_MS = [250, 500, 250];
-const COAST_MS = 2000;
+// RT_GEO_W and RT_GEO_G in main/rt.h, number for number - see Momentum there. Tables, not
+// Math.exp, so this page and the board cannot disagree in the last bit.
+const GEO_K_MAX = 60;
+const GEO_W = [32768, 25520, 19875, 15479, 12055, 9388, 7312, 5694, 4435, 3454, 2690, 2095,
+  1631, 1271, 990, 771, 600, 467, 364, 283, 221, 172, 134, 104, 81, 63, 49, 38, 30, 23, 18,
+  14, 11, 9, 7, 5, 4, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const GEO_G = [0, 248, 485, 699, 882, 1028, 1132, 1193, 1213, 1195, 1145, 1069, 974, 868, 757,
+  647, 541, 444, 358, 283, 220, 167, 125, 92, 67, 47, 33, 23, 15, 10, 7, 4, 3, 2, 1, 1, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const GEO_FRAC = 100000;   // RT_GEO_FRAC: the wire carries 1e-5 degree, fraction only
 // Sequence numbers restart when a board does. A candidate this far away in time from what is
 // being looked up belongs to another boot of the same board, not to this packet.
 const SEQ_NEAR_MS = 300000;
@@ -925,26 +945,65 @@ function gOf(node) {
   return G;
 }
 
-// The exact arithmetic of rt_geo_at(): fix F moved on by momentum for `steps` sequence numbers
-// on channel ch. Integers in, integers out, truncating like C, so this lands on the same 1e-7
-// degree the board put in the packet.
+// The exact arithmetic of rt_geo_k(), rt_geo_at() and rt_geo_pack()'s rounding: the position
+// packet `steps` seqs after fix F carried on channel ch, in whole 1e-5 degrees. Integers in,
+// integers out, truncating like C, so it lands on exactly what the board put in the packet.
 function geoAt(F, steps, ch) {
-  const per = SEQ_MS[ch];
-  const dt = steps < Math.floor(COAST_MS / per) ? steps * per : COAST_MS;
-  return { lat: F.lat + Math.trunc(F.vlat * dt / 1000),
-           lon: F.lon + Math.trunc(F.vlon * dt / 1000), alt: F.alt };
+  const k = steps > GEO_K_MAX ? GEO_K_MAX + 1 : steps * (ch === 1 ? 2 : 1);
+  let lat = F.lat, lon = F.lon;
+  if (k <= GEO_K_MAX) {
+    lat += Math.trunc(F.elat * GEO_W[k] / 32768) + Math.trunc(F.vlat * GEO_G[k] / 1000);
+    lon += Math.trunc(F.elon * GEO_W[k] / 32768) + Math.trunc(F.vlon * GEO_G[k] / 1000);
+  }
+  return { lat5: Math.floor((lat + 50) / 100), lon5: Math.floor((lon + 50) / 100), alt: F.alt };
 }
 
-// A position in 1e-7 degrees, made drawable. Kept in integers too, so two routes to the same seq
-// can be compared exactly.
-function mkPos(lat, lon, alt) {
-  const p = project(lat / 1e7, lon / 1e7);
-  return { lat, lon, alt, x: p.x, y: p.y };
+// A position in whole 1e-5 degrees, made drawable. Kept in integers too, so two routes to the
+// same seq can be compared exactly.
+function mkPos(lat5, lon5, alt) {
+  const p = project(lat5 / 1e5, lon5 / 1e5);
+  return { lat5, lon5, alt, latd: lat5 / 1e5, lond: lon5 / 1e5, x: p.x, y: p.y };
 }
+
+// ---- whole degrees ------------------------------------------------------------------------
+//
+// Packets carry only the fraction of a degree (see rt_geo_wire_t). The whole degrees come from
+// the nearest full position this page knows: that GNSS board's own last fix, else the phone's GPS,
+// else the last reference this browser saw - kept, so a page reopened in the same field works
+// before anything else has a fix. Whichever degree puts the fraction nearest the reference wins,
+// which is right for anything within half a degree of it.
+const REF_KEY = 'esprt.ref';
+let geoRef = null;
+try { geoRef = JSON.parse(localStorage.getItem(REF_KEY)); } catch (e) { geoRef = null; }
+// Records that arrived before there was any reference, placed as soon as there is one.
+const geoPending = [];
+
+function setRef(lat, lon) {
+  const had = !!geoRef;
+  const moved = !geoRef || Math.abs(geoRef.lat - lat) > 0.01 || Math.abs(geoRef.lon - lon) > 0.01;
+  geoRef = { lat, lon };
+  if (moved) {
+    try { localStorage.setItem(REF_KEY, JSON.stringify(geoRef)); } catch (e) { /* fine */ }
+  }
+  if (!had && geoPending.length) {
+    logMsg(`placing ${geoPending.length} logged packets now there is a position to go by`);
+    geoPending.splice(0).forEach(a => logRx(...a));
+  }
+}
+
+function refFor(node) {
+  const G = gtr.get(node);
+  if (G && G.own.length) { const F = G.own[G.own.length - 1]; return { lat: F.latd, lon: F.lond }; }
+  if (geo.live) return { lat: geo.live.lat, lon: geo.live.lon };
+  return geoRef;
+}
+
+const wholeOf = (frac, ref) =>
+  frac + GEO_FRAC * Math.round((Math.round(ref * 1e5) - frac) / GEO_FRAC);
 
 function addPoint(G, P, t) {
   const last = G.list[G.list.length - 1];
-  const pt = { x: P.x, y: P.y, alt: P.alt, lat: P.lat, lon: P.lon, t };
+  const pt = { x: P.x, y: P.y, alt: P.alt, latd: P.latd, lond: P.lond, t };
   G.list.push(pt);
   if (last && last.t > t) G.dirty = true;
   if (!G.live || t >= G.live.t) G.live = pt;
@@ -971,8 +1030,10 @@ const near = (t, h) => Math.abs(t - h) < SEQ_NEAR_MS;
 // The GNSS board's own fix, from its own log. seqNext: each channel's next seq at that moment.
 function ownFix(node, F, seqNext, t) {
   const G = gOf(node);
-  Object.assign(F, mkPos(F.lat, F.lon, F.alt), { bt: t });
+  const xy = project(F.lat / 1e7, F.lon / 1e7);
+  Object.assign(F, { x: xy.x, y: xy.y, latd: F.lat / 1e7, lond: F.lon / 1e7, bt: t });
   sortedPut(G.own, F, 'bt');
+  setRef(F.latd, F.lond);
   addPoint(G, F, t);
   for (let c = 0; c < 3; c++) ivPut(G, c, seqNext[c], F, t);
 }
@@ -1038,9 +1099,9 @@ function seqPos(node, ch, seq, tH) {
     let sure = closed;
     if (!sure && hi) {
       const h = geoAt(F, (hi.seq - iv[j].s0) >>> 0, ch);
-      sure = h.lat === hi.p.lat && h.lon === hi.p.lon;
+      sure = h.lat5 === hi.p.lat5 && h.lon5 === hi.p.lon5;
     }
-    if (closed || seq - iv[j].s0 < 40) return posOf(mkPos(g.lat, g.lon, g.alt), sure ? 'exact' : 'open');
+    if (closed || seq - iv[j].s0 < 40) return posOf(mkPos(g.lat5, g.lon5, g.alt), sure ? 'exact' : 'open');
   }
 
   // Between two packets that somebody did hear.
@@ -1130,8 +1191,8 @@ function newestG() {
 // bytes are kept per block by offset, anything already had is dropped, and records are decoded
 // as soon as they are complete.
 
-// Record lengths by type byte; 0x40-0x7f is RXD (10), 0x80 and up RXS (5).
-const LOG_REC = { 0x01: 3, 0x02: 30, 0x03: 14, 0x04: 15, 0x05: 14 };
+// Record lengths by type byte; 0x40-0x7f is RXD (8), 0x80 and up RXS (5).
+const LOG_REC = { 0x01: 3, 0x02: 34, 0x03: 14, 0x04: 15, 0x05: 10 };
 
 // The lowest block not yet complete - where to ask the board to start from. Complete blocks at
 // the bottom are forgotten as the cursor passes them, and so is anything the board no longer
@@ -1204,12 +1265,21 @@ function onLog(d, v) {
 // only ever asked for after one has.
 const b2t = (d, bt) => d.offset === undefined ? undefined : d.offset + bt;
 
+// rt_geo_unpack(): 48 bits - latitude fraction, longitude fraction (17 bits each, 1e-5 degree),
+// altitude in metres (14 bits, signed).
+function unpackGeo(dv, o) {
+  const lo = dv.getUint32(o, true), hi = dv.getUint16(o + 4, true);
+  const a = (hi >>> 2) & 0x3fff;
+  return { latf: lo & 0x1ffff, lonf: (lo >>> 17) | ((hi & 3) << 15),
+           alt: a >= 0x2000 ? a - 0x4000 : a };
+}
+
 function parseBlock(d, bn, b) {
   const u = b.buf, have = b.have;
   const dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
   if (!b.p) {
     if (have < 4) return;
-    // pos: each node's current POS as this block has described it, in 1e-7 degrees.
+    // cur: each node's current POS as this block has described it - fractions of a degree.
     b.p = { pos: 4, clk: dv.getUint32(0, true), refs: [], cur: new Map() };
   }
   const P = b.p;
@@ -1221,7 +1291,7 @@ function parseBlock(d, bn, b) {
 
   while (P.pos < have) {
     const o = P.pos, t = u[o];
-    const len = t >= 0x80 ? 5 : t >= 0x40 ? 10 : LOG_REC[t];
+    const len = t >= 0x80 ? 5 : t >= 0x40 ? 8 : LOG_REC[t];
     if (!len) return bad(`has an unknown record 0x${t.toString(16)}`);
     if (o + len > have) return;   // the rest of it is still on its way
     P.pos += len;
@@ -1234,17 +1304,17 @@ function parseBlock(d, bn, b) {
       if (tB === undefined) continue;
       if (t === 0x02) {
         ownFix(me, { lat: dv.getInt32(o + 2, true), lon: dv.getInt32(o + 6, true),
-                     alt: dv.getInt16(o + 10, true), vlat: dv.getInt16(o + 12, true),
-                     vlon: dv.getInt16(o + 14, true), hdop: u[o + 16], sats: u[o + 17] },
-               [18, 22, 26].map(k => dv.getUint32(o + k, true)), tB);
+                     alt: dv.getInt16(o + 10, true),
+                     elat: dv.getInt16(o + 12, true), elon: dv.getInt16(o + 14, true),
+                     vlat: dv.getInt16(o + 16, true), vlon: dv.getInt16(o + 18, true),
+                     hdop: u[o + 20], sats: u[o + 21] },
+               [22, 26, 30].map(k => dv.getUint32(o + k, true)), tB);
       } else {
         const G = gOf(me);
         for (let c = 0; c < 3; c++) ivPut(G, c, dv.getUint32(o + 2 + c * 4, true), null, tB);
       }
     } else if (t === 0x05) {
-      P.cur.set(hexId(u24(dv, o + 1)), { lat: dv.getInt32(o + 4, true),
-                                          lon: dv.getInt32(o + 8, true),
-                                          alt: dv.getInt16(o + 12, true) });
+      P.cur.set(hexId(u24(dv, o + 1)), unpackGeo(dv, o + 4));
     } else if (t === 0x04) {
       P.clk += u[o + 1] * 4;
       const R = { node: hexId(u24(dv, o + 2)), ch: u[o + 5] & 0x7f,
@@ -1263,9 +1333,9 @@ function parseBlock(d, bn, b) {
         // RXD: the node's POS, moved by the deltas, is where this packet said it was.
         const c = P.cur.get(R.node);
         if (!c) return bad('moves a position it never gave');
-        c.lat += dv.getInt16(o + 5, true);
-        c.lon += dv.getInt16(o + 7, true);
-        c.alt += dv.getInt8(o + 9);
+        c.latf = (c.latf + dv.getInt8(o + 5) + GEO_FRAC) % GEO_FRAC;
+        c.lonf = (c.lonf + dv.getInt8(o + 6) + GEO_FRAC) % GEO_FRAC;
+        c.alt += dv.getInt8(o + 7);
         pos = c;
       } else if (t & 0x40) {
         pos = P.cur.get(R.node);
@@ -1276,11 +1346,22 @@ function parseBlock(d, bn, b) {
 }
 
 // One packet a board heard. pos is the sender's position as that packet carried it
-// ({lat, lon, alt} in 1e-7 degrees), or null if it carried none - in which case the board
-// logged it because it has GNSS itself.
+// ({latf, lonf, alt}: fractions of a degree), or null if it carried none - in which case the
+// board logged it because it has GNSS itself.
 function logRx(d, R, seq, gap, rssi, q, pos, bt) {
   const t = b2t(d, bt);
   if (t === undefined) return;
+  const ref = pos ? refFor(R.node) : null;
+  if (pos && !ref) {
+    // No full position anywhere yet to take whole degrees from. Kept, not dropped: placed the
+    // moment the phone gets a fix or the GNSS board's own log arrives.
+    if (!geoPending.length) {
+      logMsg('logged packets are waiting for a position to take whole degrees from - turn on ' +
+             'GPS, or connect to the GNSS board');
+    }
+    geoPending.push([d, { ...R }, seq, gap, rssi, q, { ...pos }, bt]);
+    return;
+  }
   const ch = CH_NAMES[R.ch] ?? '?';
   const skey = d.name + '/' + R.node + '/' + ch;
   geoSeries.add(skey);
@@ -1288,7 +1369,7 @@ function logRx(d, R, seq, gap, rssi, q, pos, bt) {
 
   let g, P = undefined, alt;
   if (pos) {
-    const Pp = mkPos(pos.lat, pos.lon, pos.alt);   // a copy: the block's POS moves on
+    const Pp = mkPos(wholeOf(pos.latf, ref.lat), wholeOf(pos.lonf, ref.lon), pos.alt);
     exPut(gOf(R.node), R.ch, seq, Pp, t);
     g = { mode: 'seq', node: R.node, ch: R.ch, seq };
     P = posOf(Pp, 'exact');
@@ -1910,7 +1991,7 @@ function drawMap() {
       s.pos = posAt(s.t);
     }
     if (!s.pos) continue;
-    const px = sxOf(s.pos.x), py = syOf(s.pos.y);
+    const px = sxOf(s.pos.x + s.jx), py = syOf(s.pos.y + s.jy);
     if (px < -pad || px > W + pad || py < -pad || py > H + pad) continue;
     drawn++;
 
@@ -1938,8 +2019,11 @@ function drawMap() {
           s.mpos.push(q);
         }
       }
+      let qi = 0;
       for (const q of s.mpos || []) {
-        const qx = sxOf(q.x), qy = syOf(q.y);
+        // Each miss tick nudged too, differently but fixed, so they spread and stay put.
+        qi++;
+        const qx = sxOf(q.x + (s.jx * qi) % JIT_M), qy = syOf(q.y + (s.jy * qi) % JIT_M);
         pMiss.moveTo(qx, qy - 2.5); pMiss.lineTo(qx, qy + 2.5);
       }
     }
@@ -2305,7 +2389,7 @@ function exportCsv() {
   for (const G of gtr.values()) {
     for (const F of G.list) {
       rows.push(['gpos', new Date(F.t).toISOString(), Math.round(F.t), G.node, nameOf(G.node) ?? '',
-                 '', '', '', n6(F.lat / 1e7), n6(F.lon / 1e7), '',
+                 '', '', '', n6(F.latd), n6(F.lond), '',
                  n1(F.x), n1(F.y), baseOf(F.x, F.y),
                  '', '', '', '', '', '', '', '', '', F.alt, 'gnss']);
     }
