@@ -78,7 +78,7 @@ static const char *TAG = "rt";
 #define LED_GPIO      15
 #define LED_ON_LEVEL  0
 #define LED_OFF_LEVEL (!LED_ON_LEVEL)
-#define LED_HALF_MS   250   // 2Hz at 50% duty: lit for one half period, dark for the other
+#define LED_HALF_MS   125   // 2Hz at 50% duty: lit for one half period, dark for the other
 
 // The button has exactly two gestures, and no third is allowed to appear.
 //

@@ -78,7 +78,7 @@ extern const char *rt_chan_name[CH_COUNT];
 //
 // Time-based rather than counted in reports, so changing REPORT_MS does not change what the
 // figure means. At 4 Hz a 1 s window moved in 25% steps; 10 s is 40 packets and 2.5% steps.
-#define RT_PDR_WINDOW_MS 10000
+#define RT_PDR_WINDOW_MS 20000
 #define RT_PDR_BUCKETS   10
 
 // 12 bytes. All nodes are little-endian ESP32s, so a packed struct straight onto the wire is
