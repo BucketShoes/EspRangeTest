@@ -80,26 +80,31 @@ static const char *TAG = "ui";
 #define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
 #define CONN_TIMEOUT_SLOW 1000 // -> 10s. Must clear (1+4)*750ms*2 = 7.5s; 8s left no margin.
 
-// The packet log rides behind the report, and is rationed.
+// The packet log rides behind the report, as fast as the link will actually take it.
 //
 // Two cursors. The live one follows the block being written, so what is happening now reaches
 // the phone within a report period whatever else is queued - connect to a grounded board and
 // the drone's latest position is on the map at once, not after the board has finished
 // describing the last twenty minutes. The backfill one works through whatever the page is
-// missing, oldest first, at a fixed number of notifications per report - never enough to
-// matter to whatever channel is under test. On coded S=8 a full notification is ~16ms of air,
-// so two a second is ~3%; 2M is ~16x cheaper, so it gets more.
+// missing, oldest first. Every block stands alone (see rt.h), which is what makes sending them
+// out of order safe.
 //
-// Every block stands alone (see rt.h), which is what makes sending them out of order safe.
-#define LOG_LIVE_MAX   2   // per report; live is small, this only bounds a burst
-#define LOG_BACK_CODED 2
-#define LOG_BACK_FAST  6   // 2M or 1M actually in use
-#define LOG_BACK_SLOW  1   // the espnow/154 isolation modes, where this link is meant to idle
+// How fast is decided by NimBLE's own answer, not by a guess at the link. The host never drops
+// a notification it has accepted: it queues it and the link layer retransmits until it lands.
+// What it does when the link cannot keep up is run out of buffers and refuse the next one - so a
+// refusal is the overflow signal, and it counts whichever notification got it, report or log.
+// The budget per report grows by half again every report that goes through clean and full, and
+// halves on any refusal. A refused notification is never lost either: its cursor does not move,
+// and the same bytes go next time.
+//
+// LOG_QUEUE_MAX bounds what can be waiting at once, so that even a clean run never lines up
+// seconds of backlog in front of the next report on a link that is barely holding at range.
+#define LOG_BUDGET_MIN  1
+#define LOG_BUDGET_MAX  40    // 40 x 244 bytes a second - far past what coded S=8 can carry
+#define LOG_QUEUE_MAX   12    // buffers in use beyond what was in use when the stream began
+#define LOG_FREE_MIN    6     // and never below this many left for anything else
 
-// Log notifications stop while fewer than this many mbufs are free, so a backfill can never
-// leave the next report without buffers to go out in. The report is the one that must not be
-// skipped; the log waits.
-#define LOG_MBUF_KEEP  8
+static int s_log_budget = 4;
 
 // The report is never skipped, in any mode. A run whose numbers were not delivered did not
 // happen, and a low-contention mode whose results never arrive is the most expensive kind of
@@ -137,6 +142,7 @@ static struct {
     uint32_t     gen;
     rt_log_cur_t live, back;
     uint32_t     back_end;    // backfill stops here; the live cursor started from it
+    int          free0;       // NimBLE buffers free when it began, before any of ours queued
 } s_log;
 
 static int start_adv(void);
@@ -493,12 +499,33 @@ static void log_begin(uint32_t session, uint32_t block, uint16_t off)
         off   = 0;
     }
     s_log.on       = true;
+    s_log.free0    = os_msys_num_free();
     s_log.gen      = s_conn_gen;
     s_log.back_end = ls.newest;
     s_log.back     = (rt_log_cur_t){ block, off };
     s_log.live     = (rt_log_cur_t){ ls.newest, block == ls.newest ? off : 0 };
     ESP_LOGI(TAG, "log to phone from block %lu+%u, %lu blocks to backfill",
              (unsigned long)block, off, (unsigned long)(ls.newest - block));
+}
+
+// A notification out, and whether NimBLE took it. The one place anything is sent, so a refusal
+// is seen the same way for the report and the log.
+static bool send(const uint8_t *buf, int len)
+{
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
+    if (om == NULL) {
+        return false;
+    }
+    // notify_custom frees the mbuf itself, whether or not it succeeds.
+    return ble_gatts_notify_custom(s_conn, s_tx_handle, om) == 0;
+}
+
+static void log_backoff(void)
+{
+    s_log_budget /= 2;
+    if (s_log_budget < LOG_BUDGET_MIN) {
+        s_log_budget = LOG_BUDGET_MIN;
+    }
 }
 
 static void log_stream(int cap)
@@ -514,34 +541,35 @@ static void log_stream(int cap)
         return;
     }
 
-    const uint8_t phy  = rt_conn_phy_actual();
-    const int back_max = UI_SLOW()             ? LOG_BACK_SLOW
-                       : (phy == 1 || phy == 2) ? LOG_BACK_FAST
-                                                : LOG_BACK_CODED;   // coded, or not yet known
-    int live_n = 0, back_n = 0;
+    // Live first, backfill with whatever of the budget is left.
     uint8_t buf[RT_RPT_CHUNK_MAX];
-
-    for (;;) {
-        if (os_msys_num_free() < LOG_MBUF_KEEP) {
-            return;
+    int sent = 0;
+    while (sent < s_log_budget) {
+        const int free_now = os_msys_num_free();
+        if (s_log.free0 - free_now > LOG_QUEUE_MAX || free_now < LOG_FREE_MIN) {
+            return;   // plenty in flight already: not a refusal, just not piling on
         }
         rt_log_cur_t *c = NULL, adv;
-        int len = 0;
-        if (live_n < LOG_LIVE_MAX && (len = rt_log_chunk(&s_log.live, buf, cap, &adv)) > 0) {
+        int len = rt_log_chunk(&s_log.live, buf, cap, &adv);
+        if (len > 0) {
             c = &s_log.live;
-            live_n++;
-        } else if (back_n < back_max && s_log.back.block < s_log.back_end
+        } else if (s_log.back.block < s_log.back_end
                    && (len = rt_log_chunk(&s_log.back, buf, cap, &adv)) > 0) {
             c = &s_log.back;
-            back_n++;
         } else {
+            return;   // caught up; the budget stays where it is
+        }
+        if (!send(buf, len)) {
+            log_backoff();
             return;
         }
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
-        if (om == NULL || ble_gatts_notify_custom(s_conn, s_tx_handle, om) != 0) {
-            return;   // cursor not moved; the same bytes go next time
-        }
         *c = adv;
+        sent++;
+    }
+    // Used it all and every one went: the link has room to spare.
+    s_log_budget += s_log_budget / 2 + 1;
+    if (s_log_budget > LOG_BUDGET_MAX) {
+        s_log_budget = LOG_BUDGET_MAX;
     }
 }
 
@@ -594,15 +622,14 @@ void rt_ui_notify(void)
     int             len;
 
     while ((len = rt_snapshot_chunk(buf, cap, s_gen, &st)) > 0) {
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
-        if (om == NULL) {
-            return;  // out of buffers; the next cycle carries the same state anyway
-        }
-        if (ble_gatts_notify_custom(s_conn, s_tx_handle, om) != 0) {
+        if (!send(buf, len)) {
+            // Out of buffers; the next cycle carries the same state anyway. Whatever filled
+            // them, the log backs off - a report refused is the clearest sign the link is full.
+            log_backoff();
             return;
         }
     }
 
-    // After the report, never before it - see LOG_MBUF_KEEP.
+    // After the report, never before it.
     log_stream(cap);
 }

@@ -12,14 +12,16 @@
 
 static const char *TAG = "log";
 
-// Up to this much, and never so much that less than HEAP_KEEP is left for everything else.
+// Sized from the heap's low-water mark, not from what happens to be free right now.
 //
-// HEAP_KEEP is not decoration. The Wi-Fi driver allocates its buffers on every esp_wifi_start()
-// and a mode change restarts it; a phone connecting allocates too. A log that took the heap those
-// need would turn "change mode" into "reboot", which is a lost run - so the log gets what is left
-// after a generous margin, and says how much that was.
-#define LOG_MAX_BYTES (128 * 1024)
-#define HEAP_KEEP     (56 * 1024)
+// rt_log_init() runs after app_main has put the radios through every mode (see
+// exercise_modes() in main.c), so the minimum ever free already includes the Wi-Fi driver's
+// buffers on a restart, LR, the BLE UI advert being stopped and started, and whatever else a
+// mode change allocates. Everything the radios will ever want at once has already been wanted
+// once. HEAP_KEEP is then only for what that could not exercise - a phone connecting, heap
+// fragmentation - and is small on purpose: the log is the thing a long flight runs out of.
+#define LOG_MAX_BYTES (160 * 1024)
+#define HEAP_KEEP     (20 * 1024)
 #define MIN_BLOCKS    4
 
 // A block closes when it is full, when its reference table is, or when it has been open this
@@ -27,21 +29,23 @@ static const char *TAG = "log";
 // for its contents to be sent - the open one streams live.
 #define BLOCK_MAX_MS  60000
 
-#define REFS_MAX      64    // RXS carries a 6-bit ref
-#define NFIX_MAX      8
+#define REFS_MAX      64    // the short records carry a 6-bit ref
+#define NPOS_MAX      8
 
 #define REC_TIME   0x01
 #define REC_FIX    0x02
 #define REC_NOFIX  0x03
 #define REC_RX     0x04
-#define REC_PFIX   0x05
+#define REC_POS    0x05
+#define REC_RXD    0x40
 #define REC_RXS    0x80
 
 #define LEN_TIME   3
-#define LEN_FIX    29
+#define LEN_FIX    30
 #define LEN_NOFIX  14
 #define LEN_RX     15
-#define LEN_PFIX   18
+#define LEN_POS    14
+#define LEN_RXD    10
 #define LEN_RXS    5
 
 // One lock for everything below: appenders run in the Wi-Fi task, the NimBLE host task and the
@@ -65,11 +69,12 @@ static struct {
         uint8_t  ch;
         int8_t   ptx;
     } ref[REFS_MAX];
-    uint32_t nnf;
+    uint32_t npos;
     struct {
         uint32_t node;
-        uint32_t utc;
-    } nf[NFIX_MAX];            // the PFIX this block last wrote for each node
+        int32_t  lat, lon;
+        int16_t  alt;
+    } pos[NPOS_MAX];           // each node's current POS, as the reader has it
 } s_b;
 
 static inline uint8_t *blk(void)
@@ -107,7 +112,7 @@ static void open_block(uint32_t now, bool first)
     put32(now);
 }
 
-// Make room for a record of up to `need` bytes, plus a TIME record in front of it if one turns
+// Make room for records totalling up to `need` bytes, plus a TIME record in front if one turns
 // out to be necessary. Called before anything is written, so a record never straddles blocks.
 static void room(uint32_t now, int need, bool new_ref)
 {
@@ -139,21 +144,13 @@ static uint8_t tick(uint32_t now)
     return dt;
 }
 
-static void put_geo(const rt_geo_t *g)
-{
-    put32((uint32_t)g->lat_e7);
-    put32((uint32_t)g->lon_e7);
-    put16((uint16_t)g->alt_m);
-    put24(g->utc_ds);
-    put8(g->hdop_ds);
-}
-
 void rt_log_init(void)
 {
     const size_t free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const size_t low      = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
     const size_t largest  = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 
-    size_t want = free_now > HEAP_KEEP ? free_now - HEAP_KEEP : 0;
+    size_t want = low > HEAP_KEEP ? low - HEAP_KEEP : 0;
     if (want > LOG_MAX_BYTES) want = LOG_MAX_BYTES;
     if (want > largest)       want = largest;
     uint32_t n = want / (RT_LOG_BLOCK + sizeof(uint16_t));
@@ -175,8 +172,8 @@ void rt_log_init(void)
     if (ring == NULL) {
         // Not fatal: the board still measures and reports exactly as before, it just cannot
         // say where anything happened.
-        ESP_LOGE(TAG, "no memory for a packet log (%u free) - positions will not be recorded",
-                 (unsigned)free_now);
+        ESP_LOGE(TAG, "no memory for a packet log (%u free, %u at the lowest) - positions "
+                      "will not be recorded", (unsigned)free_now, (unsigned)low);
         return;
     }
 
@@ -190,9 +187,11 @@ void rt_log_init(void)
     open_block(rt_ms(), true);
     portEXIT_CRITICAL(&s_mux);
 
-    ESP_LOGI(TAG, "%lu blocks of %d bytes (%lu KB), session %08lX, %u bytes of heap left",
+    ESP_LOGI(TAG, "%lu blocks of %d bytes (%lu KB), session %08lX; heap was %u free, %u at "
+                  "the lowest across every mode, %u free now",
              (unsigned long)n, RT_LOG_BLOCK, (unsigned long)(n * RT_LOG_BLOCK / 1024),
-             (unsigned long)s_session, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+             (unsigned long)s_session, (unsigned)free_now, (unsigned)low,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
 }
 
 void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT])
@@ -206,7 +205,12 @@ void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT])
     const uint8_t dt = tick(now);
     put8(REC_FIX);
     put8(dt);
-    put_geo(g);
+    put32((uint32_t)g->lat_e7);
+    put32((uint32_t)g->lon_e7);
+    put16((uint16_t)g->alt_m);
+    put16((uint16_t)g->vlat);
+    put16((uint16_t)g->vlon);
+    put8(g->hdop_ds);
     put8(g->sats);
     for (int c = 0; c < CH_COUNT; c++) {
         put32(seq_next[c]);
@@ -240,43 +244,75 @@ void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, 
     const uint32_t now = rt_ms();
     portENTER_CRITICAL_SAFE(&s_mux);
 
-    // Worst case up front - a PFIX and a new ref - so nothing below can find the block full.
-    room(now, LEN_PFIX + LEN_RX, true);
+    // Worst case up front - a POS and a new ref - so nothing below can find the block full.
+    room(now, LEN_POS + LEN_RX, true);
 
-    if (sender != NULL) {
-        int i = 0;
-        while (i < (int)s_b.nnf && s_b.nf[i].node != node) {
-            i++;
-        }
-        if (i == (int)s_b.nnf || s_b.nf[i].utc != sender->utc_ds) {
-            put8(REC_PFIX);
-            put24(node);
-            put_geo(sender);
-            if (i == (int)s_b.nnf && s_b.nnf < NFIX_MAX) {
-                s_b.nnf++;
-            }
-            // With the table full the entry is simply not remembered, and the next packet
-            // from this node writes its PFIX again. Costs bytes, never correctness.
-            if (i < NFIX_MAX) {
-                s_b.nf[i].node = node;
-                s_b.nf[i].utc  = sender->utc_ds;
-            }
-        }
-    }
-
-    // A short record only when the reader can reconstruct the sequence number exactly: same
-    // link, same claimed power, and nothing heard on it in between that was not logged. Anything
-    // else is a full record, which also starts a fresh ref.
+    // The ref for this link, if the block has one the reader can continue: same link, same
+    // claimed power, and nothing heard on it since that went unlogged. The last match wins, as
+    // that is the one whose seq the reader is tracking.
     int r = -1;
     for (int i = 0; i < (int)s_b.nref; i++) {
         if (s_b.ref[i].node == node && s_b.ref[i].ch == chan && s_b.ref[i].ptx == ptx) {
             r = i;
         }
     }
-    const bool geo = sender != NULL;
-    const uint8_t dt = tick(now);
+    const bool short_ok = r >= 0 && gap <= 255 && s_b.ref[r].seq + gap == seq;
 
-    if (r >= 0 && gap >= 1 && gap <= 255 && s_b.ref[r].seq + gap == seq) {
+    // Where the reader thinks this node is, and how far the packet says it has moved from there.
+    // A moving sender with momentum on moves a little every packet, so the usual case is a
+    // small delta on a short record - 10 bytes a packet rather than a full POS and an RX.
+    int  p = -1;
+    bool same = false, delta = false;
+    int32_t dlat = 0, dlon = 0, dalt = 0;
+    if (sender != NULL) {
+        for (int i = 0; i < (int)s_b.npos; i++) {
+            if (s_b.pos[i].node == node) {
+                p = i;
+            }
+        }
+        if (p >= 0) {
+            dlat = sender->lat_e7 - s_b.pos[p].lat;
+            dlon = sender->lon_e7 - s_b.pos[p].lon;
+            dalt = sender->alt_m - s_b.pos[p].alt;
+            same  = dlat == 0 && dlon == 0 && dalt == 0;
+            delta = !same && short_ok
+                 && dlat >= -32768 && dlat <= 32767 && dlon >= -32768 && dlon <= 32767
+                 && dalt >= -128 && dalt <= 127;
+        }
+        if (!same && !delta) {
+            // A full POS. With the table full the node is simply not remembered, and its next
+            // packet writes a POS again: costs bytes, never correctness.
+            if (p < 0 && s_b.npos < NPOS_MAX) {
+                p = (int)s_b.npos++;
+            }
+            put8(REC_POS);
+            put24(node);
+            put32((uint32_t)sender->lat_e7);
+            put32((uint32_t)sender->lon_e7);
+            put16((uint16_t)sender->alt_m);
+        }
+        if (p >= 0) {
+            s_b.pos[p].node = node;
+            s_b.pos[p].lat  = sender->lat_e7;
+            s_b.pos[p].lon  = sender->lon_e7;
+            s_b.pos[p].alt  = sender->alt_m;
+        }
+    }
+
+    const bool    geo = sender != NULL;
+    const uint8_t dt  = tick(now);
+
+    if (delta) {
+        put8((uint8_t)(REC_RXD | r));
+        put8(dt);
+        put8((uint8_t)gap);
+        put8((uint8_t)rssi);
+        put8(q);
+        put16((uint16_t)dlat);
+        put16((uint16_t)dlon);
+        put8((uint8_t)dalt);
+        s_b.ref[r].seq = seq;
+    } else if (short_ok) {
         put8((uint8_t)(REC_RXS | (geo ? 0x40 : 0) | r));
         put8(dt);
         put8((uint8_t)gap);

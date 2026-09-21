@@ -152,6 +152,7 @@ static struct {
 static portMUX_TYPE s_geo_mux = portMUX_INITIALIZER_UNLOCKED;
 static rt_geo_t     s_geo;
 static bool         s_geo_valid;
+static uint32_t     s_geo_s0[CH_COUNT];   // each channel's seq_next when s_geo was published
 
 static uint32_t s_tx_seq[CH_COUNT];
 static uint32_t s_tx_count[CH_COUNT];
@@ -342,25 +343,12 @@ void rt_set_lc(int lc)
     printf("\n>>> low contention = %s\n", lc_name(lc));
 }
 
-static void geo_to_wire(rt_geo_wire_t *w, const rt_geo_t *g)
-{
-    w->lat_e7    = g->lat_e7;
-    w->lon_e7    = g->lon_e7;
-    w->alt_m     = g->alt_m;
-    w->utc_ds[0] = (uint8_t)g->utc_ds;
-    w->utc_ds[1] = (uint8_t)(g->utc_ds >> 8);
-    w->utc_ds[2] = (uint8_t)(g->utc_ds >> 16);
-    w->hdop_ds   = g->hdop_ds;
-}
-
 static void geo_from_wire(rt_geo_t *g, const rt_geo_wire_t *w)
 {
-    g->lat_e7  = w->lat_e7;
-    g->lon_e7  = w->lon_e7;
-    g->alt_m   = w->alt_m;
-    g->utc_ds  = w->utc_ds[0] | ((uint32_t)w->utc_ds[1] << 8) | ((uint32_t)w->utc_ds[2] << 16);
-    g->hdop_ds = w->hdop_ds;
-    g->sats    = 0;   // not carried; only the sender's own log has it
+    memset(g, 0, sizeof(*g));   // only the position travels; see rt_geo_wire_t
+    g->lat_e7 = w->lat_e7;
+    g->lon_e7 = w->lon_e7;
+    g->alt_m  = w->alt_m;
 }
 
 void rt_geo_publish(const rt_geo_t *g)
@@ -370,6 +358,7 @@ void rt_geo_publish(const rt_geo_t *g)
     s_geo       = *g;
     s_geo_valid = true;
     memcpy(seq_next, s_tx_seq, sizeof(seq_next));
+    memcpy(s_geo_s0, s_tx_seq, sizeof(s_geo_s0));
     portEXIT_CRITICAL(&s_geo_mux);
     rt_log_fix(g, seq_next);
 }
@@ -409,12 +398,18 @@ int rt_fill(void *out, int chan, int8_t txdbm)
     p.p.txdbm = txdbm;
 
     // The sequence number and the fix are taken together, under the lock rt_geo_publish() holds
-    // while it snapshots the counters - see s_geo_mux.
+    // while it snapshots the counters - see s_geo_mux. The position is the fix moved on by
+    // momentum, from nothing but the fix and how far this channel's seq has come since it - the
+    // same arithmetic the page runs on the log's FIX record, so both land on the same spot.
     portENTER_CRITICAL(&s_geo_mux);
     p.p.seq = s_tx_seq[chan]++;
     const bool geo = s_geo_valid;
     if (geo) {
-        geo_to_wire(&p.g, &s_geo);
+        int32_t lat, lon;
+        rt_geo_at(&s_geo, p.p.seq - s_geo_s0[chan], chan, &lat, &lon);
+        p.g.lat_e7 = lat;
+        p.g.lon_e7 = lon;
+        p.g.alt_m  = s_geo.alt_m;
     }
     portEXIT_CRITICAL(&s_geo_mux);
 
@@ -498,10 +493,11 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     rt_pdr_bucket *b = pdr_bucket(l, rt_ms());
 
     // For the log: the same gap the table counts losses from, 0 where the table would not trust
-    // it either. And whether this is the same sequence number again - BLE reports an advert
-    // every time it is repeated, and the log records packets, not repeats.
+    // it either - or where it is the same seq again. The coded beacon holds each seq for 500ms
+    // and the controller advertises every 160-240ms, so one seq goes on the air 2-3 times, as
+    // separate transmissions. Each one heard is a transmission that got through, and counts,
+    // here exactly as in the table.
     uint32_t log_gap = 0;
-    bool     repeat  = false;
 
     if (l->seen) {
         const uint32_t gap = p.seq - l->last_seq;
@@ -511,9 +507,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
             l->missed  += gap - 1;
             b->missed  += gap - 1;
         }
-        if (gap == 0) {
-            repeat = true;
-        } else if (gap < 1000) {
+        if (gap < 1000) {
             log_gap = gap;
         }
     } else {
@@ -549,7 +543,7 @@ void rt_rx(const void *data, int len, int chan, int8_t rssi, uint8_t lqi, int8_t
     // Into the log only when it has somewhere to be: the sender said where it was, or this
     // board knows where *it* is. Two boards without GNSS have nothing to add over the table,
     // which the page already pins to the phone's own position.
-    if (!repeat && (has_geo || rt_gnss_had_fix())) {
+    if (has_geo || rt_gnss_had_fix()) {
         const uint8_t q = chan == CH_154              ? lqi
                         : noise != RT_NOISE_NONE      ? (uint8_t)(int8_t)(rssi - noise)
                                                       : 0;
@@ -723,7 +717,6 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         n = put_u32(out, n, ls.oldest);
         n = put_u32(out, n, ls.newest);
         n = put_u16(out, n, ls.cap);
-        n = put_u16(out, n, ls.bsize);
         // The page decodes this block at fixed offsets, so a field added here without updating
         // RT_RPT_STATUS - and the matching reader - would silently shift every row that
         // follows. Say so loudly instead; a wrong offset is not a thing to discover from a

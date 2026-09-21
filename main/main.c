@@ -529,6 +529,49 @@ static void antenna_switch_on(void)
              rt_power_actual(CH_ESPNOW), rt_power_actual(CH_BLE_ADV), rt_power_actual(CH_154));
 }
 
+// Run every mode once at boot, so the heap's low-water mark includes whatever each of them
+// allocates - the packet log is then sized from that mark (see rt_log_init) and can never be the
+// reason a later mode change runs out of memory.
+//
+// Done before the antenna switch is powered, so all of this happens into the attenuated path:
+// nothing a board in the field would notice. Each dwell is long enough for the tasks that apply
+// a mode on their own cadence - the BLE scanner (500ms), the 802.15.4 receiver (250ms) - to have
+// done so, and the phone UI advert's part is driven by hand, since its usual caller is the
+// report loop that has not started yet. Costs about five seconds of boot.
+#if RT_STAGE >= 1
+#define EXERCISE_DWELL_MS 700
+
+static void exercise_step(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(EXERCISE_DWELL_MS));
+#if RT_STAGE >= 4
+    rt_ui_notify();   // applies the mode to the UI advert; no phone yet, so nothing is sent
+#endif
+}
+
+static void exercise_modes(void)
+{
+    // BLE's host syncs asynchronously; its part of each mode needs it up.
+    const uint32_t deadline = rt_ms() + ANT_PWR_WAIT_MS;
+    while (!rt_ble_power_ready() && (int32_t)(rt_ms() - deadline) < 0) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    for (int lc = 1; lc < LC_COUNT; lc++) {
+        rt_set_lc(lc);
+        exercise_step();
+    }
+    rt_set_lc(0);
+    exercise_step();
+    rt_set_lr(true);    // a Wi-Fi restart with a different protocol list
+    exercise_step();
+    rt_set_lr(false);
+    exercise_step();
+    ESP_LOGI(TAG, "modes exercised: heap %lu free, %lu at the lowest",
+             (unsigned long)esp_get_free_heap_size(),
+             (unsigned long)esp_get_minimum_free_heap_size());
+}
+#endif
+
 // Tap (release before HOLD_MS) cycles low-contention mode; hold past HOLD_MS restores every
 // control channel. Two gestures, no windows - see the HOLD_MS comment at the top of the file.
 // Polled rather than interrupt-driven, same as always: a button needs debouncing anyway.
@@ -636,13 +679,14 @@ void app_main(void)
 #endif
 #endif
 #if RT_STAGE >= 1
-    // After every radio, so the log is sized from what they left over rather than competing
-    // with them for it - see HEAP_KEEP in rt_log.c. The GNSS reader after that, so the log
-    // exists to record its first fix.
-    ESP_LOGI(TAG, "init: log");
-    rt_log_init();
     ESP_LOGI(TAG, "init: gnss");
     rt_gnss_start();
+    // Last, and only after every mode has been run once: the log takes what the heap's
+    // low-water mark says is spare, so the low-water mark has to have seen everything first.
+    ESP_LOGI(TAG, "init: exercising every mode, to size the log");
+    exercise_modes();
+    ESP_LOGI(TAG, "init: log");
+    rt_log_init();
 #endif
     ESP_LOGI(TAG, "init: done");
 

@@ -101,28 +101,24 @@ static inline uint32_t rt_pkt_node(const rt_pkt_t *p)
 
 // ---- Where the sender was ----------------------------------------------------------------
 //
-// A board with a GNSS fix appends this to every packet it sends: 14 bytes, 26 in all. A board
-// without one sends the plain 12, exactly as before. Receivers accept those two lengths and
-// nothing else, so the exact-length filter against foreign traffic still holds.
+// A board with a GNSS fix appends its position to every packet it sends: 10 bytes, 22 in all.
+// A board without one sends the plain 12, exactly as before. Receivers accept those two lengths
+// and nothing else, so the exact-length filter against foreign traffic still holds.
 //
-// It is the fix the sender held at the instant it stamped the sequence number - the same fix,
-// byte for byte, that its own log records against that sequence number (see RT_LOG_* below).
-// That is what lets every receiver's view of one sender be merged into one track: a sequence
-// number means the same place whichever board heard it.
+// The key is the sequence number, not time. (sender, channel, seq) is the one thing the sender
+// and every receiver already agree on without any arithmetic, so it is what a position is filed
+// under everywhere: the packet carries it, every receiver logs it against that seq, and the
+// sender's own log can reproduce it for every seq it sent - heard or not - from one record per
+// fix. See rt_geo_at() for how.
 //
-// utc_ds identifies the fix. It is GNSS time, not either board's clock, so it means the same
-// thing on every receiver and to the phone, and the page uses it to merge the fixes it hears
-// about from different boards into one ordered track.
-//
-// The cost is real and deliberate: a 26-byte packet is a longer target for a bit error than a
-// 12-byte one, so at the edge of range a board with a GNSS fix delivers slightly worse than one
-// without. The owner asked for coordinates in the packet; this is the price, stated.
+// No GNSS time and no HDOP on the wire: nothing a receiver does needs them, and every byte here
+// is a longer target for a bit error at the edge of range. That cost is real even at 10 bytes -
+// a board with coordinates in its packets delivers very slightly worse than one without - and is
+// accepted because the owner asked for coordinates in the packet.
 typedef struct __attribute__((packed)) {
     int32_t lat_e7;     // degrees x 1e7
     int32_t lon_e7;
     int16_t alt_m;      // metres above mean sea level, from GGA
-    uint8_t utc_ds[3];  // time of the fix, 0.1s units since UTC midnight, little-endian
-    uint8_t hdop_ds;    // HDOP x 10; 255 = unknown or >= 25.5
 } rt_geo_wire_t;
 
 typedef struct __attribute__((packed)) {
@@ -131,17 +127,52 @@ typedef struct __attribute__((packed)) {
 } rt_pkt_geo_t;
 
 #define RT_PKT_LEN     ((int)sizeof(rt_pkt_t))       // 12
-#define RT_PKT_GEO_LEN ((int)sizeof(rt_pkt_geo_t))   // 26
+#define RT_PKT_GEO_LEN ((int)sizeof(rt_pkt_geo_t))   // 22
 #define RT_PKT_MAX     RT_PKT_GEO_LEN
 
-// The same fix, unpacked, as the GNSS reader produces it and the log records it.
+// A fix as the GNSS reader produces it. vlat/vlon are its motion since the fix before, in
+// 1e-7 degrees per second, 0 when there is no recent fix to difference against. utc_ds is used
+// only on the board, to work that out; it goes nowhere.
 typedef struct {
     int32_t  lat_e7, lon_e7;
     int16_t  alt_m;
+    int16_t  vlat, vlon;
     uint32_t utc_ds;
     uint8_t  hdop_ds;
     uint8_t  sats;
 } rt_geo_t;
+
+// ---- Momentum ------------------------------------------------------------------------------
+//
+// Fixes come once a second and packets four times a second, so without this every packet sent
+// between two fixes carries the same position, and a receiver's marks for them land exactly on
+// top of each other. So a packet carries the fix pushed forward along the fix's own motion, by
+// how far the channel's sequence number has moved on since the fix arrived, capped at
+// RT_GEO_COAST_MS - enough to spread the marks out, never enough to fly off on its own if fixes
+// stop.
+//
+// Counted in sequence numbers times each channel's nominal period rather than in real time,
+// deliberately: that makes the position a pure function of (fix, seq), so the sender's log,
+// every receiver and the page all arrive at the same fake location for the same seq, to the
+// 1e-7 degree, without a clock anywhere. The page carries an exact copy of this arithmetic.
+#define RT_GEO_COAST_MS 2000
+
+static inline uint32_t rt_seq_ms(int chan)
+{
+    return chan == CH_BLE_ADV ? 500 : 250;   // the transmit periods in rt_ble.c / rt_espnow.c / rt_154.c
+}
+
+// steps = seq - (that channel's seq_next when the fix was published).
+static inline void rt_geo_at(const rt_geo_t *g, uint32_t steps, int chan,
+                             int32_t *lat, int32_t *lon)
+{
+    uint32_t dt = RT_GEO_COAST_MS;
+    if (steps < RT_GEO_COAST_MS / rt_seq_ms(chan)) {
+        dt = steps * rt_seq_ms(chan);
+    }
+    *lat = g->lat_e7 + (int32_t)((int64_t)g->vlat * dt / 1000);
+    *lon = g->lon_e7 + (int32_t)((int64_t)g->vlon * dt / 1000);
+}
 
 // ---- GNSS (rt_gnss.c) ----------------------------------------------------------------------
 //
@@ -170,8 +201,9 @@ void rt_gnss_status(rt_gnss_st_t *out);
 bool rt_gnss_had_fix(void);
 
 // Hand a new fix to the transmit path, atomically with a snapshot of the sequence counters, and
-// log it. Every sequence number handed out after this call carries this fix, every one before it
-// carried the previous one - which is exactly what the log's fix record says.
+// log it. Every sequence number handed out after this call carries this fix (moved on by
+// rt_geo_at), every one before it the previous one - which is exactly what the log's fix record
+// lets the page reproduce.
 void rt_geo_publish(const rt_geo_t *g);
 void rt_geo_lost(void);
 // The fix packets are currently carrying, if any.
@@ -531,7 +563,8 @@ void rt_report(void);
 //     tx[3], 16 bytes each, CH_ order:
 //       u32 queued, u32 ok, u32 rejected, u16 offmode_rx, u16 offmode_age_s
 //
-//   v6 appends 20 bytes to the status block, after tx[3] - nothing before it moves:
+//   v7 appends 18 bytes to the status block, after tx[3] - nothing before it moves (v6 had
+//   20, the same plus a u16 block size at the end):
 //     u8  gnss          bits 0-1 RT_GNSS_* state, bit2 has had a fix since boot
 //     u8  gnss_sats
 //     u8  gnss_hdop     x10, 255 unknown
@@ -539,8 +572,8 @@ void rt_report(void);
 //     u32 log_session   random per boot, never 0 - a board that rebooted has a new log
 //     u32 log_oldest    oldest block still held
 //     u32 log_newest    the block being written now
-//     u16 log_cap       blocks the ring holds, 0 if there was no memory for one
-//     u16 log_bsize     bytes per block
+//     u16 log_cap       blocks the ring holds (RT_LOG_BLOCK bytes each), 0 if there was no
+//                       memory for one
 //
 //   row record (23 bytes, packed end to end after whichever block precedes them)
 //     u24 peer, u8 chan            v6: bit7 of chan = this peer's last packet on this channel
@@ -569,12 +602,17 @@ void rt_report(void);
 // "reflash every board in the drawer".
 //
 // v6 is not that kind of bump, and says so: the measurement packet grew a second length (see
-// rt_pkt_geo_t), and a v5 board discards 26-byte packets as foreign. Mixed v5/v6 fleets still
-// range-test each other while no board has a GNSS fix, and stop hearing a board the moment it
-// gets one. Reflash the lot.
-#define RT_RPT_VER      6
+// rt_pkt_geo_t), and an older board discards it as foreign. Mixed fleets still range-test each
+// other while no board has a GNSS fix, and stop hearing a board the moment it gets one. Reflash
+// the lot.
+//
+// v7 is v6 reworked the same day: positions keyed by seq instead of GNSS time, so the packet
+// extension is 10 bytes instead of 14 (22 in all, and v6 and v7 cannot hear each other's), the
+// status tail lost log_bsize (18 bytes, not 20), and the log records changed. The page reads a
+// v6 report but does not ask a v6 board for its log.
+#define RT_RPT_VER      7
 #define RT_RPT_HDR      4
-#define RT_RPT_STATUS   104
+#define RT_RPT_STATUS   102
 #define RT_RPT_ROW      23
 #define RT_RPT_TYPE_STATUS 0x01
 #define RT_RPT_TYPE_ROWS   0x02
@@ -611,8 +649,9 @@ int rt_snapshot_rows(void);
 // first, and it is streamed to the phone over the same notify characteristic as the report.
 //
 // Not flash: flash writes stall the chip, and a stalled receiver is its own source of lost
-// packets. So the log holds what fits in the heap that is left over - see the boot line, or
-// log_cap in the report - and on a long flight it keeps the most recent part.
+// packets. So the log holds what fits in the heap that is left over once every mode has been
+// run through at boot - see the boot line, or log_cap in the report - and on a long flight it
+// keeps the most recent part. Hence the compact records: every byte saved is flight time kept.
 //
 // Every block stands alone: it starts with its own clock and names every link it refers to, so
 // a block can be decoded without the one before it. That is what lets the board send the newest
@@ -626,24 +665,32 @@ int rt_snapshot_rows(void);
 //   raw time, so the error never accumulates past 2ms.
 //
 //   0x01 TIME   (3)  u16 ms             clock += ms. For gaps too long for a u8 dt.
-//   0x02 FIX    (29) dt, i32 lat_e7, i32 lon_e7, i16 alt_m, u24 utc_ds, u8 hdop_ds, u8 sats,
-//                    u32 seq_next[3]
+//   0x02 FIX    (30) dt, i32 lat_e7, i32 lon_e7, i16 alt_m, i16 vlat, i16 vlon, u8 hdop_ds,
+//                    u8 sats, u32 seq_next[3]
 //                    This board's own new fix. seq_next is each channel's next sequence
-//                    number at that instant: from there until the next FIX or NOFIX, every
-//                    packet on that channel carried this fix.
+//                    number at that instant: from there until the next FIX or NOFIX, packet seq
+//                    on channel c carried rt_geo_at(fix, seq - seq_next[c], c).
 //   0x03 NOFIX  (14) dt, u32 seq_next[3]
 //                    Fix lost; packets from seq_next onward carry no position.
-//   0x04 RX     (15) dt, u24 node, u8 chan (bit7 = carried the sender's current PFIX),
+//   0x04 RX     (15) dt, u24 node, u8 chan (bit7 = carried a position: the node's current POS),
 //                    i8 ptx, u32 seq, u16 gap, i8 rssi, u8 q
 //                    A packet heard, and a new link reference: the Nth RX record in a block
-//                    is ref N, for the RXS records that follow. gap is seq minus the previous
-//                    sequence number heard on this link (0 = unknown), so gap-1 were missed -
-//                    the same arithmetic as the results table, done where the table is.
-//   0x05 PFIX   (18) u24 node, i32 lat_e7, i32 lon_e7, i16 alt_m, u24 utc_ds, u8 hdop_ds
-//                    Where that node said it was. Written once per fix per block, before the
-//                    first packet carrying it.
+//                    is ref N, for the short records that follow. gap is seq minus the previous
+//                    sequence number heard on this link, so gap-1 were missed - the same
+//                    arithmetic as the results table, done where the table is. 0 = the same seq
+//                    heard again (a BLE advert goes out 2-3 times per seq, and each one heard
+//                    counts, as in the table), or unknown.
+//   0x05 POS    (14) u24 node, i32 lat_e7, i32 lon_e7, i16 alt_m
+//                    Where that node's next packet said it was, in full. Sets the node's
+//                    current POS for the records after it in this block.
+//   0x40+ RXD   (10) type = 0x40 | ref, dt, u8 gap, i8 rssi, u8 q, i16 dlat, i16 dlon, i8 dalt
+//                    A packet heard on an existing ref that carried a position this far from
+//                    the node's current POS - which it then becomes. With momentum on, this is
+//                    the usual record for a moving sender; a jump too big for the deltas is a
+//                    POS and then an RXS instead.
 //   0x80+ RXS   (5)  type = 0x80 | geo << 6 | ref, dt, u8 gap, i8 rssi, u8 q
-//                    A packet heard on an existing ref: seq = that ref's last seq + gap.
+//                    A packet heard on an existing ref: seq = that ref's last seq + gap. geo: it
+//                    carried exactly the node's current POS.
 //
 //   q is the channel's quality figure: SNR in dB (as i8) on espnow, LQI on 154, 0 on ble_adv.
 //

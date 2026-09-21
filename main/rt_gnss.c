@@ -164,8 +164,20 @@ static bool utc(const char *s, uint32_t *out)
     return true;
 }
 
+// The fix before this one, for velocity.
+static rt_geo_t s_prev;
+static bool     s_prev_ok;
+
+// 32767 x 1e-7 degrees a second is ~360 m/s of latitude; anything past it is a glitch, and a
+// clamped glitch coasts for at most RT_GEO_COAST_MS.
+static int16_t clamp16(int64_t v)
+{
+    return (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+}
+
 static void fix_lost(const char *why)
 {
+    s_prev_ok = false;
     if (s_state == RT_GNSS_FIX) {
         s_state = RT_GNSS_NMEA;
         rt_geo_lost();
@@ -208,6 +220,22 @@ static void on_gga(char **f, int nf)
     g.utc_ds  = t;
     g.hdop_ds = s_hdop;
     g.sats    = s_sats;
+
+    // Motion since the previous fix, for momentum (see rt_geo_at). Over GNSS time, which is
+    // exact, rather than when the sentences happened to arrive. Only from a fix at most 3s
+    // back: across a longer gap the difference is a jump, not a velocity.
+    if (s_prev_ok) {
+        int32_t dt = (int32_t)t - (int32_t)s_prev.utc_ds;   // 0.1s
+        if (dt < 0) {
+            dt += 864000;   // midnight
+        }
+        if (dt > 0 && dt <= 30) {
+            g.vlat = clamp16(((int64_t)g.lat_e7 - s_prev.lat_e7) * 10 / dt);
+            g.vlon = clamp16(((int64_t)g.lon_e7 - s_prev.lon_e7) * 10 / dt);
+        }
+    }
+    s_prev    = g;
+    s_prev_ok = true;
 
     if (s_state != RT_GNSS_FIX) {
         ESP_LOGI(TAG, "fix: %u sats - packets now carry a position", s_sats);
