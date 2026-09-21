@@ -29,6 +29,9 @@
   th:first-child,td:first-child{text-align:left}
   td{padding:6px 5px;text-align:right;border-top:1px solid var(--line);font-size:14px}
   .ch{font-weight:600}
+  /* Anything that opens the rename prompt. Dashed underline rather than a button, because
+     these sit inside a heading and a table cell where a button would wreck the layout. */
+  .nameable{cursor:pointer;border-bottom:1px dashed var(--line)}
   .big{font-size:17px;font-weight:700}
   .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.dim{color:var(--dim)}
   .stale{opacity:.4}
@@ -212,6 +215,50 @@ const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map,
 const $err = document.getElementById('err');
 const $devs = document.getElementById('devs');
 
+// ---- board names -----------------------------------------------------------------------
+//
+// Six hex digits identify a board exactly and describe it not at all. That is fine on a bench
+// with one board on it and hopeless on a walk with four, where the question is never "what did
+// 7A3F04 hear" but "what did the one on the far fence post hear".
+//
+// These names are the operator's, not the board's. They live in this browser's localStorage,
+// nothing is written to the firmware, and no measurement depends on one existing: a board
+// nobody has named reads exactly as it did before, and a phone that cannot store anything -
+// private window, storage full - loses the names and nothing else.
+const NAMES_KEY = 'esprt.names';
+let names = {};
+try { names = JSON.parse(localStorage.getItem(NAMES_KEY)) || {}; } catch (e) { names = {}; }
+
+// Everything that identifies a board on this page ends in the same six hex digits: a peer id
+// off the wire is those digits, and a BLE name is 'ESPRT-' followed by them. So one key serves
+// both, and naming the board in your hand also names it in the *other* board's results table -
+// which is where you actually end up reading it.
+const idOf = s => {
+  const m = /([0-9A-Fa-f]{6})$/.exec(String(s ?? ''));
+  return m ? m[1].toUpperCase() : String(s ?? '?');
+};
+const nameOf  = s => names[idOf(s)];
+const labelOf = s => nameOf(s) || idOf(s);
+
+// Offered wherever a board is shown. Cancel leaves it alone and an empty answer removes the
+// name, because there has to be a way back to the ids - the ids are what the BLE scan list and
+// the exported CSV are in, and a name that cannot be undone is a board you can no longer match
+// to the thing on the fence post.
+function renameBoard(s) {
+  const id = idOf(s);
+  // Commas and quotes would have to be escaped in the CSV, and a name is not worth a quoting
+  // rule, so they never get in. The length cap is so a name still fits a table cell.
+  const v = prompt(`Name for board ${id}\n\nLeave empty to go back to the id.`, names[id] || '');
+  if (v === null) return;
+  const t = v.replace(/[",\r\n]/g, ' ').trim().slice(0, 20);
+  if (t) names[id] = t; else delete names[id];
+  try { localStorage.setItem(NAMES_KEY, JSON.stringify(names)); } catch (e) { /* as above */ }
+  // Three places show a board: the cards, the link picker and the map's legend.
+  render();
+  rebuildSources();
+  mapRedraw();
+}
+
 // ---- event log ---------------------------------------------------------------------------
 //
 // A single line of error text that never went away could not answer the only question worth
@@ -282,7 +329,7 @@ async function connect(dev) {
     d.live = false;
     render();
     if (d.userDisconnected) return;  // deliberate - do not fight the operator
-    logMsg(`${d.name}: link dropped, retrying`);
+    logMsg(`${labelOf(d.name)}: link dropped, retrying`);
     // Otherwise the board is very likely just out of range rather than gone, which on a
     // range walk is the normal case - so keep retrying instead of making the operator re-pair.
     const retry = () => dev.gatt.connected || d.userDisconnected
@@ -294,7 +341,7 @@ async function connect(dev) {
   document.getElementById('hint').style.display = 'none';
   render();
 
-  logMsg(`${d.name}: connected`);
+  logMsg(`${labelOf(d.name)}: connected`);
 }
 
 function disconnect(dev, d) {
@@ -370,7 +417,7 @@ function onChunk(d, v) {
     // This is the version byte doing the job it exists for. Without it the two layouts would
     // decode as each other and produce plausible nonsense rather than a named difference.
     if (ver !== 4 && ver !== 5) {
-      logMsg(`${d.name}: report format v${ver}, this page decodes v4 and v5 - ` +
+      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 and v5 - ` +
              (ver < 4 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
@@ -391,7 +438,7 @@ function onChunk(d, v) {
     // reconnects on its own and otherwise says nothing about having lost everything.
     const up = Math.floor(upMs / 1000);
     if (d.uptime !== undefined && up < d.uptime) {
-      logMsg(`${d.name}: REBOOTED after ${d.uptime}s` +
+      logMsg(`${labelOf(d.name)}: REBOOTED after ${d.uptime}s` +
              (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
       d.rebootAt = Date.now();
       d.reboots = (d.reboots ?? 0) + 1;
@@ -441,7 +488,8 @@ function onChunk(d, v) {
       coex:    v.getUint32(o + 30 + S, true),
     };
     if (!prev || prev.rst !== d.diag.rst) {
-      logMsg(`${d.name}: last reset was ${d.diag.rst}`, /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
+      logMsg(`${labelOf(d.name)}: last reset was ${d.diag.rst}`,
+             /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
     }
 
     o += 35 + S;   // status fields; tx records follow
@@ -498,7 +546,7 @@ function onLine(d, line) {
     // Uptime going backwards is the only reliable sign a board reset - it comes back on its
     // own, reconnects on its own, and otherwise says nothing about having lost everything.
     if (d.uptime !== undefined && up < d.uptime) {
-      logMsg(`${d.name}: REBOOTED after ${d.uptime}s` +
+      logMsg(`${labelOf(d.name)}: REBOOTED after ${d.uptime}s` +
              (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
       d.rebootAt = Date.now();
       d.reboots = (d.reboots ?? 0) + 1;
@@ -566,7 +614,7 @@ function onLine(d, line) {
     // The board reports why it last reset in every report, so the page learns it the moment it
     // connects - no need to have been watching serial when it booted.
     if (!prev || prev.rst !== d.diag.rst) {
-      logMsg(`${d.name}: last reset was ${d.diag.rst}`,
+      logMsg(`${labelOf(d.name)}: last reset was ${d.diag.rst}`,
              /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
     }
   }
@@ -811,12 +859,13 @@ const SRC_COLS = ['#38bdf8', '#c084fc', '#4ade80', '#fbbf24',
                   '#fb7185', '#2dd4bf', '#a3e635', '#f472b6'];
 
 // "154 BB→AA": the protocol, who sent it, who heard it. The receiver is dropped while there is
-// only one, because then every row has the same one and it is just noise.
+// only one, because then every row has the same one and it is just noise. Both ends go through
+// labelOf, so a named board reads as its name here and an unnamed one as the six hex digits it
+// always was.
 function srcLabel(S) {
   const manyRx = new Set([...series.values()].map(v => v.dev)).size > 1;
-  return S.ch + ' ' + S.peer + (manyRx ? '→' + shortDev(S.dev) : '');
+  return S.ch + ' ' + labelOf(S.peer) + (manyRx ? '→' + labelOf(S.dev) : '');
 }
-const shortDev = d => d.replace(/^ESPRT-/, '');
 
 const allSources = () =>
   [...series.values()].sort((p, q) => p.key.localeCompare(q.key));
@@ -997,7 +1046,7 @@ function buildPicker() {
     const head = document.createElement('tr');
     const corner = document.createElement('th');
     corner.className = 'sel';
-    corner.textContent = 'heard by ' + shortDev(rx);
+    corner.textContent = 'heard by ' + labelOf(rx);
     corner.title = 'Every link this board hears';
     corner.onclick = () => toggleSet(mine.map(S => S.key));
     head.appendChild(corner);
@@ -1015,7 +1064,7 @@ function buildPicker() {
       const tr = document.createElement('tr');
       const rh = document.createElement('th');
       rh.className = 'sel rowh';
-      rh.textContent = 'from ' + tx;
+      rh.textContent = 'from ' + labelOf(tx);
       rh.title = 'Every protocol from this transmitter';
       rh.onclick = () => toggleSet(mine.filter(S => S.peer === tx).map(S => S.key));
       tr.appendChild(rh);
@@ -1660,7 +1709,12 @@ function paintMapStat() {
 
 function exportCsv() {
   if (!samples.length && !geo.fixes.length) return fail('Nothing recorded yet.');
-  const head = ['type', 'iso', 'ms', 'dev', 'peer', 'ch', 'lat', 'lon', 'acc_m',
+  // dev_name and peer_name are whatever the operator called those boards, carried alongside the
+  // ids rather than in place of them: the ids are the record, the names are how the walk was
+  // actually thought about, and they only exist in a browser nobody will have open in a month.
+  // A file that says 7A3F04 and nothing else is one you have to remember your way back into.
+  const head = ['type', 'iso', 'ms', 'dev', 'dev_name', 'peer', 'peer_name', 'ch',
+                'lat', 'lon', 'acc_m',
                 'east_m', 'north_m', 'base_m', 'rssi_dbm', 'ptx_dbm', 'loss_db',
                 'snr_db', 'lqi', 'pdr_now', 'pdr_all', 'hits', 'misses'];
   const rows = [];
@@ -1669,7 +1723,7 @@ function exportCsv() {
   const baseOf = (x, y) => geo.base ? Math.hypot(x - geo.base.x, y - geo.base.y).toFixed(1) : '';
 
   for (const f of geo.fixes) {
-    rows.push(['fix', new Date(f.t).toISOString(), f.t, '', '', '',
+    rows.push(['fix', new Date(f.t).toISOString(), f.t, '', '', '', '', '',
                n6(f.lat), n6(f.lon), f.acc === undefined ? '' : f.acc.toFixed(1),
                n1(f.x), n1(f.y), baseOf(f.x, f.y),
                '', '', '', '', '', '', '', '', '']);
@@ -1677,7 +1731,8 @@ function exportCsv() {
   for (const s of samples) {
     const p = s.pos || posAt(s.t);
     const ll = p ? unproject(p.x, p.y) : { lat: '', lon: '' };
-    rows.push(['rx', new Date(s.t).toISOString(), s.t, s.dev, s.peer, s.ch,
+    rows.push(['rx', new Date(s.t).toISOString(), s.t,
+               s.dev, nameOf(s.dev) ?? '', s.peer, nameOf(s.peer) ?? '', s.ch,
                n6(ll.lat), n6(ll.lon), '',
                p ? n1(p.x) : '', p ? n1(p.y) : '', p ? baseOf(p.x, p.y) : '',
                s.rssi, s.ptx === undefined ? '' : s.ptx,
@@ -1780,11 +1835,14 @@ mapRedraw();
 function buildCard(d) {
   const el = document.createElement('div');
   el.className = 'dev';
-  el.innerHTML = '<h2><span class="nm"></span>' +
+  el.innerHTML = '<h2><span class="nm nameable"></span>' +
                  '<span class="st" style="font-size:12px"></span></h2>' +
                  '<div class="meta"></div>';
   const R = { el, nm: el.querySelector('.nm'), st: el.querySelector('.st'),
               meta: el.querySelector('.meta'), modes: [], sliders: [] };
+
+  R.nm.title = 'Click to name this board. The name is kept in this browser only.';
+  R.nm.onclick = () => renameBoard(d.name);
 
   const modes = document.createElement('div');
   modes.className = 'row';
@@ -1853,7 +1911,7 @@ function buildCard(d) {
               'spans whatever you want it to span.';
   rst.onclick = () => {
     cmd(d, CMD_STATS_RESET);
-    logMsg(`${d.name}: results cleared`);
+    logMsg(`${labelOf(d.name)}: results cleared`);
   };
   modes.appendChild(rst);
 
@@ -1909,6 +1967,14 @@ function buildCard(d) {
   el.appendChild(pwr);
 
   R.body = document.createElement('div');
+  // Delegated, because the table inside is rebuilt from innerHTML on every report and handlers
+  // bound to the cells would go with it. The peers here are the boards you cannot click on a
+  // card - the phone is only connected to some of them - and they are the ones whose ids are
+  // hardest to place.
+  R.body.onclick = ev => {
+    const t = ev.target.closest('.peer');
+    if (t) renameBoard(t.dataset.id);
+  };
   el.appendChild(R.body);
 
   R.diag = document.createElement('div');
@@ -1976,7 +2042,12 @@ function updateCard(d) {
   const R = d.ui;
   const now = Date.now();
 
-  R.nm.textContent = d.name || '?';
+  // A named board keeps its id alongside the name rather than behind it. "near" and "far" are
+  // only useful for as long as you can still tell which physical board each one is, and the
+  // moment you cannot is the moment you need the id most.
+  R.nm.innerHTML = nameOf(d.name)
+    ? `${esc(nameOf(d.name))} <span class="dim">${esc(idOf(d.name))}</span>`
+    : esc(d.name || '?');
   R.st.textContent = d.live ? 'connected' : 'reconnecting…';
   R.st.className = d.live ? 'ok' : 'bad';
 
@@ -2098,7 +2169,11 @@ function updateCard(d) {
               : r.lqi >= 0    ? `${r.lqi}<span class="dim">lqi</span>`
               : '–';
       return `<tr data-abs="${r.abs}">` +
-        `<td><span class="ch">${r.ch}</span> <span class="dim">${r.peer}</span></td>` +
+        // A named peer is the readable thing in the row, so it is not dimmed; an unnamed one
+        // is still the bare id it always was.
+        `<td><span class="ch">${r.ch}</span> ` +
+        `<span class="peer nameable ${nameOf(r.peer) ? '' : 'dim'}" data-id="${esc(r.peer)}" ` +
+        `title="Click to name this board">${esc(labelOf(r.peer))}</span></td>` +
         `<td class="big ${rssiClass(r.rssi)}">${r.rssi}</td>` +
         `<td class="dim">${r.ptx === undefined ? '–' : (r.ptx - r.rssi) + 'dB'}</td>` +
         `<td class="dim">${q}</td>` +
