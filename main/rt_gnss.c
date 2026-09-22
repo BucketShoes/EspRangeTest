@@ -1,10 +1,10 @@
 // Optional GNSS: NMEA in on UART1, fixes out to the transmit path and the log.
 //
-// Wiring: the module's TX to GPIO20, its RX to GPIO19. Only GPIO20 matters today - nothing is
-// sent to the module - but GPIO19 is claimed for it so that asking the module for a faster fix
-// rate later is a code change, not a rewiring.
+// Wiring: the module's TX to GNSS_RX_GPIO, its RX to GNSS_TX_GPIO, both set just below. Only the
+// first matters today - nothing is sent to the module - but the second is claimed for it so that
+// asking the module for a faster fix rate later is a code change, not a rewiring.
 //
-// Nothing here is required. With no module fitted, GPIO20 idles on its pull-up, no sentence
+// Nothing here is required. With no module fitted, the RX pin idles on its pull-up, no sentence
 // ever validates, and the board behaves exactly as it did before this file existed.
 
 #include <math.h>
@@ -54,6 +54,27 @@ static uint32_t s_last_nmea_ms;
 static uint32_t s_fix_ms;
 static uint32_t s_last_utc = UINT32_MAX;
 
+// What packets carry between fixes; see Momentum in rt.h. Plain latest fix at boot.
+static volatile uint8_t s_mode = RT_GEO_FIX;
+
+void rt_gnss_set_mode(int mode)
+{
+    if (mode < 0 || mode >= RT_GEO_MODES || mode == s_mode) {
+        return;
+    }
+    s_mode = (uint8_t)mode;
+    ESP_LOGI(TAG, "packets carry: %s, from the next fix", rt_gnss_mode_name(mode));
+}
+
+const char *rt_gnss_mode_name(int mode)
+{
+    switch (mode) {
+    case RT_GEO_SMOOTH:   return "smoothed";
+    case RT_GEO_MOMENTUM: return "momentum";
+    default:              return "fix";
+    }
+}
+
 void rt_gnss_status(rt_gnss_st_t *out)
 {
     out->state   = s_state;
@@ -61,6 +82,8 @@ void rt_gnss_status(rt_gnss_st_t *out)
     out->sats    = s_sats;
     out->hdop_ds = s_hdop;
     out->baud    = s_baud;
+    out->mode    = s_mode;
+    out->rx_gpio = GNSS_RX_GPIO;
 }
 
 bool rt_gnss_had_fix(void)
@@ -225,6 +248,15 @@ static void track(rt_geo_t *g)
     }
     g->vlat = clamp16(s_vlat);
     g->vlon = clamp16(s_vlon);
+
+    // The setting only decides what is published. Velocity is tracked whatever it is, so
+    // switching to momentum mid-flight starts from a settled velocity, not from zero.
+    if (s_mode != RT_GEO_MOMENTUM) {
+        g->vlat = g->vlon = 0;
+    }
+    if (s_mode == RT_GEO_FIX) {
+        g->elat = g->elon = 0;
+    }
     s_flat  = flat;
     s_flon  = flon;
     s_pub   = *g;

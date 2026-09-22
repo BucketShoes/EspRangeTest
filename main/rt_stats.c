@@ -700,7 +700,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         rt_gnss_status(&gs);
         rt_log_st_t ls;
         rt_log_status(&ls);
-        n = put_u8(out, n, (uint8_t)((gs.state & 3) | (gs.had_fix ? 4 : 0)));
+        n = put_u8(out, n, (uint8_t)((gs.state & 3) | (gs.had_fix ? 4 : 0) | ((gs.mode & 3) << 3)));
         n = put_u8(out, n, gs.sats);
         n = put_u8(out, n, gs.hdop_ds);
         n = put_u8(out, n, (uint8_t)(gs.baud / 1200 > 255 ? 255 : gs.baud / 1200));
@@ -854,13 +854,14 @@ void rt_report(void)
     rt_gnss_status(&gs);
     rt_geo_t me;
     if (gs.state == RT_GNSS_NONE) {
-        printf("  gnss: no NMEA on GPIO20 at any baud rate\n");
+        printf("  gnss: no NMEA on GPIO%u at any baud rate\n", gs.rx_gpio);
     } else if (!rt_geo_get(&me)) {
         printf("  gnss: %lu baud, no fix (%u sats)\n", (unsigned long)gs.baud, gs.sats);
     } else {
         printf("  gnss: fix ");
         print_geo(&me);
-        printf("  %u sats, %lu baud - packets carry it\n", me.sats, (unsigned long)gs.baud);
+        printf("  %u sats, %lu baud - packets carry: %s\n", me.sats, (unsigned long)gs.baud,
+               rt_gnss_mode_name(gs.mode));
     }
     rt_log_st_t ls;
     rt_log_status(&ls);

@@ -62,17 +62,19 @@ the board *transmits*, and the table is what it *received*.
 ## GNSS (optional)
 
 Any board can carry a GNSS module — typically one on a drone, flown around a set of boards on
-the ground. Wire it to the XIAO's UART pins:
+the ground. The pins are set at the top of `main/rt_gnss.c` (`GNSS_RX_GPIO`, `GNSS_TX_GPIO`);
+at the time of writing:
 
 | GNSS pin | board pin |
 |---|---|
-| **TX** | **GPIO20** (D9) — the one that matters |
+| **TX** | **GPIO18** (D10) — the one that matters |
 | RX | GPIO19 (D8) — optional; nothing is sent to the module yet |
 | VCC / GND | 3V3 / GND |
 
 The baud rate is found automatically (9600, 38400, 115200, 57600, 4800, 19200). Any module
 that outputs NMEA `GGA` works, which is nearly all of them by default. With nothing fitted the
-board behaves exactly as before, and its card says `gnss no NMEA on GPIO20`.
+board behaves exactly as before, and its card says `gnss no NMEA`; the serial report names the
+pin it is listening on.
 
 With a fix:
 
@@ -80,10 +82,12 @@ With a fix:
   lat/lon at 1e-5° (~1 m) plus altitude. The whole degrees are filled in by the page from the
   phone's GPS, the drone's own log, or the last position it saw. The longer packet is slightly
   easier to lose at the edge of range; that is the price.
-- **Positions have momentum.** Velocity is tracked as a 2 s EMA of fix-to-fix motion, and each
-  packet's position runs smoothly along it between fixes, easing onto each new fix. If fixes
-  stop it coasts on for about a second's worth and comes back to the last real fix; after 10 s
-  without a fix the position is withdrawn. The same seq gets the same position everywhere.
+- **What it carries between fixes is a setting** — the `pos:` button on its card, one of:
+  **fix** (the latest real fix, as it is; the default), **smoothed** (eases onto each new fix,
+  always a little behind, never overshoots), or **momentum** (also carries on along a tracked
+  velocity — closer in steady motion, but a jumpy fix reads as a burst of speed and it
+  overshoots). Takes effect from the next fix. After 10 s without a fix the position is
+  withdrawn. Whichever is in use, the same seq gets the same position everywhere.
 - **It logs where it was when it heard things.** Every packet it receives is recorded against
   its own track, and its own fixes are recorded with its sequence counters, so it can later say
   exactly which position every packet it *sent* carried — including the ones nobody heard.

@@ -189,8 +189,10 @@ design" are now wrong.
   than an assumed one — but selecting external with nothing fitted still takes the board off
   the air, which is why it boots internal every time and never remembers otherwise.
 - The pins this firmware touches are GPIO9 (BOOT button), GPIO3 (RF switch power), GPIO14
-  (port select), GPIO15 (user LED, floating until asked for), and GPIO19/20 for an optional
-  GNSS on UART1 (owner's choice, 2026-09-22: module TX → GPIO20, module RX ← GPIO19). Nothing
+  (port select), GPIO15 (user LED, floating until asked for), and two pins for an optional
+  GNSS on UART1, set at the top of `rt_gnss.c` (`GNSS_RX_GPIO` takes the module's TX — GPIO18 as
+  of 2026-09-22, moved there from 20 by the owner; `GNSS_TX_GPIO` is GPIO19). Nothing on the page
+  or in the report text should hardcode them. Nothing
   else; keep it that way. UART0 (GPIO16/17) is the console.
 - The chip antenna is **worse than the IPEX**, and worse than the PCB antennas on the dev
   modules. So absolute distances from XIAO runs are not comparable with earlier DevKit runs.
@@ -218,16 +220,16 @@ Decisions, and why:
   receivers to know it. That keying is what lets the page merge every receiver's view of one
   sender into one track: "if A heard 1,3,5 and B heard 1,2,6, the line goes 1,2,3,5,6", with a
   miss per receiver for what it did not hear — the owner's words, and a hard requirement.
-- **Momentum** (owner's request, and their correction of a first version that extrapolated from
-  the last two fixes and stopped dead after 2 s — which is exactly the pile-up it was meant to
-  prevent). Velocity is a 2 s EMA of fix-to-fix motion, tracked in floats relative to the first
-  good fix. The published track eases onto each new fix (1 s) from wherever it was, so it never
-  jumps, and carries on along the velocity with a profile that follows steady flight closely,
-  overshoots a little when the drone stops, and returns to the last real fix within a few
-  seconds when fixes stop. Evaluated per packet from (fix, seq) with integer lookup tables
-  (`RT_GEO_W`/`RT_GEO_G` in `rt.h`, copied number for number into the page), so the same seq has
-  the same position in the packet, in every receiver's log and in the sender's own. Marks that
-  still coincide are spread by up to a metre at draw time — display only.
+- **What packets carry between fixes is a setting** (`RT_CMD_GEO_*`, the page's `pos:` button):
+  latest **fix** (default), **smoothed** (an EMA of position: eases onto each new fix, lags,
+  never overshoots), or **momentum** (plus a velocity tracked as a 2 s EMA of fix-to-fix motion).
+  Momentum was the owner's request; in use it overshot a long way whenever the board moved — a
+  short noisy GNSS step over one second reads as a high speed — so it became one option of three
+  rather than the behaviour. All three are one formula with parts zeroed (E, the ease onto the
+  fix; V, the velocity), evaluated per packet from (fix, seq) with integer lookup tables
+  (`RT_GEO_W`/`RT_GEO_G` in `rt.h`, copied number for number into the page), and the log records
+  E and V as published, so the page reproduces whichever setting was in use without being told.
+  Marks that coincide are spread by up to a metre at draw time — display only.
 - **The sender's own log records the sequence counters at each fix**, not a record per packet
   sent. One lock covers the fix and the counters (`rt_stats.c`), so "from seq N on, packets
   carried fix F, moved on by momentum" reproduces exactly what went on the air, at one record per
@@ -270,7 +272,7 @@ neighbours until then. Links with no GNSS end are drawn at the phone, as before.
 ordered by when each point was heard (page time), which with momentum is smooth.
 
 Known limits: 1 Hz fixes by default, so between fixes the position is the track's estimate —
-close for steady flight, briefly wrong on a sharp turn. GPIO19 is wired so a faster rate can be
+close for steady flight, briefly wrong on a sharp turn. The module's RX pin is wired so a faster rate can be
 requested later. v6 (the first, GNSS-time version) and v7 cannot hear each other's positioned
 packets; the page reads a v6 report but does not fetch a v6 log.
 

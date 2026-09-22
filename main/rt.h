@@ -187,9 +187,22 @@ static inline void rt_geo_unpack(const uint8_t in[6], rt_pos_t *p)
 
 // ---- Momentum ------------------------------------------------------------------------------
 //
-// Fixes come once a second and packets four times a second, and a fix can go missing, so what a
-// packet carries is not the last fix but a smooth track through them: velocity tracked over
-// time, and a position that eases from wherever the track was toward each new fix.
+// What a packet carries between fixes is a choice, made on the command channel (RT_CMD_GEO_*
+// below), because each answer is wrong in its own way:
+//
+//   fix       the latest real fix, untouched. Never ahead of the truth, never smoothed; marks
+//             between fixes share a position and the page's jitter keeps them apart. Default.
+//   smoothed  the track eases from where it was onto each new fix (E below, V = 0): an EMA of
+//             position. Always a little behind, never overshoots.
+//   momentum  the track also carries on along a tracked velocity (E and V). Follows steady
+//             motion closely, but a GNSS jump reads as a burst of speed and it overshoots.
+//
+// All three are the same arithmetic with parts zeroed, and the log records E and V as sent, so
+// the page reproduces whichever was in use without knowing which it was.
+//
+// Fixes come once a second and packets four times a second, and a fix can go missing, so in the
+// momentum setting a packet carries not the last fix but a track through them: velocity tracked
+// over time, and a position that eases from wherever the track was toward each new fix.
 //
 // The GNSS reader keeps velocity as an EMA of fix-to-fix motion with a 2s time constant, in
 // floating point relative to the first good fix (rt_gnss.c). What it publishes with each fix is
@@ -254,10 +267,11 @@ static inline void rt_geo_at(const rt_geo_t *g, uint32_t k, int32_t *lat, int32_
 
 // ---- GNSS (rt_gnss.c) ----------------------------------------------------------------------
 //
-// Optional. NMEA on UART1: the module's TX goes to GPIO20, its RX to GPIO19. Nothing is sent to
-// the module yet, so the GPIO19 wire is optional. The baud rate is found by trying each common
-// one until a sentence with a valid checksum arrives; with nothing fitted the pin idles on its
-// pull-up and the board simply never has a fix, which is the same as every board before this.
+// Optional. NMEA on UART1, on the pins set at the top of rt_gnss.c (GNSS_RX_GPIO takes the
+// module's TX; GNSS_TX_GPIO goes to its RX, and is optional as nothing is sent to the module
+// yet). The baud rate is found by trying each common one until a sentence with a valid checksum
+// arrives; with nothing fitted the pin idles on its pull-up and the board simply never has a fix,
+// which is the same as every board before this.
 //
 // The reader publishes each new fix through rt_geo_publish() below, and withdraws it with
 // rt_geo_lost() when the fix drops or goes stale. Between those two calls every packet this
@@ -272,11 +286,28 @@ typedef struct {
     uint8_t  sats;
     uint8_t  hdop_ds;
     uint32_t baud;      // 0 while still searching
+    uint8_t  mode;      // RT_GEO_FIX / SMOOTH / MOMENTUM
+    uint8_t  rx_gpio;   // where it is listening, so nothing else has to hardcode the pin
 } rt_gnss_st_t;
 
 void rt_gnss_start(void);
 void rt_gnss_status(rt_gnss_st_t *out);
 bool rt_gnss_had_fix(void);
+
+// What packets carry between fixes - see Momentum above. Takes effect from the next fix. Boots
+// as RT_GEO_FIX and is not remembered. Reported in the status block's gnss byte, bits 3-4.
+#define RT_GEO_FIX      0
+#define RT_GEO_SMOOTH   1
+#define RT_GEO_MOMENTUM 2
+#define RT_GEO_MODES    3
+
+// One byte each, the state itself rather than "next", for the same reason as the LED commands.
+#define RT_CMD_GEO_FIX      0x8D
+#define RT_CMD_GEO_SMOOTH   0x8E
+#define RT_CMD_GEO_MOMENTUM 0x8F
+
+void rt_gnss_set_mode(int mode);
+const char *rt_gnss_mode_name(int mode);
 
 // Hand a new fix to the transmit path, atomically with a snapshot of the sequence counters, and
 // log it. Every sequence number handed out after this call carries this fix (moved on by
@@ -643,7 +674,8 @@ void rt_report(void);
 //
 //   v7 appends 18 bytes to the status block, after tx[3] - nothing before it moves (v6 had
 //   20, the same plus a u16 block size at the end):
-//     u8  gnss          bits 0-1 RT_GNSS_* state, bit2 has had a fix since boot
+//     u8  gnss          bits 0-1 RT_GNSS_* state, bit2 has had a fix since boot,
+//                       bits 3-4 RT_GEO_* setting (0 on boards from before it existed)
 //     u8  gnss_sats
 //     u8  gnss_hdop     x10, 255 unknown
 //     u8  gnss_baud     baud / 1200, 0 while still searching
