@@ -21,7 +21,7 @@
 static const char *TAG = "gnss";
 
 #define GNSS_UART    UART_NUM_1     // UART0 is the console, on GPIO16/17
-#define GNSS_RX_GPIO 20             // <- module TX
+#define GNSS_RX_GPIO 18             // <- module TX
 #define GNSS_TX_GPIO 19             // -> module RX (unused so far)
 
 // Baud rate is found, not configured. Modules ship at different defaults - 9600 for most u-blox
