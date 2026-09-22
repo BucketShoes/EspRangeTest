@@ -208,8 +208,9 @@ together.
 
 Decisions, and why:
 
-- **Coordinates go in the measurement packet** (the owner's call): 6 bytes, 18 in all, only
-  while the sender has a fix. Only the fraction of a degree travels, at 1e-5° (~1 m) — the owner's
+- **Coordinates go in the measurement packet** (the owner's call) — 6 bytes, 18 in all, when
+  this was written — only while the sender has a fix. Only the fraction of a degree travels, at
+  1e-5° (~1 m) as written — the owner's
   idea: the whole degrees are the same for everything in a range test, so the page supplies them
   from the nearest full position it knows (the GNSS board's own log, the phone, or the last seen).
   The cost of any extension is real — a longer frame is a bigger target for bit errors at the
@@ -234,19 +235,21 @@ Decisions, and why:
   sent. One lock covers the fix and the counters (`rt_stats.c`), so "from seq N on, packets
   carried fix F, moved on by momentum" reproduces exactly what went on the air, at one record per
   second instead of ten.
-- **The log is RAM only**, a fixed `RT_LOG_BYTES` (32 KB for now), allocated first thing at
+- **The log is RAM only**, a fixed `RT_LOG_BYTES` (32 KB when this was written, a placeholder), allocated first thing at
   boot so it is one clean block nothing can fragment around. The size is to be set by the owner
   from the heap figures the serial report prints (free, lowest ever, largest free block) after
   real use — a phone connection is exactly the kind of load nothing at boot can fake. An earlier
   version sized it by cycling every mode at boot; that cost 6 s of boot and still could not see a
   phone, so it was dropped. The log keeps the newest data.
-- **Compact, because the log's length is flight time.** A received packet is 5 bytes (a short
-  record against a per-block link reference), 8 when it carried a position that moved (a delta
-  on the previous one), 15 when the block has not seen that link yet. A fix is 34 bytes.
+- **Compact, because the log's length is flight time.** The record formats are in `rt.h`; as
+  first written, a received packet cost 5 bytes against a per-block link reference, 8 when it
+  carried a position that moved (a delta on the previous one), 15 when the block had not seen
+  that link yet, and a fix 34.
 - **Only packets with a position are logged**: from a GNSS sender, or heard by a board that has
   had a fix. Two plain boards have nothing to add to the results table, which the page already
-  pins to the phone's GPS. BLE adverts heard twice for one seq (the beacon holds a seq for
-  500 ms and advertises every 160-240 ms) are logged twice, as the table counts them: a
+  pins to the phone's GPS. BLE adverts heard twice for one seq (the beacon holds each seq for
+  `ADV_PERIOD_MS` and advertises every `ADV_ITVL_MIN`..`MAX`, in `rt_ble.c`, so one seq goes out
+  more than once) are logged twice, as the table counts them: a
   transmission that got through counts.
 - **Blocks stand alone.** Each 1 KB block carries its own clock and names every link it uses,
   and every received-packet record carries its own gap (misses before it, from the same
@@ -271,9 +274,9 @@ seq — exactly, if anyone heard it or the sender's own log covers it, interpola
 neighbours until then. Links with no GNSS end are drawn at the phone, as before. The track is
 ordered by when each point was heard (page time), which with momentum is smooth.
 
-Known limits: 1 Hz fixes by default, so between fixes the position is the track's estimate —
-close for steady flight, briefly wrong on a sharp turn. The module's RX pin is wired so a faster rate can be
-requested later. v6 (the first, GNSS-time version) and v7 cannot hear each other's positioned
+Known limits: most modules default to 1 Hz fixes, so between fixes the position is at best an
+estimate - close for steady flight, briefly wrong on a sharp turn. The module's RX pin is wired
+so a faster rate can be requested later. v6 (the first, GNSS-time version) and v7 cannot hear each other's positioned
 packets; the page reads a v6 report but does not fetch a v6 log.
 
 ## The XIAO RF switch is unpowered out of reset — root cause of everything below

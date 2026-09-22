@@ -62,57 +62,52 @@ the board *transmits*, and the table is what it *received*.
 ## GNSS (optional)
 
 Any board can carry a GNSS module — typically one on a drone, flown around a set of boards on
-the ground. The pins are set at the top of `main/rt_gnss.c` (`GNSS_RX_GPIO`, `GNSS_TX_GPIO`);
-at the time of writing:
+the ground. Wire the module's TX to the pin `GNSS_RX_GPIO` names at the top of `main/rt_gnss.c`,
+and optionally its RX to `GNSS_TX_GPIO` (nothing is sent to the module yet). When this was
+written those were GPIO18 and GPIO19; the serial report says which pin it is listening on.
 
-| GNSS pin | board pin |
-|---|---|
-| **TX** | **GPIO18** (D10) — the one that matters |
-| RX | GPIO19 (D8) — optional; nothing is sent to the module yet |
-| VCC / GND | 3V3 / GND |
-
-The baud rate is found automatically (9600, 38400, 115200, 57600, 4800, 19200). Any module
-that outputs NMEA `GGA` works, which is nearly all of them by default. With nothing fitted the
-board behaves exactly as before, and its card says `gnss no NMEA`; the serial report names the
-pin it is listening on.
+The baud rate is found automatically, trying each rate in `BAUDS` in `rt_gnss.c`. Any module
+that outputs NMEA `GGA` should work. With nothing fitted the board behaves as it does without
+GNSS, and its card says `gnss no NMEA`.
 
 With a fix:
 
-- **Its packets carry its position** — 18 bytes instead of 12: the fraction of a degree of
-  lat/lon at 1e-5° (~1 m) plus altitude. The whole degrees are filled in by the page from the
-  phone's GPS, the drone's own log, or the last position it saw. The longer packet is slightly
-  easier to lose at the edge of range; that is the price.
-- **What it carries between fixes is a setting** — the `pos:` button on its card, one of:
-  **fix** (the latest real fix, as it is; the default), **smoothed** (eases onto each new fix,
-  always a little behind, never overshoots), or **momentum** (also carries on along a tracked
-  velocity — closer in steady motion, but a jumpy fix reads as a burst of speed and it
-  overshoots). Takes effect from the next fix. After 10 s without a fix the position is
-  withdrawn. Whichever is in use, the same seq gets the same position everywhere.
+- **Its packets carry its position**, appended to the measurement packet: the fraction of a
+  degree of lat/lon plus altitude (layout and resolution under "Where the sender was" in
+  `main/rt.h`). The page fills in the whole degrees from the phone's GPS, the GNSS board's own
+  log, or the last position it saw. A longer packet is slightly easier to lose at the edge of
+  range; that is the price.
+- **What it carries between fixes is a setting** — the `pos:` button on its card: the latest
+  **fix** as it is, **smoothed** (eases onto each new fix, lags, never overshoots), or
+  **momentum** (also follows a tracked velocity — closer in steady motion, overshoots when a fix
+  jumps). The boot default and the options are under "Momentum" in `rt.h`. A change takes effect
+  from the next fix, and the position is withdrawn once there has been no fix for `STALE_MS`
+  (`rt_gnss.c`). Whichever is in use, the same seq gets the same position everywhere.
 - **It logs where it was when it heard things.** Every packet it receives is recorded against
   its own track, and its own fixes are recorded with its sequence counters, so it can later say
   exactly which position every packet it *sent* carried — including the ones nobody heard.
-- **Every board logs packets that have a position attached** — from a GNSS sender, or heard
-  by a GNSS receiver. The log is a fixed 32 KB RAM ring (`RT_LOG_BYTES`, no flash writes),
-  taken first thing at boot. When it fills, the oldest goes first. A moving drone costs a board
-  hearing it about 8 bytes a packet; the drone logs about 5 bytes per packet it hears, plus 34 a
-  second for its fixes. The serial report prints heap free, lowest and largest free block, to
-  size it from.
+- **Every board logs packets that have a position attached** — from a GNSS sender, or heard by
+  a GNSS receiver — in a RAM ring of `RT_LOG_BYTES` (`rt.h`), taken first thing at boot, no
+  flash writes. When it fills, the oldest goes first. What each record costs is in the log
+  format in `rt.h`; the serial report prints heap free, lowest and largest free block, which is
+  what `RT_LOG_BYTES` should be set from.
 
 On the page, each GNSS board gets its own track and a ◆ marker with its altitude, separate from
 the phone's. Everything is matched by sequence number — the one thing the sender and every
 receiver already agree on. Connect to *any* board — the drone, or any board that heard it — and
 the track is built from everything every connected board knows: if A heard packets 1, 3, 5 and
 B heard 1, 2, 6, the track runs 1-2-3-5-6, with each receiver's misses drawn at the positions of
-the packets it missed. Connecting to the drone fills in the rest.
+the packets it missed. Connecting to the drone fills in the rest. Marks that land on the same
+spot are spread slightly when drawn (`JIT_M` in the page), so they stay distinct.
 
 A board that was out of range keeps logging, and sends its stockpile when you reconnect —
 newest first, so the live picture is immediate, then the backlog as fast as the link takes it:
-the rate grows while NimBLE accepts every notification and halves the moment it refuses one,
+the rate grows while NimBLE accepts every notification and backs off the moment it refuses one,
 report or log. The card shows `fetching, n behind` until it is done.
 
-**Every board needs v7 firmware and the page redeployed.** An older board discards the 18-byte
-packets as foreign, so it stops hearing a GNSS board the moment that board gets a fix. Marks that
-land on the same spot are spread by up to a metre when drawn, so they stay distinct.
+**Boards and page have to agree on the report version** (`RT_RPT_VER` in `rt.h`; the page lists
+what it decodes). A board without GNSS support discards positioned packets as foreign, so it
+stops hearing a GNSS board the moment that board gets a fix — reflash the whole set together.
 
 ## If it won't boot: the bring-up ladder
 
