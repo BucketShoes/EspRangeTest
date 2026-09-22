@@ -141,7 +141,7 @@
   For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
   and walk. Every packet gets pinned to where you were standing when it arrived, so bare
   track is ground where nothing got through.<br><br>
-  A board with a GNSS module (its TX to GPIO20) draws its own track, and every packet to or
+  A board with a GNSS module draws its own track, and every packet to or
   from it is pinned to where <em>it</em> was instead. Connect to any board - the one with the
   GNSS or one that heard it - and the track fills in from whatever each has seen; a board that
   was out of reach sends what it stockpiled once you reconnect.<br><br>
@@ -190,6 +190,13 @@ const CMD_TX_UNMUTE = 0x86, CMD_TX_MUTE = 0x87;
 // level lights it) lives in one define in the firmware and never travels.
 const CMD_LED_OFF = 0x89, CMD_LED_ON = 0x8A, CMD_LED_BLINK = 0x8B;
 const LED_NAMES = ['led off', 'led on', 'led 2Hz'];
+
+// What a GNSS board's packets carry between fixes: the latest fix as it is, an EMA of position
+// that eases onto each fix, or that plus a tracked velocity. Explicit states, cycled by one
+// button, like the LED. Must match RT_CMD_GEO_* / RT_GEO_* in main/rt.h. Nothing on the page
+// needs to know which is in use - the board's log records what was actually sent.
+const CMD_GEO_FIX = 0x8D;
+const GEO_MODE_NAMES = ['pos: fix', 'pos: smoothed', 'pos: momentum'];
 
 // Control-link PHY. Coded S=8 is the default and the long-range one; 2M is the cheap one, for
 // when the phone is next to the board and the report is just overhead on someone else's test.
@@ -536,7 +543,7 @@ function onChunk(d, v) {
 
     if (ver >= 6) {
       const gb = v.getUint8(o);
-      d.gnss = { state: gb & 3, had: !!(gb & 4), sats: v.getUint8(o + 1),
+      d.gnss = { state: gb & 3, had: !!(gb & 4), mode: (gb >> 3) & 3, sats: v.getUint8(o + 1),
                  hdop: v.getUint8(o + 2), baud: v.getUint8(o + 3) * 1200 };
       d.logSt = { session: v.getUint32(o + 4, true), oldest: v.getUint32(o + 8, true),
                   newest: v.getUint32(o + 12, true), cap: v.getUint16(o + 16, true),
@@ -2560,6 +2567,14 @@ function buildCard(d) {
   R.led.onclick = () => cmd(d, CMD_LED_OFF + ((d.led ?? 0) + 1) % LED_NAMES.length);
   modes.appendChild(R.led);
 
+  R.geo = document.createElement('button');
+  R.geo.title = 'What this board\u2019s packets carry between GNSS fixes. fix: the latest fix as ' +
+                'it is. smoothed: eases onto each new fix, always a little behind. momentum: also ' +
+                'carries on along a tracked velocity - closer in steady motion, overshoots when a ' +
+                'fix jumps. Takes effect from the next fix; boots as fix.';
+  R.geo.onclick = () => cmd(d, CMD_GEO_FIX + ((d.gnss?.mode ?? 0) + 1) % GEO_MODE_NAMES.length);
+  modes.appendChild(R.geo);
+
   // Control-link PHY. Two uses, opposite answers: coded S=8 when the phone link itself is what
   // is being range-tested, 2M when the phone is in a pocket next to the board and the report is
   // pure overhead stolen from whatever channel is under test. 2M is ~16x cheaper per byte.
@@ -2757,6 +2772,11 @@ function updateCard(d) {
   R.led.textContent = R.led.disabled ? 'led n/a' : (LED_NAMES[d.led] ?? 'led ?');
   R.led.className = d.led ? 'on' : '';
 
+  // Only where there is a GNSS to speak of: a board that has never seen NMEA has nothing to set.
+  R.geo.style.display = d.gnss && d.gnss.state ? '' : 'none';
+  R.geo.textContent = GEO_MODE_NAMES[d.gnss?.mode ?? 0] ?? 'pos ?';
+  R.geo.className = d.gnss && d.gnss.mode ? 'on' : '';
+
   // Requested on the left, what the controller actually settled on in brackets when the two
   // disagree - a phone that declined 2M reads "2M (1M)" rather than silently looking applied.
   if (d.conn2m === undefined) {
@@ -2823,10 +2843,10 @@ function updateCard(d) {
     const G = d.gnss;
     const hd = G.hdop === 255 ? '?' : (G.hdop / 10).toFixed(1);
     diag.push('<span class="ch">gnss</span> ' +
-      (G.state === 0 ? 'no NMEA on GPIO20' :
+      (G.state === 0 ? 'no NMEA' :
        G.state === 1 ? `${G.baud} baud · <b class="warn">no fix</b> · ${G.sats} sats` :
                        `<b class="ok">fix</b> · ${G.sats} sats · hdop ${hd} · ${G.baud} baud` +
-                       ' · packets carry it'));
+                       ` · packets carry ${(GEO_MODE_NAMES[G.mode] ?? '?').slice(5)}`));
   }
   if (d.logSt) {
     const L = d.logSt;
