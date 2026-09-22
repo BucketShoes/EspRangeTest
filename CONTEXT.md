@@ -279,6 +279,33 @@ estimate - close for steady flight, briefly wrong on a sharp turn. The module's 
 so a faster rate can be requested later. v6 (the first, GNSS-time version) and v7 cannot hear each other's positioned
 packets; the page reads a v6 report but does not fetch a v6 log.
 
+## The coverage field (2026-09-22)
+
+The owner asked for "how good is the signal in each area" from the hits, misses, rssi and so on
+already on the map, with holes guessed - "good near and good far, the hole can be guessed" - and
+the real trace laid over so guess and measurement can be told apart. The page's **field** button.
+
+- **One link, one span, chosen by the operator.** A pair of boards, a protocol, one direction or
+  both, a metric, and a time span. Long-run data is only comparable while nothing but position
+  changed (transmitter settings, receiver mode, how the antenna is held), and only the operator
+  knows when that was, so the span is picked from a strip of the link's traffic over time rather
+  than inferred.
+- **Kernel-weighted average** (Nadaraya-Watson with a Gaussian). Delivery is the weighted share
+  heard of heard + counted-missing; the other metrics are weighted means of heard packets.
+  "reach" is the kernel size.
+- **Distance is polar about the base.** "bearing" scales the tangential part: 100% is plain map
+  distance; 0% makes range from the base the only thing that counts (rings). That is how a walk
+  in one direction can stand in for another - an explicit, adjustable assumption, not a model.
+- **Guess vs measured is its own quantity**: distance on the ground to the nearest packet, not
+  the estimate's weight (which at 0% bearing is high all round a ring nobody walked). Stripes
+  mark it. The trace shows only the chosen link and span.
+- **Silence is still not evidence.** Track with nothing heard and nothing counted missing adds
+  nothing - the field does not treat it as loss, since a receiver cannot know the sender was
+  transmitting. It shows as bare trace under striped or blank field.
+- **Only what the page holds.** Samples live in page memory (`SAMP_MAX`), so "long term" is as
+  long as the tab has been open; a reload loses them. Persisting or re-importing an export is
+  the obvious next step, not done yet.
+
 ## The XIAO RF switch is unpowered out of reset — root cause of everything below
 
 **Drive GPIO3 LOW or the board does not radiate.** Confirmed from the XIAO ESP32C6 schematic

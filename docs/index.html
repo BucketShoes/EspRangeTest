@@ -103,6 +103,12 @@
   .axrow input[type=range]{flex:1;min-width:80px;height:26px}
   .axval{width:78px;flex:none;text-align:right;font-size:12px;
          font-variant-numeric:tabular-nums;color:var(--dim)}
+  /* The coverage field's panel stands in for the ray controls while it is on. */
+  #plot.off,#fieldbox.off{display:none}
+  #fldtl{display:block;width:100%;height:44px;border-radius:6px;background:#0a0c11;
+         border:1px solid var(--line);touch-action:none;cursor:crosshair;margin:2px 0 4px}
+  .fspan{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;margin-bottom:6px}
+  .axrow input:disabled{opacity:.35}
   .mapstat{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;
            margin-top:8px;line-height:1.5}
 </style>
@@ -126,10 +132,12 @@
     <button id="fit">fit</button>
     <button id="base">set base</button>
     <button id="mis" class="on">misses</button>
+    <button id="fld" title="Coverage field: one link, one time span, spread into a colour map">field</button>
     <button id="csv">export</button>
     <button id="wipe">clear</button>
   </div>
   <div class="axes" id="plot"></div>
+  <div class="axes off" id="fieldbox"></div>
   <div class="mapstat" id="mapstat"></div>
 </div>
 <div id="devs"></div>
@@ -145,6 +153,11 @@
   from it is pinned to where <em>it</em> was instead. Connect to any board - the one with the
   GNSS or one that heard it - and the track fills in from whatever each has seen; a board that
   was out of reach sends what it stockpiled once you reconnect.<br><br>
+  <b>field</b> turns one link into a coverage map: pick the two boards, the protocol and a
+  stretch of time when nothing but position changed, and the packets heard and missed are
+  spread into colour between and around where they landed. Stripes mark guesses - nothing was
+  measured near there - and <b>trace</b> lays what it was made from over the top. With a base
+  set, <b>bearing</b> lets a walk out in one direction stand in for the others.<br><br>
   Needs Chrome on Android or desktop. Web Bluetooth won't work from a
   <code>file://</code> page — use the GitHub Pages URL, or <code>python3 -m http.server</code>
   and open <code>http://localhost:8000</code>.
@@ -1430,6 +1443,8 @@ const METRICS = {
   pdr:    { lab: 'pdr now', unit: '%',   lo: 0,    hi: 100, slo: 0,    shi: 100 },
   pdrall: { lab: 'pdr all', unit: '%',   lo: 0,    hi: 100, slo: 0,    shi: 100 },
   hit:    { lab: 'packets', unit: '',    lo: 0,    hi: 20,  slo: 0,    shi: 8 },
+  // The coverage field's share of packets heard - not in MKEYS, as a ray has no such thing.
+  del:    { lab: 'delivery', unit: '%',  lo: 0,    hi: 100, slo: 0,    shi: 100 },
 };
 const MKEYS = ['rssi', 'loss', 'snr', 'lqi', 'pdr', 'pdrall', 'hit'];
 const mval  = (s, m) => m === 'hit' ? s.hits : s[m];
@@ -1844,6 +1859,736 @@ function loadSettings() {
   } catch (e) { /* corrupt or unavailable - fall back to defaults rather than failing to load */ }
 }
 
+// ---- coverage field ---------------------------------------------------------------------------
+//
+// The rays answer "what happened where I walked". The field answers the question a range test is
+// really asking - "how good is this link over there" - including over there where nobody walked.
+// It is a coverage map: one link (a pair of boards, one protocol, one direction or both), one
+// stretch of time, one measurement, spread from where packets actually landed into a colour
+// field between and around them.
+//
+// Choosing the time is the point, not a convenience. Readings only compare while nothing but
+// position changed - the same transmitter settings, the same mode on the receiver, the antenna
+// held the same way - and only the operator knows when that was. So the span is theirs, picked
+// off a strip showing when this link had traffic.
+//
+// Most of the field is a guess, and it is drawn as one: the colour is the estimate, stripes over
+// it mean nothing was measured near that spot, and the trace - the track and every packet heard
+// or counted missing in the span - can be laid on top to show exactly what the guess is made of.
+//
+// How it guesses. Each packet vouches for its surroundings with a weight that falls away with
+// distance (a Gaussian; "reach" is about where it stops having a say), and the colour at a spot
+// is the weighted average of what the packets around it measured. Delivery is the weighted share
+// heard, of those heard and counted missing, so misses pull it down where they were lost.
+//
+// Distance need not be distance on the ground. With a base set, "bearing" says how much the
+// direction from the base counts against the range from it: at 100% two spots are as close as
+// they are on the map; at 0% only range counts, and a walk out along one road predicts every
+// direction at that range - rings. Radio mostly cares about range, but how much the ground
+// matters is the operator's judgement, so it is a slider. Good near and good far with a hole
+// between is filled by reach; a direction nobody walked is filled by bearing.
+//
+// Silence is not evidence here any more than anywhere else on this page: track with nothing heard
+// and nothing counted missing adds nothing to the field. The trace shows that ground as bare.
+
+const FIELD_KEY = 'esprt.field.v1';
+const FIELD_METS = ['del', 'rssi', 'loss', 'snr', 'lqi'];
+// One hue, worst to best (blue 600 -> 100). The worst end still stands clear of the canvas,
+// because a weak link and no data at all must never look alike.
+const FIELD_RAMP = ['#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7',
+                    '#6da7ec', '#86b6ef', '#9ec5f4', '#b7d3f6', '#cde2fb'];
+const FIELD_LUT = (() => {
+  const c = FIELD_RAMP.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+  const lut = new Uint8Array(256 * 3);
+  for (let k = 0; k < 256; k++) {
+    const u = k / 255 * (c.length - 1), i = Math.min(Math.floor(u), c.length - 2), f = u - i;
+    for (let j = 0; j < 3; j++) lut[k * 3 + j] = Math.round(c[i][j] + (c[i + 1][j] - c[i][j]) * f);
+  }
+  return lut;
+})();
+// exp(-x) for x in 0..4.5, i.e. out to three sigma, where the kernel is cut off. A table, because
+// a long walk at 0% bearing is tens of millions of these.
+const FIELD_EXP = (() => {
+  const t = new Float32Array(1025);
+  for (let i = 0; i <= 1024; i++) t[i] = Math.exp(-i / 1024 * 4.5);
+  return t;
+})();
+// Traffic further apart than this is two runs - what "latest run" looks for.
+const FIELD_GAP_MS = 300000;
+// New data recomputes the field at most this often; a changed setting always does at once.
+const FIELD_MIN_MS = 1500;
+// Total kernel weight below which a spot is left blank: nothing vouches for it at all.
+const FIELD_DEN_MIN = 0.03;
+// How near the nearest packet has to be for a spot to count as measured, as kernel weight: within
+// half the reach there are no stripes, and by the full reach they are solid. Half the reach is
+// the kernel's sigma, where the weight is exp(-1/2); at the reach it is exp(-2).
+const FIELD_NEAR = Math.exp(-0.5), FIELD_FAR = Math.exp(-2);
+// Screen px per field sample. The field is smooth by construction, so it is worked out coarse
+// and scaled up.
+const FIELD_STEP = 3;
+
+const fld = {
+  on: false, trace: true,
+  pair: '', ch: '', rx: '',   // rx: the receiving board's id, or '' for both directions
+  met: 'del', reach: 40, bearing: 100,
+  t0: null, t1: null,         // page time; t0 null = from the start, t1 null = live
+  grid: null, ev: [], C: null, sigSet: '', sigData: '', at: 0, timer: 0,
+  probe: null, tl: null, drag: null, builtRev: -1,
+};
+
+function saveField() {
+  try {
+    localStorage.setItem(FIELD_KEY, JSON.stringify({
+      on: fld.on, trace: fld.trace, pair: fld.pair, ch: fld.ch, rx: fld.rx,
+      met: fld.met, reach: fld.reach, bearing: fld.bearing,
+    }));
+  } catch (e) { /* as saveSettings() */ }
+}
+
+function loadField() {
+  try {
+    const o = JSON.parse(localStorage.getItem(FIELD_KEY));
+    if (!o) return;
+    for (const k of ['on', 'trace']) if (typeof o[k] === 'boolean') fld[k] = o[k];
+    for (const k of ['pair', 'ch', 'rx']) if (typeof o[k] === 'string') fld[k] = o[k];
+    if (FIELD_METS.includes(o.met)) fld.met = o.met;
+    if (typeof o.reach === 'number') fld.reach = o.reach;
+    if (typeof o.bearing === 'number') fld.bearing = o.bearing;
+  } catch (e) { /* defaults */ }
+}
+
+// A pair is two boards regardless of who heard whom; which way round is the direction setting.
+const pairOf = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+
+function fieldPairs() {
+  const m = new Map();
+  for (const S of series.values()) {
+    const a = idOf(S.dev), b = idOf(S.peer);
+    if (a === b) continue;
+    const k = pairOf(a, b);
+    let P = m.get(k);
+    if (!P) m.set(k, P = { k, ids: k.split('|'), chs: new Set(), n: 0 });
+    P.chs.add(S.ch);
+    P.n += S.n;
+  }
+  return m;
+}
+
+function fieldSeries() {
+  return [...series.values()].filter(S => S.ch === fld.ch &&
+    pairOf(idOf(S.dev), idOf(S.peer)) === fld.pair && (!fld.rx || idOf(S.dev) === fld.rx));
+}
+
+const fieldScale = () => scaleFor(fld.ch, fld.met);
+
+function fieldTitle() {
+  const [a, b] = fld.pair.split('|');
+  if (!b) return '';
+  if (!fld.rx) return `${fld.ch} ${labelOf(a)}↔${labelOf(b)}`;
+  return `${fld.ch} ${labelOf(fld.rx === a ? b : a)}→${labelOf(fld.rx)}`;
+}
+
+function fieldVal(s) {
+  const v = s[fld.met];
+  if (typeof v !== 'number' || !isFinite(v)) return undefined;
+  if (fld.met === 'snr' && v === -128) return undefined;
+  return v;
+}
+
+// Every packet of this link in the span, heard or counted missing, with where it was. num/den is
+// what it says about the measurement (den 0: it says nothing, but it is still somewhere something
+// was measured, and still a mark on the trace).
+function fieldGather() {
+  const keys = new Set(fieldSeries().map(S => S.key));
+  const t0 = fld.t0 ?? -Infinity, t1 = fld.t1 ?? Infinity;
+  const del = fld.met === 'del';
+  const ev = [];
+  for (const s of samples) {
+    if (!keys.has(s.key) || s.t < t0 || s.t > t1) continue;
+    placeSample(s, true);
+    if (s.pos) {
+      const v = del ? 100 : fieldVal(s), w = del ? s.hits : 1;
+      ev.push(v === undefined ? { x: s.pos.x, y: s.pos.y, num: 0, den: 0, hit: true }
+                              : { x: s.pos.x, y: s.pos.y, num: v * w, den: w, hit: true });
+    }
+    if (s.miss) {
+      const q = missesOf(s);
+      // Up to 40 are placed per gap, so each stands for its share of the whole gap.
+      const each = del && q.length ? s.miss / q.length : 0;
+      for (const p of q) ev.push({ x: p.x, y: p.y, num: 0, den: each, hit: false });
+    }
+  }
+  return ev;
+}
+
+// The grid is polar about the base, because that is the space "bearing" is measured in; with no
+// base it is polar about the middle of the evidence, with bearing held at 100%, where it is
+// simply the map. Evidence is binned onto the grid first - a walk is tens of thousands of packets
+// but only a few thousand distinct cells - and each bin is then spread over the cells its kernel
+// reaches.
+//
+// Two things are accumulated. The estimate (NUM/DEN) uses the bearing-weighted distance. How
+// close the nearest measurement is (SUP, a max, not a sum) always uses distance on the ground,
+// because "is this a guess" has to mean "did anyone measure near here", however the guess was
+// made.
+function fieldGrid(ev, C) {
+  const sg = fld.reach / 2, cut = 3 * sg, cut2 = cut * cut;
+  const a = C.anchored ? fld.bearing / 100 : 1;
+  const kx = 1024 / 4.5 / (2 * sg * sg);       // squared metres -> FIELD_EXP index
+  let rmax = 0;
+  for (const p of ev) rmax = Math.max(rmax, Math.hypot(p.x - C.x, p.y - C.y));
+  rmax += cut;
+  // Cells no bigger than two thirds of a sigma, so the kernel is never undersampled - unless the
+  // walk is so long that would be millions of them, in which case cells grow to fit.
+  const h = Math.max(sg / 1.5, rmax / 400);
+  const nr = Math.ceil(rmax / h) + 2;
+  const nt = Math.max(72, Math.min(1440, Math.ceil(2 * Math.PI * rmax / h)));
+  const dt = 2 * Math.PI / nt;
+
+  const bins = new Map();
+  for (const p of ev) {
+    const r = Math.hypot(p.x - C.x, p.y - C.y);
+    let th = Math.atan2(p.y - C.y, p.x - C.x);
+    if (th < 0) th += 2 * Math.PI;
+    const i = Math.round(r / h), j = Math.round(th / dt) % nt, id = i * nt + j;
+    let b = bins.get(id);
+    if (!b) bins.set(id, b = { i, j, num: 0, den: 0 });
+    b.num += p.num;
+    b.den += p.den;
+  }
+
+  const N = nr * nt;
+  const NUM = new Float32Array(N), DEN = new Float32Array(N), SUP = new Float32Array(N);
+  const half = Math.floor(nt / 2), di = Math.ceil(cut / h);
+  for (const b of bins.values()) {
+    const rb = b.i * h;
+    for (let i = Math.max(0, b.i - di); i <= Math.min(nr - 1, b.i + di); i++) {
+      const r = i * h, dr2 = (r - rb) * (r - rb);
+      if (dr2 > cut2) continue;
+      // Distance round the ring is arc length at the mean of the two radii.
+      const rm = (r + rb) / 2, arc = Math.sqrt(cut2 - dr2), rm2 = rm * rm;
+      const nS = rm > 0 ? Math.min(half, Math.ceil(arc / rm / dt)) : half;
+      const nV = a * rm > 0 ? Math.min(half, Math.ceil(arc / (a * rm) / dt)) : half;
+      const n = Math.max(nS, nV), hi = Math.min(n, nt - 1 - half);   // each cell once
+      const row = i * nt;
+      for (let k = -n; k <= hi; k++) {
+        const s2 = rm2 * (k * dt) * (k * dt), idx = row + (b.j + k + nt) % nt;
+        const kk = k < 0 ? -k : k;
+        if (kk <= nS) {
+          const x = (dr2 + s2) * kx;
+          if (x < 1024 && FIELD_EXP[x | 0] > SUP[idx]) SUP[idx] = FIELD_EXP[x | 0];
+        }
+        if (kk <= nV && b.den > 0) {
+          const x = (dr2 + a * a * s2) * kx;
+          if (x < 1024) {
+            const w = FIELD_EXP[x | 0];
+            NUM[idx] += w * b.num;
+            DEN[idx] += w * b.den;
+          }
+        }
+      }
+    }
+  }
+  return { cx: C.x, cy: C.y, h, nr, nt, dt, NUM, DEN, SUP };
+}
+
+// Bilinear between the four grid points around a spot. num and den are interpolated separately
+// and divided afterwards, so the edge of the field fades out rather than smearing a value into
+// the blank beyond it.
+function fieldAt(G, x, y) {
+  const dx = x - G.cx, dy = y - G.cy;
+  const ri = Math.hypot(dx, dy) / G.h;
+  if (ri >= G.nr - 1) return null;
+  let th = Math.atan2(dy, dx);
+  if (th < 0) th += 2 * Math.PI;
+  const tj = th / G.dt, jf = Math.floor(tj), fj = tj - jf, i0 = ri | 0, fi = ri - i0;
+  const j0 = jf % G.nt, j1 = (j0 + 1) % G.nt, a = i0 * G.nt, b = a + G.nt;
+  const w00 = (1 - fi) * (1 - fj), w01 = (1 - fi) * fj, w10 = fi * (1 - fj), w11 = fi * fj;
+  const L = A => A[a + j0] * w00 + A[a + j1] * w01 + A[b + j0] * w10 + A[b + j1] * w11;
+  return { num: L(G.NUM), den: L(G.DEN), sup: L(G.SUP) };
+}
+
+function fieldCentre(ev) {
+  if (geo.base) return { x: geo.base.x, y: geo.base.y, anchored: true };
+  let x = 0, y = 0;
+  for (const p of ev) { x += p.x; y += p.y; }
+  return { x: x / ev.length, y: y / ev.length, anchored: false };
+}
+
+// Recompute when anything the field is made of has changed. Settings at once, since someone is
+// dragging a slider and watching; new data no more than every FIELD_MIN_MS, since a live link
+// changes it several times a second.
+function fieldEnsure() {
+  const sigSet = [fld.pair, fld.ch, fld.rx, fld.met, fld.reach, fld.bearing, fld.t0, fld.t1,
+                  geo.base ? geo.base.x + ',' + geo.base.y : ''].join('|');
+  const sigData = [samples.length, samples[0]?.t, samples[samples.length - 1]?.t, gRev,
+                   geo.fixes.length].join('|');
+  if (sigSet === fld.sigSet && sigData === fld.sigData) return;
+  const now = performance.now();
+  if (sigSet === fld.sigSet && now - fld.at < FIELD_MIN_MS) {
+    if (!fld.timer) {
+      fld.timer = setTimeout(() => { fld.timer = 0; mapRedraw(); },
+                             FIELD_MIN_MS - (now - fld.at) + 20);
+    }
+    return;
+  }
+  fld.sigSet = sigSet;
+  fld.sigData = sigData;
+  fld.at = now;
+  fld.ev = fld.ch ? fieldGather() : [];
+  fld.C = fld.ev.length ? fieldCentre(fld.ev) : null;
+  fld.grid = fld.ev.length ? fieldGrid(fld.ev, fld.C) : null;
+}
+
+let fcv = null, mcv = null, hcv = null, hatchPat = null, hatchDpr = 0;
+
+// Stripes in the canvas's own background colour, so over the field they read as the field
+// cut away - "not really known" - rather than as another colour meaning something.
+function hatchPattern(ctx) {
+  if (hatchPat && hatchDpr === view.dpr) return hatchPat;
+  const n = Math.round(6 * view.dpr), c = document.createElement('canvas');
+  c.width = c.height = n;
+  const x = c.getContext('2d');
+  x.strokeStyle = '#0a0c11';
+  x.lineWidth = 1.3 * view.dpr;
+  x.beginPath();
+  for (const o of [-n, 0, n]) { x.moveTo(o - 1, n + 1); x.lineTo(o + n + 1, -1); }
+  x.stroke();
+  hatchDpr = view.dpr;
+  return hatchPat = ctx.createPattern(c, 'repeat');
+}
+
+function drawField(g, W, H) {
+  const G = fld.grid;
+  if (!G) return;
+  const fw = Math.ceil(W / FIELD_STEP), fh = Math.ceil(H / FIELD_STEP);
+  if (!fcv) [fcv, mcv, hcv] = [0, 0, 0].map(() => document.createElement('canvas'));
+  if (fcv.width !== fw || fcv.height !== fh) {
+    fcv.width = mcv.width = fw;
+    fcv.height = mcv.height = fh;
+  }
+  const fc = fcv.getContext('2d'), mc = mcv.getContext('2d');
+  const img = fc.createImageData(fw, fh), msk = mc.createImageData(fw, fh);
+  const sc = fieldScale(), span = sc.shi - sc.slo;
+  for (let py = 0; py < fh; py++) {
+    const y = view.cy - ((py + 0.5) * FIELD_STEP - H / 2) * view.mpp;
+    for (let px = 0; px < fw; px++) {
+      const q = fieldAt(G, view.cx + ((px + 0.5) * FIELD_STEP - W / 2) * view.mpp, y);
+      if (!q || q.den < FIELD_DEN_MIN) continue;
+      const u = span ? (q.num / q.den - sc.slo) / span : 1;
+      const k = Math.round(Math.max(0, Math.min(1, u)) * 255) * 3, o = (py * fw + px) * 4;
+      img.data[o] = FIELD_LUT[k];
+      img.data[o + 1] = FIELD_LUT[k + 1];
+      img.data[o + 2] = FIELD_LUT[k + 2];
+      img.data[o + 3] = 215;
+      msk.data[o + 3] = Math.round(Math.max(0, Math.min(1,
+        (FIELD_NEAR - q.sup) / (FIELD_NEAR - FIELD_FAR))) * 255);
+    }
+  }
+  fc.putImageData(img, 0, 0);
+  mc.putImageData(msk, 0, 0);
+  g.imageSmoothingEnabled = true;
+  g.drawImage(fcv, 0, 0, fw * FIELD_STEP, fh * FIELD_STEP);
+
+  // Stripes wherever the nearest measurement is far off - see FIELD_NEAR.
+  const dw = Math.round(W * view.dpr), dh = Math.round(H * view.dpr);
+  if (hcv.width !== dw || hcv.height !== dh) { hcv.width = dw; hcv.height = dh; }
+  const hc = hcv.getContext('2d');
+  hc.globalCompositeOperation = 'source-over';
+  hc.clearRect(0, 0, dw, dh);
+  hc.fillStyle = hatchPattern(hc);
+  hc.fillRect(0, 0, dw, dh);
+  hc.globalCompositeOperation = 'destination-in';
+  hc.imageSmoothingEnabled = true;
+  hc.drawImage(mcv, 0, 0, fw * FIELD_STEP * view.dpr, fh * FIELD_STEP * view.dpr);
+  hc.globalCompositeOperation = 'source-over';
+  g.drawImage(hcv, 0, 0, W, H);
+}
+
+// What the field was made from: the tracks through the span, every packet heard (a dot), every
+// one counted missing (a red tick). Everything else on the map is from other links or other
+// times, and would only blur which parts of the colour are real.
+function drawFieldTrace(g, W, H) {
+  const t0 = fld.t0 ?? -Infinity, t1 = fld.t1 ?? Infinity;
+  const line = (list, col) => {
+    g.strokeStyle = col;
+    g.beginPath();
+    let on = false;
+    for (const f of list) {
+      if (f.t < t0 || f.t > t1) { on = false; continue; }
+      on ? g.lineTo(sxOf(f.x), syOf(f.y)) : g.moveTo(sxOf(f.x), syOf(f.y));
+      on = true;
+    }
+    g.stroke();
+  };
+  line(geo.fixes, 'rgba(232,234,240,.45)');
+  g.lineWidth = 1.5 / view.dpr;
+  for (const G of gtr.values()) line(G.list, G.col);
+  g.lineWidth = 1 / view.dpr;
+
+  const dots = new Path2D(), ticks = new Path2D();
+  for (const p of fld.ev) {
+    const x = sxOf(p.x), y = syOf(p.y);
+    if (x < -4 || x > W + 4 || y < -4 || y > H + 4) continue;
+    if (p.hit) { dots.moveTo(x + 1.7, y); dots.arc(x, y, 1.7, 0, Math.PI * 2); }
+    else { ticks.moveTo(x, y - 2.5); ticks.lineTo(x, y + 2.5); }
+  }
+  g.fillStyle = '#e8eaf0';
+  g.fill(dots);
+  g.strokeStyle = '#0a0c11';
+  g.stroke(dots);
+  g.strokeStyle = 'rgba(248,113,113,.85)';
+  g.stroke(ticks);
+}
+
+function drawFieldLegend(g, W, H) {
+  const M = METRICS[fld.met];
+  g.fillStyle = '#8b93a7';
+  if (!fld.ch) {
+    g.textAlign = 'center';
+    g.fillText('no link to draw yet - packets have to arrive first', W / 2, H / 2 - 6);
+    g.textAlign = 'left';
+    return;
+  }
+  const sc = fieldScale();
+  let y = 10;
+  g.fillText(`${M.lab}${M.unit ? ' (' + M.unit + ')' : ''} · ${fieldTitle()}`, 12, y);
+  y += 16;
+  const bw = 120, grad = g.createLinearGradient(12, 0, 12 + bw, 0);
+  FIELD_RAMP.forEach((c, i) => grad.addColorStop(i / (FIELD_RAMP.length - 1), c));
+  g.fillStyle = grad;
+  g.fillRect(12, y, bw, 8);
+  g.fillStyle = '#8b93a7';
+  g.fillText(String(sc.slo), 12, y + 11);
+  g.textAlign = 'right';
+  g.fillText(String(sc.shi), 12 + bw, y + 11);
+  g.textAlign = 'left';
+  y += 28;
+  g.fillStyle = FIELD_RAMP[6];
+  g.fillRect(12, y, 16, 10);
+  g.strokeStyle = '#0a0c11';
+  g.lineWidth = 2;
+  g.beginPath();
+  for (let o = -10; o < 16; o += 6) { g.moveTo(12 + o, y + 10); g.lineTo(22 + o, y); }
+  g.save(); g.rect(12, y, 16, 10); g.clip(); g.stroke(); g.restore();
+  g.lineWidth = 1 / view.dpr;
+  g.fillStyle = '#8b93a7';
+  g.fillText('striped: nothing measured near - a guess', 34, y - 1);
+
+  if (!fld.grid) {
+    g.textAlign = 'center';
+    g.fillText('nothing heard or missed on this link in the span', W / 2, H / 2 - 6);
+    g.textAlign = 'left';
+  }
+
+  // The probe: what the field says at one spot, and whether that is a measurement or a guess.
+  if (fld.probe && fld.grid) {
+    const P = fld.probe, px = sxOf(P.x), py = syOf(P.y);
+    const q = fieldAt(fld.grid, P.x, P.y);
+    let txt = 'no estimate here';
+    if (q && q.den >= FIELD_DEN_MIN) {
+      txt = `${Math.round(q.num / q.den)}${M.unit ? ' ' + M.unit : ''} · ` +
+            (q.sup >= FIELD_NEAR ? 'measured' : 'guess');
+    }
+    if (geo.base) txt += ` · ${fmtM(Math.hypot(P.x - geo.base.x, P.y - geo.base.y))} from base`;
+    g.strokeStyle = '#e8eaf0';
+    g.beginPath();
+    g.moveTo(px - 6, py); g.lineTo(px + 6, py);
+    g.moveTo(px, py - 6); g.lineTo(px, py + 6);
+    g.stroke();
+    const tw = g.measureText(txt).width + 10;
+    const tx = Math.min(px + 10, W - tw - 4), ty = Math.max(py - 24, 4);
+    g.fillStyle = 'rgba(18,20,26,.9)';
+    g.fillRect(tx, ty, tw, 17);
+    g.fillStyle = '#e8eaf0';
+    g.fillText(txt, tx + 5, ty + 3);
+  }
+}
+
+// ---- field panel ------------------------------------------------------------------------------
+
+const fmtClock = t => {
+  const d = new Date(t), today = d.toDateString() === new Date().toDateString();
+  return d.toLocaleString([], today ? { hour: '2-digit', minute: '2-digit' }
+    : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+const reachOf = v => Math.round(5 * Math.pow(100, v / 100));        // slider 0..100 -> 5..500 m
+const reachPos = m => Math.round(Math.log(m / 5) / Math.log(100) * 100);
+
+function fieldShow() {
+  document.getElementById('fld').classList.toggle('on', fld.on);
+  document.getElementById('plot').classList.toggle('off', fld.on);
+  document.getElementById('fieldbox').classList.toggle('off', !fld.on);
+}
+
+function fieldSet(k, v) {
+  fld[k] = v;
+  saveField();
+  syncField(true);
+  mapRedraw();
+}
+
+function buildFieldPanel() {
+  const host = document.getElementById('fieldbox');
+  host.innerHTML = '';
+  const row = () => Object.assign(document.createElement('div'), { className: 'prow' });
+  const sel = (id, tip, k) => {
+    const s = Object.assign(document.createElement('select'), { id, title: tip });
+    s.onchange = () => {
+      fieldSet(k, s.value);
+      if (k === 'ch' || k === 'met' || k === 'pair') buildFieldScale();
+    };
+    return s;
+  };
+  const r1 = row(), r2 = row();
+  r1.append(sel('fpair', 'Which two boards', 'pair'), sel('fch', 'Which protocol', 'ch'));
+  r2.append(sel('frx', 'Which way the packets went', 'rx'),
+            sel('fmet', 'What the colour shows', 'met'));
+  host.append(r1, r2);
+
+  const tl = Object.assign(document.createElement('canvas'), { id: 'fldtl',
+    title: 'When this link had traffic - drag across it to choose the span' });
+  host.appendChild(tl);
+  host.appendChild(Object.assign(document.createElement('div'), { className: 'fspan', id: 'fspan' }));
+  const tAt = e => {
+    const T = fld.tl, r = tl.getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    return { u, t: T.tmin + u * (T.tmax - T.tmin) };
+  };
+  tl.addEventListener('pointerdown', e => {
+    if (!fld.tl) return;
+    try { tl.setPointerCapture(e.pointerId); } catch (err) { /* gone */ }
+    fld.drag = { a: tAt(e), x: e.clientX, was: [fld.t0, fld.t1] };
+  });
+  tl.addEventListener('pointermove', e => {
+    if (!fld.drag) return;
+    const a = fld.drag.a, b = tAt(e);
+    const [lo, hi] = a.t < b.t ? [a, b] : [b, a];
+    // Dragged to either end means open-ended that way: from the start, or live.
+    fld.t0 = lo.u <= 0.005 ? null : lo.t;
+    fld.t1 = hi.u >= 0.995 ? null : hi.t;
+    mapRedraw();
+  });
+  const up = e => {
+    if (!fld.drag) return;
+    if (Math.abs(e.clientX - fld.drag.x) < 4) [fld.t0, fld.t1] = fld.drag.was;   // a tap
+    fld.drag = null;
+    mapRedraw();
+  };
+  tl.addEventListener('pointerup', up);
+  tl.addEventListener('pointercancel', up);
+
+  const q = row();
+  q.className = 'prow quick';
+  const qb = (label, tip, f) => {
+    const b = Object.assign(document.createElement('button'), { textContent: label, title: tip });
+    b.onclick = () => { f(); mapRedraw(); };
+    q.appendChild(b);
+  };
+  qb('all', 'Everything this page holds for this link', () => { fld.t0 = fld.t1 = null; });
+  qb('latest run', `Back to the last pause in traffic over ${FIELD_GAP_MS / 60000} min, and live`, () => {
+    const keys = new Set(fieldSeries().map(S => S.key));
+    const ts = samples.filter(s => keys.has(s.key)).map(s => s.t).sort((x, y) => x - y);
+    let i = ts.length - 1;
+    while (i > 0 && ts[i] - ts[i - 1] <= FIELD_GAP_MS) i--;
+    fld.t0 = ts.length ? ts[i] - 1 : null;
+    fld.t1 = null;
+  });
+  qb('last 15 min', 'The last quarter hour, and live', () => {
+    fld.t0 = Date.now() - 900000;
+    fld.t1 = null;
+  });
+  const tr = Object.assign(document.createElement('button'), { id: 'ftrace',
+    textContent: 'trace', title: 'Lay the track and every packet in the span over the field' });
+  tr.onclick = () => { fld.trace = !fld.trace; saveField(); syncField(true); mapRedraw(); };
+  q.appendChild(tr);
+  host.appendChild(q);
+
+  const slider = (label, min, max, val, fmt, tip, on) => {
+    const r = Object.assign(document.createElement('div'), { className: 'axrow', title: tip });
+    r.appendChild(Object.assign(document.createElement('span'),
+                                { className: 'axlab', textContent: label }));
+    const s = Object.assign(document.createElement('input'), { type: 'range', min, max, step: 1 });
+    s.value = val;
+    const out = Object.assign(document.createElement('b'),
+                              { className: 'axval', textContent: fmt(+s.value) });
+    s.addEventListener('input', () => { out.textContent = fmt(+s.value); on(+s.value); });
+    r.append(s, out);
+    host.appendChild(r);
+    return s;
+  };
+  slider('reach', 0, 100, reachPos(fld.reach), v => reachOf(v) + ' m',
+         'How far one packet vouches for - bigger fills more holes, and blurs more',
+         v => { fld.reach = reachOf(v); saveField(); mapRedraw(); });
+  slider('bearing', 0, 100, fld.bearing, v => v + '%' + (v === 0 ? ' rings' : v === 100 ? ' map' : ''),
+         'How much the direction from the base counts against the range from it. ' +
+         '0% predicts every direction from the ones walked; 100% only nearby ground. ' +
+         'Needs a base: set it where the stationary board is',
+         v => { fld.bearing = v; saveField(); mapRedraw(); }).id = 'fbear';
+  host.appendChild(Object.assign(document.createElement('div'), { id: 'fscale' }));
+  buildFieldScale();
+}
+
+// The colour range is the same per-protocol scale the rays use, so a field and a ray fan of the
+// same link agree on what counts as good.
+function buildFieldScale() {
+  const host = document.getElementById('fscale');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!fld.ch) return;
+  const M = METRICS[fld.met], sc = fieldScale(), u = M.unit ? ' ' + M.unit : '';
+  const head = Object.assign(document.createElement('div'), { className: 'srow' });
+  head.appendChild(Object.assign(document.createElement('span'),
+    { className: 'slab', textContent: 'colour: ' + fld.ch + ' ' + M.lab }));
+  if (fld.met !== 'del') {
+    const auto = Object.assign(document.createElement('button'), { textContent: 'auto',
+      title: 'Fit the colours to the middle 90% of what this span measured' });
+    auto.onclick = () => {
+      const v = fld.ev.filter(p => p.hit && p.den > 0).map(p => p.num / p.den)
+                      .sort((x, y) => x - y);
+      if (!v.length) return;
+      const lo = Math.round(v[Math.floor(v.length * 0.05)]);
+      const hi = Math.round(v[Math.min(v.length - 1, Math.floor(v.length * 0.95))]);
+      if (sc.shi < sc.slo) { sc.slo = hi; sc.shi = lo; } else { sc.slo = lo; sc.shi = hi; }
+      if (sc.slo === sc.shi) sc.shi += sc.shi < sc.slo ? -1 : 1;
+      saveSettings();
+      buildFieldScale();
+      mapRedraw();
+    };
+    head.appendChild(auto);
+  }
+  host.appendChild(head);
+  for (const [label, k] of [['worst', 'slo'], ['best', 'shi']]) {
+    const r = Object.assign(document.createElement('div'), { className: 'axrow' });
+    r.appendChild(Object.assign(document.createElement('span'),
+                                { className: 'axlab', textContent: label }));
+    const s = Object.assign(document.createElement('input'),
+                            { type: 'range', min: M.lo, max: M.hi, step: 1 });
+    s.value = sc[k];
+    const out = Object.assign(document.createElement('b'),
+                              { className: 'axval', textContent: sc[k] + u });
+    s.addEventListener('input', () => {
+      sc[k] = +s.value;
+      out.textContent = sc[k] + u;
+      saveSettings();
+      mapRedraw();
+    });
+    r.append(s, out);
+    host.appendChild(r);
+  }
+}
+
+// Fill the choices from the links actually heard, and settle on something that exists. Only
+// when the set of links changes (or a choice was just made), so a list is never rebuilt under a
+// finger.
+function syncField(force) {
+  if (!force && fld.builtRev === seriesRev) return;
+  fld.builtRev = seriesRev;
+  const $ = id => document.getElementById(id);
+  if (!$('fpair')) return;
+  const fill = (s, opts, want) => {
+    s.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+    s.value = want;
+    s.disabled = !opts.length;
+  };
+  const pairs = fieldPairs();
+  let rebuiltScale = false;
+  // With nothing heard yet (every page load) the remembered choice stands, waiting for its link.
+  if (pairs.size && !pairs.has(fld.pair)) {
+    let best = null;
+    for (const P of pairs.values()) if (!best || P.n > best.n) best = P;
+    fld.pair = best ? best.k : '';
+    rebuiltScale = true;
+  }
+  fill($('fpair'), [...pairs.values()].map(P =>
+    [P.k, labelOf(P.ids[0]) + ' ↔ ' + labelOf(P.ids[1])]), fld.pair);
+  const P = pairs.get(fld.pair);
+  const chs = P ? PROTOS.filter(p => P.chs.has(p)) : [];
+  if (P && !chs.includes(fld.ch)) { fld.ch = chs[0]; rebuiltScale = true; }
+  fill($('fch'), chs.map(p => [p, p]), fld.ch);
+  const [a, b] = P ? P.ids : ['', ''];
+  if (P && fld.rx && fld.rx !== a && fld.rx !== b) fld.rx = '';
+  fill($('frx'), P ? [['', 'both ways'], [b, labelOf(a) + ' → ' + labelOf(b)],
+                      [a, labelOf(b) + ' → ' + labelOf(a)]] : [], fld.rx);
+  const on = fieldSeries();
+  const mets = FIELD_METS.filter(m => m === 'del' || on.some(S => S.has[m]));
+  if (on.length && !mets.includes(fld.met)) { fld.met = 'del'; rebuiltScale = true; }
+  fill($('fmet'), mets.map(m => [m, METRICS[m].lab]), fld.met);
+  $('ftrace').classList.toggle('on', fld.trace);
+  if (rebuiltScale) { saveField(); buildFieldScale(); }
+}
+
+// The strip: traffic over time on this link, heard below and missed stacked on top, with
+// everything outside the span shaded. Gaps show as gaps, which is how a run is found.
+function paintTimeline() {
+  const c = document.getElementById('fldtl');
+  if (!c || !fld.on) return;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
+  const dpr = view.dpr || 1;
+  if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  g.font = '10px ui-sans-serif,system-ui,sans-serif';
+  const keys = new Set(fieldSeries().map(S => S.key));
+  let tmin = Infinity, tmax = -Infinity;
+  const ts = [];
+  for (const s of samples) {
+    if (!keys.has(s.key)) continue;
+    ts.push(s);
+    if (s.t < tmin) tmin = s.t;
+    if (s.t > tmax) tmax = s.t;
+  }
+  const span = document.getElementById('fspan');
+  if (!ts.length) {
+    fld.tl = null;
+    g.fillStyle = '#6b7488';
+    g.fillText('no traffic on this link yet', 8, h / 2 - 5);
+    span.textContent = '';
+    return;
+  }
+  tmax = Math.max(tmax, tmin + 60000);
+  fld.tl = { tmin, tmax };
+  const nb = Math.max(1, Math.floor(w / 3)), bw = w / nb, T = tmax - tmin;
+  const hit = new Float32Array(nb), mis = new Float32Array(nb);
+  const t0 = fld.t0 ?? -Infinity, t1 = fld.t1 ?? Infinity;
+  let heard = 0, missed = 0;
+  for (const s of ts) {
+    const k = Math.min(nb - 1, Math.floor((s.t - tmin) / T * nb));
+    hit[k] += s.hits;
+    mis[k] += s.miss;
+    if (s.t >= t0 && s.t <= t1) { heard += s.hits; missed += s.miss; }
+  }
+  let top = 1;
+  for (let k = 0; k < nb; k++) top = Math.max(top, hit[k] + mis[k]);
+  for (let k = 0; k < nb; k++) {
+    const n = hit[k] + mis[k];
+    if (!n) continue;
+    const full = Math.max(2, Math.sqrt(n / top) * (h - 4)), hh = full * hit[k] / n;
+    g.fillStyle = '#5598e7';
+    g.fillRect(k * bw, h - 2 - hh, Math.max(1, bw - 1), hh);
+    g.fillStyle = '#f87171';
+    g.fillRect(k * bw, h - 2 - full, Math.max(1, bw - 1), full - hh);
+  }
+  const x0 = fld.t0 === null ? 0 : Math.max(0, (fld.t0 - tmin) / T * w);
+  const x1 = fld.t1 === null ? w : Math.min(w, (fld.t1 - tmin) / T * w);
+  g.fillStyle = 'rgba(10,12,17,.72)';
+  g.fillRect(0, 0, x0, h);
+  g.fillRect(x1, 0, w - x1, h);
+  g.strokeStyle = '#e8eaf0';
+  g.beginPath();
+  g.moveTo(x0 + 0.5, 0); g.lineTo(x0 + 0.5, h);
+  g.moveTo(x1 - 0.5, 0); g.lineTo(x1 - 0.5, h);
+  g.stroke();
+  span.textContent = `${fmtClock(fld.t0 ?? tmin)} → ${fld.t1 === null ? 'now' : fmtClock(fld.t1)}` +
+                     ` · ${heard} heard · ${missed} missed` +
+                     ` · strip ${fmtClock(tmin)}–${fmtClock(tmax)}`;
+  // Bearing only means something about a base.
+  const fb = document.getElementById('fbear');
+  if (fb) fb.disabled = !geo.base;
+}
+
 // ---- the canvas -----------------------------------------------------------------------------
 
 const cv  = document.getElementById('cv');
@@ -1891,9 +2636,37 @@ function mapRedraw() {
     // still on the bench, before GPS is on and before there is a single fix, is the normal way
     // to start a test; hanging that off the drawing path left the list empty exactly then.
     syncSources();
+    syncField(false);
     drawMap();
+    paintTimeline();
     paintMapStat();
   });
+}
+
+// Where a sample landed - shared by the rays and the coverage field.
+function placeSample(s, redo) {
+  if (s.g) {
+    if (needsResolve(s, redo)) resolveG(s);
+  } else if (!s.pos || s.pos.prov) {
+    s.pos = posAt(s.t);
+  }
+}
+
+// Where its misses were lost. Resolved once and kept, since re-interpolating every lost packet
+// on every frame is the one thing here that would actually cost something. Log-drawn samples
+// have theirs from resolveG().
+function missesOf(s) {
+  if (!s.g && (!s.mpos || s.mprov)) {
+    const n = Math.min(s.miss, 40);
+    s.mpos = []; s.mprov = false;
+    for (let k = 1; k <= n; k++) {
+      const q = posAt(s.t0 + (s.t - s.t0) * (k / (n + 1)));
+      if (!q) continue;
+      if (q.prov) s.mprov = true;
+      s.mpos.push(q);
+    }
+  }
+  return s.mpos || [];
 }
 
 function drawMap() {
@@ -1922,6 +2695,12 @@ function drawMap() {
   const lead = geo.live || newestG();
   if (view.follow && lead) { view.cx = lead.x; view.cy = lead.y; }
 
+  // The coverage field goes under everything, and stands in for the rays while it is on.
+  if (fld.on) {
+    fieldEnsure();
+    drawField(g, W, H);
+  }
+
   const act = activeSources();
   const rank = new Map(act.map((S, i) => [S.key, i]));
 
@@ -1947,13 +2726,15 @@ function drawMap() {
 
   // The track. One path, one stroke - a walk is tens of thousands of segments and stroking
   // them individually is the difference between a smooth pan and a slideshow.
-  g.strokeStyle = '#4d566b';
-  g.beginPath();
-  for (let i = 0; i < geo.fixes.length; i++) {
-    const f = geo.fixes[i], px = sxOf(f.x), py = syOf(f.y);
-    i ? g.lineTo(px, py) : g.moveTo(px, py);
+  if (!fld.on) {
+    g.strokeStyle = '#4d566b';
+    g.beginPath();
+    for (let i = 0; i < geo.fixes.length; i++) {
+      const f = geo.fixes[i], px = sxOf(f.x), py = syOf(f.y);
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    }
+    g.stroke();
   }
-  g.stroke();
 
   // GNSS tracks, one per board, through every fix anybody knows about - see "GNSS tracks".
   // A shade heavier than the phone's so the two are not mistaken for each other where they
@@ -1963,7 +2744,7 @@ function drawMap() {
   for (const G of gtr.values()) {
     if (G.dirty) { G.list.sort((a, b) => a.t - b.t); G.dirty = false; }
     G.col = GNSS_COLS[gi++ % GNSS_COLS.length];
-    if (G.list.length < 2) continue;
+    if (G.list.length < 2 || fld.on) continue;
     g.strokeStyle = G.col;
     g.globalAlpha = 0.6;
     g.beginPath();
@@ -1990,13 +2771,9 @@ function drawMap() {
   });
   const pad = plot.maxPx + 20;   // rays reach outward, so cull generously rather than exactly
   let drawn = 0;
-  for (let i = 0; i < samples.length; i++) {
+  for (let i = 0; !fld.on && i < samples.length; i++) {   // the field places its own
     const s = samples[i];
-    if (s.g) {
-      if (needsResolve(s, redo)) resolveG(s);
-    } else if (!s.pos || s.pos.prov) {
-      s.pos = posAt(s.t);
-    }
+    placeSample(s, redo);
     if (!s.pos) continue;
     const px = sxOf(s.pos.x + s.jx), py = syOf(s.pos.y + s.jy);
     if (px < -pad || px > W + pad || py < -pad || py > H + pad) continue;
@@ -2013,21 +2790,8 @@ function drawMap() {
     }
 
     if (showMiss && s.miss) {
-      // Positions resolved once and kept, since re-interpolating every lost packet on every
-      // frame is the one thing here that would actually cost something. Log-drawn samples
-      // have theirs from resolveG().
-      if (!s.g && (!s.mpos || s.mprov)) {
-        const n = Math.min(s.miss, 40);
-        s.mpos = []; s.mprov = false;
-        for (let k = 1; k <= n; k++) {
-          const q = posAt(s.t0 + (s.t - s.t0) * (k / (n + 1)));
-          if (!q) continue;
-          if (q.prov) s.mprov = true;
-          s.mpos.push(q);
-        }
-      }
       let qi = 0;
-      for (const q of s.mpos || []) {
+      for (const q of missesOf(s)) {
         // Each miss tick nudged too, differently but fixed, so they spread and stay put.
         qi++;
         const qx = sxOf(q.x + (s.jx * qi) % JIT_M), qy = syOf(q.y + (s.jy * qi) % JIT_M);
@@ -2037,6 +2801,7 @@ function drawMap() {
   }
   if (showMiss) { g.strokeStyle = 'rgba(248,113,113,.55)'; g.stroke(pMiss); }
   act.forEach((S, i) => { g.strokeStyle = srcCol(S.key); g.stroke(rays[i]); });
+  if (fld.on && fld.trace) drawFieldTrace(g, W, H);
 
   // Base marker: a small open square, so it reads as a placed thing rather than a measurement.
   if (geo.base) {
@@ -2093,6 +2858,11 @@ function drawMap() {
   g.fillText(fmtM(barM), 12, H - 18);
   g.fillText('N ↑', W - 30, H - 8);
   g.textBaseline = 'top';
+
+  if (fld.on) {
+    drawFieldLegend(g, W, H);
+    return;
+  }
 
   // Legend. Each entry carries a stub drawn at that radio's own angle, so which ray is which
   // can be read off the map without looking away from it.
@@ -2435,6 +3205,42 @@ function exportCsv() {
 loadSettings();
 buildPlotControls();
 rebuildSources();
+loadField();
+buildFieldPanel();
+syncField(true);
+fieldShow();
+
+document.getElementById('fld').onclick = () => {
+  fld.on = !fld.on;
+  saveField();
+  fieldShow();
+  syncField(true);
+  mapRedraw();
+};
+
+// The field's probe: what it says at one spot. A mouse just hovers; a finger taps, since one
+// finger otherwise belongs to the page (see the map's gestures), and a tap is not a scroll.
+let tapAt = null;
+const probeAt = e => {
+  const r = cv.getBoundingClientRect();
+  fld.probe = unview(e.clientX - r.left, e.clientY - r.top);
+  mapRedraw();
+};
+cv.addEventListener('pointermove', e => {
+  if (fld.on && e.pointerType === 'mouse' && !e.buttons) probeAt(e);
+});
+cv.addEventListener('pointerleave', e => {
+  if (e.pointerType === 'mouse' && fld.probe) { fld.probe = null; mapRedraw(); }
+});
+cv.addEventListener('pointerdown', e => {
+  tapAt = fld.on && e.pointerType !== 'mouse' && ptrs.size === 1
+    ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() } : null;
+});
+cv.addEventListener('pointerup', e => {
+  if (tapAt && tapAt.id === e.pointerId && performance.now() - tapAt.t < 400 &&
+      Math.hypot(e.clientX - tapAt.x, e.clientY - tapAt.y) < 10) probeAt(e);
+  tapAt = null;
+});
 
 document.getElementById('gps').onclick = () => geo.watch === null ? gpsStart() : gpsStop();
 document.getElementById('follow').onclick = () => setFollow(!view.follow);
