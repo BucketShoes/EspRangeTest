@@ -161,13 +161,20 @@
   spread into colour between and around where they landed. <b>trace</b> lays what it was made
   from over the top, and <b>bearing</b> lets a walk out in one direction stand in for the
   others.<br><br>
-  With a base set, the field is drawn through a fit of signal against range, so a few spokes
-  describe the whole disc. <b>height</b> takes out how high a GNSS end was flying - low down the
-  ground itself is in the way, so 900 m along the ground beats 1.1 km at 100 m up - and the
-  <b>at</b> slider says which height the map answers for. <b>leftovers</b> then shows only what
-  the fit could not explain, which is where hills and buildings are. Use it on
-  <b>delivery</b>: a shadow deep enough to matter kills the link, and a dead link reports no
-  signal at all, so only the packets that failed to arrive can show it.<br><br>
+  Colour covers everything it can reach. The white line rings ground that was actually measured,
+  the fainter one ground a measurement reached; outside both, the colour is the nearest reading
+  carried over, and worth no more than that. <b>cells</b> draws the averages themselves, over the
+  ground they cover and no further - the measurements, with nothing added. <b>losses count</b>
+  keeps a stretch where nothing got through from reading as no data: those packets count as
+  readings at the floor, and drag the colour down.<br><br>
+  The <b>fit</b> row is optional and starts off. It fits signal against range and draws the map
+  through it, so a few spokes describe a whole disc; <b>height</b> takes out how high a GNSS end
+  was flying, since low down the ground itself is in the way - 900 m along the ground beats
+  1.1 km at 100 m up - and the <b>at</b> slider says which height the map answers for.
+  <b>leftovers</b> shows only what the fit could not explain, which is where hills are. On
+  <b>delivery</b> that is the clearest shadow map there is: a shadow deep enough to matter kills
+  the link, and a dead link reports no signal at all, so only the packets that never arrived can
+  show it.<br><br>
   Needs Chrome on Android or desktop. Web Bluetooth won't work from a
   <code>file://</code> page — use the GitHub Pages URL, or <code>python3 -m http.server</code>
   and open <code>http://localhost:8000</code>.
@@ -1918,10 +1925,13 @@ function loadSettings() {
 
 const FIELD_KEY = 'esprt.field.v1';
 const FIELD_METS = ['del', 'rssi', 'loss', 'snr', 'lqi'];
-// One hue, worst to best (blue 600 -> 100). The worst end still stands clear of the canvas,
-// because a weak link and no data at all must never look alike.
-const FIELD_RAMP = ['#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7',
-                    '#6da7ec', '#86b6ef', '#9ec5f4', '#b7d3f6', '#cde2fb'];
+// Thermal, worst to best, on the owner's call. One hue is the better general rule, but it spent
+// nearly all of its separation on the good end here: at 500 m out every reading is somewhere in
+// the bottom fifth of the scale, and a hole in that fifth looked like the ground around it. A
+// thermal ramp keeps moving through hue as well as lightness, so the bad end has room too. It
+// starts above black, which stays reserved for ground with no estimate at all.
+const FIELD_RAMP = ['#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925',
+                    '#fb9b06', '#f7d13d', '#fcffa4'];
 function rampLut(hexes) {
   const c = hexes.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
   const lut = new Uint8Array(256 * 3);
@@ -1932,9 +1942,9 @@ function rampLut(hexes) {
   return lut;
 }
 const FIELD_LUT = rampLut(FIELD_RAMP);
-// Height wears the other sequential hue, so it can never be read as the field's own colour, and
-// starts bright enough at the bottom that ground level still shows against the canvas.
-const ALT_RAMP = ['#b45309', '#d97706', '#f59e0b', '#fbbf24', '#fcd34d', '#fef3c7'];
+// Height wears a cool ramp, the one range of colour the thermal field never visits, so a mark's
+// height can never be read as a signal level.
+const ALT_RAMP = ['#0c4a6e', '#0369a1', '#0ea5e9', '#38bdf8', '#7dd3fc', '#e0f2fe'];
 const ALT_LUT = rampLut(ALT_RAMP);
 const ALT_STEPS = 12;
 const altCol = u => {
@@ -1982,15 +1992,22 @@ const FIELD_ALT_MIN = 20;
 // hundreds of metres.
 const FIELD_H0 = 5, FIELD_H_BINS = 9;
 
+// How far under the weakest thing actually heard a missed packet is taken to have been. It only
+// has to be under it: the receiver never reported a number, so this is a floor, not a reading.
+const FIELD_CENSOR_DB = 3;
 // Delivery is never taken as exactly none or exactly all when fitting: a handful of packets is
 // evidence, not proof, and log-odds of 0 or 1 is infinite and would drag the line onto it.
 const FIELD_P_EDGE = 0.02;
 
 const fld = {
   on: false, trace: true, stripes: false, resid: false,
+  cellsOn: false, edges: true, censor: true,
   pair: '', ch: '', rx: '',   // rx: the receiving board's id, or '' for both directions
-  met: 'del', reach: 40, bearing: 100,
-  fit: true, fitH: true, fitB: false,
+  met: 'del', reach: 150, bearing: 100,
+  // The fit starts off. What is on screen should be the measurements until somebody asks for
+  // more than that: a model does not need a field test, and a picture that is mostly model with
+  // a few metres of measurement around the trace is a drawing, not a result.
+  fit: false, fitH: true, fitB: false,
   alt: null,                  // height the map is drawn for; null until the data says
   t0: null, t1: null,         // page time; t0 null = from the start, t1 null = live
   grid: null, ev: [], cells: [], model: null, C: null,
@@ -2002,6 +2019,7 @@ function saveField() {
   try {
     localStorage.setItem(FIELD_KEY, JSON.stringify({
       on: fld.on, trace: fld.trace, stripes: fld.stripes, resid: fld.resid,
+      cellsOn: fld.cellsOn, edges: fld.edges, censor: fld.censor,
       pair: fld.pair, ch: fld.ch,
       rx: fld.rx, met: fld.met, reach: fld.reach, bearing: fld.bearing,
       fit: fld.fit, fitH: fld.fitH, fitB: fld.fitB, alt: fld.alt,
@@ -2013,7 +2031,8 @@ function loadField() {
   try {
     const o = JSON.parse(localStorage.getItem(FIELD_KEY));
     if (!o) return;
-    for (const k of ['on', 'trace', 'stripes', 'resid', 'fit', 'fitH', 'fitB']) {
+    for (const k of ['on', 'trace', 'stripes', 'resid', 'fit', 'fitH', 'fitB',
+                     'cellsOn', 'edges', 'censor']) {
       if (typeof o[k] === 'boolean') fld[k] = o[k];
     }
     for (const k of ['pair', 'ch', 'rx']) if (typeof o[k] === 'string') fld[k] = o[k];
@@ -2125,6 +2144,18 @@ const median = a => {
   return n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2;
 };
 
+// Weighted, for cells: a missed packet is one observation like any other, and a drawn miss can
+// stand for several of them.
+function wMedian(vw) {
+  if (!vw.length) return undefined;
+  vw.sort((p, q) => p.v - q.v);
+  let tot = 0;
+  for (const e of vw) tot += e.w;
+  let acc = 0;
+  for (const e of vw) { acc += e.w; if (acc >= tot / 2) return e.v; }
+  return vw[vw.length - 1].v;
+}
+
 function fieldCells(ev, C) {
   let rmax = 0;
   for (const p of ev) {
@@ -2134,14 +2165,28 @@ function fieldCells(ev, C) {
     if (p.r > rmax) rmax = p.r;
   }
   const big = Math.max(FIELD_CELL_MIN * 2, fld.reach);
+  // A packet that never arrived is a measurement too: it says the signal was under whatever this
+  // receiver needed. Counting it as a reading at the floor - the weakest thing actually heard,
+  // less a margin - is what stops a hole full of losses reading as "no data here" on a signal
+  // map, and it is why a stretch where nothing got through now drags the colour down instead of
+  // leaving a gap for the fit to fill in cheerfully. Left-censored data, handled as such.
+  const heard = [];
+  for (const p of ev) if (p.v !== undefined) heard.push(p.v);
+  heard.sort((a, b) => a - b);
+  const worstUp = fld.met === 'loss';     // for path loss, worse is a bigger number
+  const floor = !fld.censor || !heard.length ? null
+    : worstUp ? heard[Math.floor(heard.length * 0.98)] + FIELD_CENSOR_DB
+              : heard[Math.floor(heard.length * 0.02)] - FIELD_CENSOR_DB;
+
   const made = [];
-  const keep = pts => {
-    const c = { sx: 0, sy: 0, np: 0, hits: 0, miss: 0, vals: [], alts: [] };
+  const keep = (pts, r0, r1, t0, t1) => {
+    const c = { sx: 0, sy: 0, np: 0, hits: 0, miss: 0, vw: [], alts: [],
+                r0, r1, t0, t1 };
     for (const p of pts) {
       c.sx += p.x; c.sy += p.y; c.np++;
       c.hits += p.hits;
       c.miss += p.miss;
-      if (p.v !== undefined) c.vals.push(p.v);
+      if (p.v !== undefined) c.vw.push({ v: p.v, w: 1 });
       if (p.alt !== undefined) c.alts.push(p.alt);
     }
     made.push(c);
@@ -2152,7 +2197,7 @@ function fieldCells(ev, C) {
     const wide = Math.max(dr, arc) > big;
     const splittable = Math.max(dr, arc) > 2 * FIELD_CELL_MIN;
     if (depth >= FIELD_CELL_DEPTH || !splittable ||
-        (pts.length <= FIELD_CELL_N && !wide)) return keep(pts);
+        (pts.length <= FIELD_CELL_N && !wide)) return keep(pts, r0, r1, t0, t1);
     // Halve whichever way round the cell is longer, so cells stay roughly square on the ground
     // and a "cell" is the same idea at 30 m out as at 3 km.
     if (dr >= arc) {
@@ -2174,14 +2219,29 @@ function fieldCells(ev, C) {
     c.r = Math.hypot(c.x - C.x, c.y - C.y);
     c.th = Math.atan2(c.y - C.y, c.x - C.x);
     if (c.th < 0) c.th += 2 * Math.PI;
-    c.n = c.vals.length;
-    c.med = median(c.vals);
+    c.n = 0;
+    for (const e of c.vw) c.n += e.w;
+    c.med = wMedian(c.vw);
     // Spread of the cell's own packets, as a median absolute deviation - robust, so one wild
     // packet widens it a little rather than defining it.
-    c.mad = c.n > 1 ? median(c.vals.map(v => Math.abs(v - c.med))) : FIELD_MAD0;
+    c.mad = c.vw.length > 1
+      ? wMedian(c.vw.map(e => ({ v: Math.abs(e.v - c.med), w: e.w }))) : FIELD_MAD0;
     c.alt = median(c.alts);
     // A cell counts for as much as it has packets, against how much they disagree.
     c.w = Math.min(c.n, FIELD_N_CAP) / (1 + (c.mad / FIELD_MAD0) ** 2);
+    // The value the cell is drawn and fitted with: what it heard, pulled toward the floor by
+    // what it lost. Half the packets through reads halfway down; nothing through reads the
+    // floor, so a hole full of losses is the darkest thing on the map instead of a gap.
+    //
+    // A plain median of heard-and-censored-together was the first try and was useless: past
+    // half the packets lost it pins to the floor exactly, and any link worth testing spends
+    // most of its range there, so every distant cell came out identical. This keeps the median
+    // robust against one wild packet and lets the loss rate move it smoothly.
+    const tot = c.hits + c.miss;
+    c.p = tot > 0 ? c.hits / tot : 1;
+    c.val = c.med === undefined ? (floor !== null && c.miss > 0 ? floor : undefined)
+          : floor === null ? c.med
+          : c.med * c.p + floor * (1 - c.p);
     out.push(c);
   }
   return out;
@@ -2308,9 +2368,9 @@ function fieldFit(cells, C) {
       y = logit(Math.min(1 - FIELD_P_EDGE, Math.max(FIELD_P_EDGE, c.hits / n)));
       w = Math.min(n, FIELD_N_CAP);
     } else {
-      if (!c.n) continue;
-      y = c.med;
-      w = c.w;
+      if (c.val === undefined) continue;
+      y = c.val;
+      w = c.w > 0 ? c.w : Math.min(c.miss, FIELD_N_CAP) / 2;
     }
     pts.push({ c, y, w, x: Math.log10(Math.max(Math.hypot(c.r, c.dz), 1)),
                hz: hKey(c.dz), r0: 0 });
@@ -2356,7 +2416,9 @@ function fieldFit(cells, C) {
       c.res = n ? (100 * c.hits / n - modelValue(M, c.r, c.th, c.dz || 0)) * n / (n + FIELD_SHRINK)
                 : 0;
     } else {
-      c.res = c.n ? (c.med - modelAt(M, c.r, c.th, c.dz || 0)) * c.n / (c.n + FIELD_SHRINK) : 0;
+      const n = c.hits + c.miss;
+      c.res = c.val === undefined ? 0
+            : (c.val - modelAt(M, c.r, c.th, c.dz || 0)) * n / (n + FIELD_SHRINK);
     }
   }
   return M;
@@ -2374,8 +2436,11 @@ function cellNumDen(c, M) {
     const w = Math.min(n, FIELD_N_CAP);
     return M ? { num: c.res * w, den: w } : { num: 100 * c.hits, den: n };
   }
-  if (!c.n) return { num: 0, den: 0 };
-  return { num: (M ? c.res : c.med) * c.w, den: c.w };
+  if (c.val === undefined) return { num: 0, den: 0 };
+  // A cell that only ever lost packets still says something, so it carries the weight of what
+  // it lost rather than the weight of what it heard, which is none.
+  const w = c.w > 0 ? c.w : Math.min(c.miss, FIELD_N_CAP) / 2;
+  return { num: (M ? c.res : c.val) * w, den: w };
 }
 
 // The grid is polar about the base, because that is the space "bearing" is measured in; with no
@@ -2444,7 +2509,97 @@ function fieldGrid(cells, C, M) {
       }
     }
   }
-  return { cx: C.x, cy: C.y, h, nr, nt, dt, NUM, DEN, SUP, rdata };
+  // Colour everywhere, not just where the kernel reached. Past its reach the nearest measurement
+  // is carried outwards - round the ring first, which is the "same range, another direction"
+  // guess, and then along the radius. It is a worse guess the further it travels, and saying so
+  // is the contours' job, not the colour's: ground left black reads as "nothing here", when what
+  // was meant was "nobody went there", and that was the whole complaint about the old picture.
+  //
+  // With a fit, blank ground takes the fit itself instead (leftovers of zero), because that is
+  // already a better guess than the nearest measurement dragged half a kilometre.
+  const VAL = new Float32Array(N);
+  const HAS = new Uint8Array(N);
+  for (let k = 0; k < N; k++) {
+    if (DEN[k] >= FIELD_DEN_MIN) { VAL[k] = NUM[k] / DEN[k]; HAS[k] = 1; }
+  }
+  if (!M) {
+    // How far a reading is carried is measured the same way the kernel measures distance, so
+    // the bearing slider governs both: at 100% the nearest reading on the ground wins, and a
+    // shadow reaches outward behind whatever cast it, because going round the ring is as
+    // expensive as going along it. At 0% going round a ring is free, so a reading at 500 m in
+    // one direction fills 500 m in every direction.
+    const D = new Float32Array(N).fill(Infinity);
+    for (let k = 0; k < N; k++) if (HAS[k]) D[k] = 0;
+    const roundRings = () => {
+      for (let i = 0; i < nr; i++) {
+        const row = i * nt, step = Math.max(1e-6, a * i * h * dt);
+        for (const dir of [1, -1]) {
+          let best = Infinity, bv = 0;
+          for (let s = 0; s < nt * 2; s++) {
+            const j = (((dir > 0 ? s : -s) % nt) + nt) % nt, k = row + j;
+            best += step;
+            if (D[k] < best) { best = D[k]; bv = VAL[k]; }
+            else if (best < D[k]) { D[k] = best; VAL[k] = bv; }
+          }
+        }
+      }
+    };
+    const alongRadii = () => {
+      for (let j = 0; j < nt; j++) {
+        for (const dir of [1, -1]) {
+          let best = Infinity, bv = 0;
+          for (let s = 0; s < nr; s++) {
+            const i = dir > 0 ? s : nr - 1 - s, k = i * nt + j;
+            best += h;
+            if (D[k] < best) { best = D[k]; bv = VAL[k]; }
+            else if (best < D[k]) { D[k] = best; VAL[k] = bv; }
+          }
+        }
+      }
+    };
+    // Twice each way: one pass alone cannot turn a corner.
+    roundRings(); alongRadii(); roundRings(); alongRadii();
+  }
+  return { cx: C.x, cy: C.y, h, nr, nt, dt, VAL, DEN, SUP, rdata,
+           edge: [contourOf(SUP, FIELD_NEAR, nr, nt, h, dt, C),
+                  contourOf(DEN, FIELD_DEN_MIN, nr, nt, h, dt, C)] };
+}
+
+// Where a quantity crosses a threshold, as line segments in world metres - marching squares over
+// the polar grid, worked out once when the field is built rather than per frame. These are the
+// borders between measured ground, ground a measurement reached, and ground that is only the
+// nearest reading carried over. Lines, because a line says where a boundary is without taking
+// anything away from the colour inside it.
+const MS_EDGES = [[], [[3, 0]], [[0, 1]], [[3, 1]], [[1, 2]], [[3, 0], [1, 2]], [[0, 2]],
+                  [[3, 2]], [[2, 3]], [[2, 0]], [[0, 1], [2, 3]], [[2, 1]], [[1, 3]],
+                  [[1, 0]], [[0, 3]], []];
+
+function contourOf(A, thr, nr, nt, h, dt, C) {
+  const seg = [];
+  for (let i = 0; i < nr - 1; i++) {
+    for (let j = 0; j < nt; j++) {
+      const j2 = (j + 1) % nt;
+      const a = A[i * nt + j] - thr, b = A[i * nt + j2] - thr;
+      const c = A[(i + 1) * nt + j2] - thr, d = A[(i + 1) * nt + j] - thr;
+      const code = (a > 0 ? 1 : 0) | (b > 0 ? 2 : 0) | (c > 0 ? 4 : 0) | (d > 0 ? 8 : 0);
+      const list = MS_EDGES[code];
+      if (!list.length) continue;
+      // Each edge's crossing point, in (ring, bearing) steps.
+      const mix = (u, v) => Math.abs(u - v) < 1e-9 ? 0.5 : u / (u - v);
+      const pt = e => e === 0 ? [i, j + mix(a, b)] : e === 1 ? [i + mix(b, c), j + 1]
+                    : e === 2 ? [i + 1, j + mix(d, c)] : [i + mix(a, d), j];
+      for (const [e0, e1] of list) {
+        const p = pt(e0), q = pt(e1);
+        const w = ([ri, jj]) => {
+          const r = ri * h, th = jj * dt;
+          return [C.x + r * Math.cos(th), C.y + r * Math.sin(th)];
+        };
+        const [x0, y0] = w(p), [x1, y1] = w(q);
+        seg.push(x0, y0, x1, y1);
+      }
+    }
+  }
+  return new Float32Array(seg);
 }
 
 // Bilinear between the four grid points around a spot. num and den are interpolated separately
@@ -2461,7 +2616,7 @@ function fieldAt(G, x, y) {
   const w00 = (1 - fi) * (1 - fj), w01 = (1 - fi) * fj, w10 = fi * (1 - fj), w11 = fi * fj;
   const L = A => A[a + j0] * w00 + A[a + j1] * w01 + A[b + j0] * w10 + A[b + j1] * w11;
   // r and th come back out because the fit is a function of them.
-  return { num: L(G.NUM), den: L(G.DEN), sup: L(G.SUP), r: ri * G.h, th };
+  return { val: L(G.VAL), den: L(G.DEN), sup: L(G.SUP), r: ri * G.h, th };
 }
 
 function fieldCentre(ev) {
@@ -2545,15 +2700,15 @@ function drawField(g, W, H) {
     for (let px = 0; px < fw; px++) {
       const q = fieldAt(G, view.cx + ((px + 0.5) * FIELD_STEP - W / 2) * view.mpp, y);
       if (!q) continue;
-      const has = q.den >= FIELD_DEN_MIN;
-      if (!has && !addM) continue;
-      const v = (has ? q.num / q.den : 0) + (addM ? modelValue(M, q.r, q.th, dz) : 0);
+      const v = q.val + (addM ? modelValue(M, q.r, q.th, dz) : 0);
       const u = span ? (v - sc.slo) / span : 1;
       const k = Math.round(Math.max(0, Math.min(1, u)) * 255) * 3, o = (py * fw + px) * 4;
       img.data[o] = FIELD_LUT[k];
       img.data[o + 1] = FIELD_LUT[k + 1];
       img.data[o + 2] = FIELD_LUT[k + 2];
-      img.data[o + 3] = 215;
+      // Held back a little where the cells are drawn over the top, so the measured ones are
+      // plainly the sharper thing on screen.
+      img.data[o + 3] = fld.cellsOn ? 150 : 215;
       msk.data[o + 3] = Math.round(Math.max(0, Math.min(1,
         (FIELD_NEAR - q.sup) / (FIELD_NEAR - FIELD_FAR))) * 255);
     }
@@ -2562,6 +2717,9 @@ function drawField(g, W, H) {
   mc.putImageData(msk, 0, 0);
   g.imageSmoothingEnabled = true;
   g.drawImage(fcv, 0, 0, fw * FIELD_STEP, fh * FIELD_STEP);
+
+  if (fld.cellsOn) drawCells(g, W, H);
+  drawEdges(g);
 
   // Stripes wherever the nearest measurement is far off - see FIELD_NEAR.
   if (!fld.stripes) return;
@@ -2577,6 +2735,57 @@ function drawField(g, W, H) {
   hc.drawImage(mcv, 0, 0, fw * FIELD_STEP * view.dpr, fh * FIELD_STEP * view.dpr);
   hc.globalCompositeOperation = 'source-over';
   g.drawImage(hcv, 0, 0, W, H);
+}
+
+// The cells themselves: every packet that went into one, averaged, drawn as the piece of ground
+// it actually covers and nothing more. No kernel, no fit, no spreading - the measurements, at
+// the resolution the data earned. It is the answer to "just show me what is real", and it is
+// worth looking at next to the smooth field, because where the two disagree the smooth one is
+// wrong.
+function drawCells(g, W, H) {
+  const M = fld.model, sc = fieldScale(), span = sc.shi - sc.slo;
+  const dz = M && M.hasAlt ? Math.max(0, fld.alt ?? M.altMid) : 0;
+  const addM = M && !fieldResid();
+  for (const c of fld.cells) {
+    const nd = cellNumDen(c, M);
+    if (nd.den <= 0) continue;
+    const v = nd.num / nd.den + (addM ? modelValue(M, c.r, c.th, dz) : 0);
+    // Cull by the cell's own corner, cheaply - a cell far off screen costs nothing.
+    const px = sxOf(c.x), py = syOf(c.y), rp = (c.r1 - c.r0 + c.r1 * (c.t1 - c.t0)) / view.mpp;
+    if (px < -rp - 20 || px > W + rp + 20 || py < -rp - 20 || py > H + rp + 20) continue;
+    const u = span ? (v - sc.slo) / span : 1;
+    const k = Math.round(Math.max(0, Math.min(1, u)) * 255) * 3;
+    g.fillStyle = `rgb(${FIELD_LUT[k]},${FIELD_LUT[k + 1]},${FIELD_LUT[k + 2]})`;
+    g.beginPath();
+    const s0 = -c.t0, s1 = -c.t1;             // screen y runs the other way from north
+    g.arc(sxOf(C_X()), syOf(C_Y()), c.r1 / view.mpp, s1, s0);
+    g.arc(sxOf(C_X()), syOf(C_Y()), c.r0 / view.mpp, s0, s1, true);
+    g.closePath();
+    g.fill();
+  }
+}
+const C_X = () => fld.C ? fld.C.x : 0;
+const C_Y = () => fld.C ? fld.C.y : 0;
+
+// The two borders: around ground something was measured on, and around ground a measurement
+// reached. Outside both, the colour is the nearest reading carried over, and that is all it is.
+function drawEdges(g) {
+  const G = fld.grid;
+  if (!G || !G.edge || !fld.edges) return;
+  const stroke = (seg, style, wide) => {
+    if (!seg.length) return;
+    g.strokeStyle = style;
+    g.lineWidth = wide / view.dpr;
+    g.beginPath();
+    for (let i = 0; i < seg.length; i += 4) {
+      g.moveTo(sxOf(seg[i]), syOf(seg[i + 1]));
+      g.lineTo(sxOf(seg[i + 2]), syOf(seg[i + 3]));
+    }
+    g.stroke();
+  };
+  stroke(G.edge[1], 'rgba(232,234,240,.30)', 1);
+  stroke(G.edge[0], 'rgba(232,234,240,.85)', 1.5);
+  g.lineWidth = 1 / view.dpr;
 }
 
 // What the field was made from: the tracks through the span, every packet heard (a dot), every
@@ -2655,7 +2864,7 @@ function drawFieldLegend(g, W, H) {
   let y = 10;
   // A backing panel, because the good end of the ramp is nearly white and grey text on it is
   // unreadable - and which end of the ramp is under the legend depends on where you have panned.
-  const lines = 2 + (fld.stripes ? 1 : 0) + (fld.model ? 1 : 0) +
+  const lines = 2 + (fld.stripes ? 1 : 0) + (fld.edges ? 1 : 0) + (fld.model ? 1 : 0) +
                 (fld.model && fld.model.hasAlt ? 1 : 0) +
                 (showAlt && isFinite(alts.lo) ? 2 : 0);
   g.fillStyle = 'rgba(10,12,17,.66)';
@@ -2673,6 +2882,20 @@ function drawFieldLegend(g, W, H) {
   g.fillText(String(sc.shi), 12 + bw, y + 11);
   g.textAlign = 'left';
   y += 26;
+  if (fld.edges) {
+    // The two lines, shown the way they are drawn, because "which side of this line am I on" is
+    // the question the picture has to answer at a glance.
+    g.strokeStyle = 'rgba(232,234,240,.85)';
+    g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(12, y + 5); g.lineTo(28, y + 5); g.stroke();
+    g.strokeStyle = 'rgba(232,234,240,.30)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(12, y + 10); g.lineTo(28, y + 10); g.stroke();
+    g.lineWidth = 1 / view.dpr;
+    g.fillStyle = '#8b93a7';
+    g.fillText('measured inside · reached inside · carried beyond', 34, y - 1);
+    y += 16;
+  }
   if (fld.stripes) {
     g.fillStyle = FIELD_RAMP[6];
     g.fillRect(12, y, 16, 10);
@@ -2728,15 +2951,16 @@ function drawFieldLegend(g, W, H) {
     const q = fieldAt(fld.grid, P.x, P.y);
     const addM = F && !fieldResid();
     const dz = F && F.hasAlt ? Math.max(0, fld.alt ?? F.altMid) : 0;
-    let txt = 'no estimate here';
-    if (q && (q.den >= FIELD_DEN_MIN || addM)) {
-      const has = q.den >= FIELD_DEN_MIN;
-      let v = (has ? q.num / q.den : 0) + (addM ? modelValue(F, q.r, q.th, dz) : 0);
+    let txt = 'nothing out here';
+    if (q) {
+      let v = q.val + (addM ? modelValue(F, q.r, q.th, dz) : 0);
       // A share cannot be negative or more than everything, however far the fit and its
       // leftovers are pushed past each other.
       if (fld.met === 'del' && !fieldResid()) v = Math.max(0, Math.min(100, v));
       txt = `${Math.round(v)}${M.unit ? ' ' + M.unit : ''} · ` +
-            (q.sup >= FIELD_NEAR ? 'measured' : addM ? 'from the fit' : 'guess');
+            (q.sup >= FIELD_NEAR ? 'measured here'
+             : q.den >= FIELD_DEN_MIN ? 'near a measurement'
+             : addM ? 'from the fit' : 'nearest reading, carried');
     }
     if (geo.base) txt += ` · ${fmtM(Math.hypot(P.x - geo.base.x, P.y - geo.base.y))} from base`;
     g.strokeStyle = '#e8eaf0';
@@ -2855,6 +3079,25 @@ function buildFieldPanel() {
   // What the fit takes out before the map is drawn. Each is a switch because each can swallow
   // something real: bearing will absorb a hill that covers a wide arc, and height will absorb a
   // link that only ever worked high up.
+  // What is drawn, before any modelling: the measurements themselves.
+  const sr = row();
+  sr.className = 'prow quick';
+  sr.appendChild(Object.assign(document.createElement('span'),
+    { className: 'axlab', style: 'width:auto', textContent: 'show' }));
+  const sb = (id, label, k, tip) => {
+    const b = Object.assign(document.createElement('button'), { id, textContent: label, title: tip });
+    b.onclick = () => { fld[k] = !fld[k]; saveField(); syncField(true); mapRedraw(); };
+    sr.appendChild(b);
+  };
+  sb('fcells', 'cells', 'cellsOn',
+     'Draw the averaged cells as the ground they actually cover - measurements, no spreading');
+  sb('fedges', 'edges', 'edges',
+     'Outline ground that was measured, and ground a measurement reached');
+  sb('fcens', 'losses count', 'censor',
+     'Count a missed packet as a reading at the floor, so losing packets drags a signal map ' +
+     'down instead of leaving a gap');
+  host.appendChild(sr);
+
   const fr = row();
   fr.className = 'prow quick';
   fr.appendChild(Object.assign(document.createElement('span'),
@@ -2995,7 +3238,8 @@ function syncField(force) {
   fill($('fmet'), mets.map(m => [m, METRICS[m].lab]), fld.met);
   $('ftrace').classList.toggle('on', fld.trace);
   for (const [id, k] of [['ffit', 'fit'], ['ffith', 'fitH'], ['ffitb', 'fitB'],
-                         ['fresid', 'resid'], ['fstripe', 'stripes']]) {
+                         ['fresid', 'resid'], ['fstripe', 'stripes'],
+                         ['fcells', 'cellsOn'], ['fedges', 'edges'], ['fcens', 'censor']]) {
     $(id).classList.toggle('on', fld[k]);
   }
   // The leftovers are only a thing where there is a fit to have leftovers from.

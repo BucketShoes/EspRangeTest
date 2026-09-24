@@ -340,6 +340,40 @@ the real trace laid over so guess and measurement can be told apart. The page's 
   question is "can I get one packet in ten through here at all"), and a range-profile chart
   (distance across, one line per bearing sector) for spotting where a link falls off a cliff.
 
+### Measurement first, model optional (2026-09-24, after the owner saw it)
+
+The owner's verdict on the first field: "it's effectively just graphing where you've been with
+blue around it, not showing how good the signal is", and "this needs to focus on graphing what's
+real, and telling me what happened, not too much on modelling - a model doesn't need a real
+world test, just draw a static diagram". Acted on:
+
+- **The fit is off by default.** What is on screen is measurements until somebody asks for more.
+- **Colour covers everything it can reach**, instead of fading out a few tens of metres from the
+  trace. Past the kernel the nearest reading is carried over, along the same anisotropic distance
+  the kernel uses - so at bearing 100% a shadow reaches outward behind whatever cast it, and at
+  0% a reading at 500 m fills 500 m all round. Black is kept for ground with no estimate at all.
+- **Confidence became two contour lines, not shading**: measured ground, ground a measurement
+  reached, and carried-over beyond. Shading the guesses stole brightness from a colour whose
+  brightness is the measurement, which is exactly backwards.
+- **A cells view** draws the aggregates over the ground they actually cover, no kernel and no
+  fit. "Even if it just shows the cells, that's useful."
+- **Thermal ramp** instead of one blue hue, on the owner's call, and it is the right call for
+  this data: at range everything sits in the bottom fifth of the scale, and one hue has almost
+  no separation left down there. The dataviz guidance prefers a single hue; this is a documented
+  departure, not an oversight. Heights moved to a cool ramp so the two can never be confused.
+- **Losses drag a signal map down** (`losses count`, on by default). A cell's value is the robust
+  median of what it heard, pulled toward a floor - the weakest thing actually heard, less
+  `FIELD_CENSOR_DB` - in proportion to what it lost. Without this a stretch where nothing got
+  through has no signal value at all and reads as no data, which is the opposite of what
+  happened. First attempt was a censored median over heard-and-missed together; useless, because
+  past half the packets lost it pins to the floor exactly and every distant cell comes out
+  identical. On the demo flight, in the 450-700 m band, the shadowed arc now reads -103 dBm
+  against -95.7 dBm elsewhere (0% delivery against 63%), where before those cells had no value.
+
+To see the demo's hill most clearly: metric **delivery**, **fit** on, **leftovers** on. It is
+then the only dark thing on the map. On a plain delivery map with `losses count` it is a dark
+wedge, but at that range everything is dark, which is the honest difficulty.
+
 ### Cells by data, import, and heights (2026-09-24, same evening)
 
 - **Cells are divided by how many packets are in them**, not by a fraction of range. The owner's
