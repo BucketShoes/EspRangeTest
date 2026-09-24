@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>EspRangeTest</title>
+
+<!-- PWA: installable, and cached so Web Bluetooth, GPS and the wake lock keep
+     working out on a range walk with no signal — which is the whole point of
+     the walk. See sw.js. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#12141a">
+<meta name="description" content="Range-walk tool for ESP32 radio links: live per-link signal over Bluetooth, pinned to GPS, drawn as a coverage map.">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RangeTest">
+<meta name="mobile-web-app-capable" content="yes">
+
 <style>
   :root{--bg:#12141a;--card:#1c1f28;--line:#2c313d;--fg:#e8eaf0;--dim:#8b93a7;
         --ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--acc:#60a5fa}
@@ -111,6 +125,12 @@
   .axrow input:disabled{opacity:.35}
   .mapstat{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;
            margin-top:8px;line-height:1.5}
+  /* PWA update prompt — shown by the service-worker registration at the end of
+     this file when a newer build has been fetched in the background. */
+  .pwa-toast{display:none;position:fixed;left:50%;bottom:calc(12px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);z-index:9000;background:var(--card);color:var(--acc);
+    border:1px solid var(--acc);border-radius:9px;padding:9px 16px;font-size:14px;
+    cursor:pointer;box-shadow:0 3px 14px #0009;max-width:calc(100vw - 24px)}
 </style>
 </head>
 <body>
@@ -4556,6 +4576,124 @@ document.getElementById('wake').onclick = async function () {
 // 20fps. Only the age cells and the link-freshness text move here; everything else waits for
 // a report. Slow ticking read as the numbers themselves being unreliable.
 setInterval(tickAges, 50);
+</script>
+
+<!-- Service worker registration. Kept separate from the app script above and
+     fully guarded, so the page still boots where there is no service worker
+     (a file:// page, or an http:// origin that is not localhost). -->
+<script>
+(function(){
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol === 'file:') return;
+
+  // Everything below is scoped to THIS app's directory. bucketshoes.github.io
+  // also hosts the Moonshot Avionics dashboard with its own service worker,
+  // and caches and registrations are origin-wide — so no blanket
+  // "unregister everything" or "delete every cache" here.
+  var SCOPE = new URL('./', location.href).href;
+  var CACHE_PREFIX = 'esprangetest-';
+
+  // Field recovery hatch: loading .../?nosw wipes this app's offline copy and
+  // unregisters its worker. Needed because a bad cached build would otherwise
+  // survive every reload, and halfway up a hill there is no dev-tools escape.
+  if (/[?&]nosw\b/.test(location.search)) {
+    // The worker deletes its own caches, then we unregister it. Doing it the
+    // other way round loses the race: this very navigation kicked off a
+    // background revalidate, and its cache.put() lands after the delete and
+    // quietly recreates the cache.
+    var finished = false;
+    function finish(){
+      if (finished) return;
+      finished = true;
+      navigator.serviceWorker.getRegistrations().then(function(rs){
+        return Promise.all(rs.filter(function(r){ return r.scope === SCOPE; })
+                             .map(function(r){ return r.unregister(); }));
+      }).then(function(){
+        // Belt and braces, and the whole job when no worker answered.
+        return caches.keys().then(function(ks){
+          return Promise.all(ks.filter(function(k){ return k.indexOf(CACHE_PREFIX) === 0; })
+                               .map(function(k){ return caches.delete(k); }));
+        });
+      }).then(function(){
+        document.title = 'offline copy cleared';
+        alert('Offline copy cleared. Reload without ?nosw to reinstall.');
+      });
+    }
+
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.addEventListener('message', function(ev){
+        if (ev.data && ev.data.type === 'purged') finish();
+      });
+      navigator.serviceWorker.controller.postMessage('purge');
+      setTimeout(finish, 3000);   // worker wedged or gone: clear up anyway
+    } else {
+      finish();
+    }
+    return;
+  }
+
+  function toast(msg, onClick){
+    var t = document.getElementById('pwa-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'pwa-toast';
+      t.className = 'pwa-toast';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.onclick = onClick || function(){ t.remove(); };
+    t.style.display = 'block';
+  }
+
+  // Listeners go on immediately, not on load: a background revalidate can
+  // finish before the page is done parsing, and its message would be lost.
+  var reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', function(){
+    if (reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
+  navigator.serviceWorker.addEventListener('message', function(ev){
+    if (ev.data && ev.data.type === 'asset-updated') {
+      toast('New version available \u2014 tap to reload', function(){
+        location.reload();
+      });
+    }
+  });
+
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      // A waiting worker means a new build is already downloaded.
+      function offerUpdate(worker){
+        toast('New version ready \u2014 tap to reload', function(){
+          worker.postMessage('skip-waiting');
+        });
+      }
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.addEventListener('updatefound', function(){
+        var w = reg.installing;
+        if (!w) return;
+        w.addEventListener('statechange', function(){
+          // A controller already present means this is an update, not the
+          // first install.
+          if (w.state === 'installed' && navigator.serviceWorker.controller) offerUpdate(w);
+        });
+      });
+      // Check for a new build on launch; harmless and silent when offline.
+      reg.update().catch(function(){});
+    }).catch(function(err){
+      console.warn('[pwa] service worker registration failed:', err);
+    });
+
+    // Ask for anything the worker noticed before this page could listen.
+    navigator.serviceWorker.ready.then(function(){
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage('check-updates');
+      }
+    });
+  });
+})();
 </script>
 </body>
 </html>

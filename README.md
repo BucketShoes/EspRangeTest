@@ -154,8 +154,27 @@ itself when a board comes back into range.
 Web Bluetooth needs a secure context, so a `file://` page will not work:
 
 - **GitHub Pages** — repo Settings → Pages → deploy from branch, folder `/docs`.
+  Published at <https://bucketshoes.github.io/EspRangeTest/>.
 - **Locally** — `python3 -m http.server` in `docs/`, then open `http://localhost:8000`
   (localhost counts as secure).
+
+### Install it for the walk
+
+The page is a **PWA**: open it once with a signal and the browser offers
+"Install" / "Add to Home Screen". After that it launches and runs with no network — which
+matters, because a range walk takes you away from signal by definition, and Web Bluetooth,
+GPS and the screen wake lock all stop working the moment the page can't be loaded over
+https.
+
+Everything is cached: the page is one self-contained file, so there is nothing to fetch at
+runtime and no chart library to lose. Your saved board names, base point, plot settings and
+field setup live in `localStorage` and survive both the install and any update.
+
+Updates are automatic — launch it once with a signal after a new version is pushed and it
+offers a one-tap reload. If a cached build ever misbehaves out in a field, load
+`…/?nosw` to wipe the offline copy and unregister the worker.
+
+See `docs/PWA.md` for how the caching works.
 
 Chrome only. Its scanner cannot see extended or coded adverts, which is why the board runs a
 separate plain legacy advert just for the browser — that one is not a measurement, it's the
