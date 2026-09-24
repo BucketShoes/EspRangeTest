@@ -3554,7 +3554,7 @@ function updateCard(d) {
     (rebooted ? '<b class="bad">REBOOTED</b> · ' : '') +
     (d.reboots ? `<b class="bad">${d.reboots} reset${d.reboots > 1 ? 's' : ''}</b> · ` : '') +
     (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
-    `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b> · ` +
+    `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b><br />` +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
     'report <b class="fresh"></b>';
   R.fresh = R.meta.querySelector('.fresh');

@@ -820,7 +820,7 @@ int rt_snapshot_rows(void);
 // The ring's size. A placeholder until real heap figures say otherwise: a moving drone heard by
 // a board costs that board ~8 bytes a packet, 4 packets a second - about 2KB a minute - and the
 // drone logs ~5 bytes per packet it hears plus 34 a second for its fixes.
-#define RT_LOG_BYTES       (32 * 1024)
+#define RT_LOG_BYTES       (64 * 1024)
 
 typedef struct {
     uint32_t block;
