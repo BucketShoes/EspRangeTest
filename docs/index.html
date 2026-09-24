@@ -132,8 +132,11 @@
     <button id="fit">fit</button>
     <button id="base">set base</button>
     <button id="mis" class="on">misses</button>
+    <button id="halt" title="Colour every mark by how high the far end was">heights</button>
     <button id="fld" title="Coverage field: one link, one time span, spread into a colour map">field</button>
     <button id="csv">export</button>
+    <button id="imp" title="Load an export back in - last week's walk, or someone else's">import</button>
+    <button id="demo" title="A made-up flight to look at when you cannot fly one">demo</button>
     <button id="wipe">clear</button>
   </div>
   <div class="axes" id="plot"></div>
@@ -906,9 +909,18 @@ function ensureSeries(skey, dev, peer, ch) {
 const JIT_M = 1;
 const jit = () => (Math.random() * 2 - 1) * JIT_M;
 
+// The span of heights anything on this page has been seen at, kept as it arrives so the colour
+// scale is the same from one redraw to the next rather than shifting with whatever is on screen.
+const alts = { lo: Infinity, hi: -Infinity };
+const altSpan = () => alts.hi - alts.lo > 1 ? alts.hi - alts.lo : 1;
+
 function addSample(S, s) {
   s.jx = jit();
   s.jy = jit();
+  if (typeof s.alt === 'number') {
+    if (s.alt < alts.lo) alts.lo = s.alt;
+    if (s.alt > alts.hi) alts.hi = s.alt;
+  }
   S.n++;
   if (s.loss !== undefined && !S.has.loss) { S.has.loss = true; seriesRev++; }
   if (s.snr !== -128 && !S.has.snr)        { S.has.snr  = true; seriesRev++; }
@@ -1848,7 +1860,7 @@ function saveSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       met: plot.met, minPx: plot.minPx, maxPx: plot.maxPx, rot: plot.rot,
-      showPick: plot.showPick, showScale: plot.showScale, showMiss: showMiss,
+      showPick: plot.showPick, showScale: plot.showScale, showMiss: showMiss, showAlt: showAlt,
       on: [...plot.on.entries()], scale: [...plot.scale.entries()],
     }));
   } catch (e) { /* private window, or storage full - the page still works without it */ }
@@ -1866,6 +1878,7 @@ function loadSettings() {
     if (typeof o.showPick === 'boolean') plot.showPick = o.showPick;
     if (typeof o.showScale === 'boolean') plot.showScale = o.showScale;
     if (typeof o.showMiss === 'boolean') showMiss = o.showMiss;
+    if (typeof o.showAlt === 'boolean') showAlt = o.showAlt;
     if (Array.isArray(o.on)) plot.on = new Map(o.on);
     if (Array.isArray(o.scale)) plot.scale = new Map(o.scale);
   } catch (e) { /* corrupt or unavailable - fall back to defaults rather than failing to load */ }
@@ -1909,15 +1922,25 @@ const FIELD_METS = ['del', 'rssi', 'loss', 'snr', 'lqi'];
 // because a weak link and no data at all must never look alike.
 const FIELD_RAMP = ['#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7',
                     '#6da7ec', '#86b6ef', '#9ec5f4', '#b7d3f6', '#cde2fb'];
-const FIELD_LUT = (() => {
-  const c = FIELD_RAMP.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+function rampLut(hexes) {
+  const c = hexes.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
   const lut = new Uint8Array(256 * 3);
   for (let k = 0; k < 256; k++) {
     const u = k / 255 * (c.length - 1), i = Math.min(Math.floor(u), c.length - 2), f = u - i;
     for (let j = 0; j < 3; j++) lut[k * 3 + j] = Math.round(c[i][j] + (c[i + 1][j] - c[i][j]) * f);
   }
   return lut;
-})();
+}
+const FIELD_LUT = rampLut(FIELD_RAMP);
+// Height wears the other sequential hue, so it can never be read as the field's own colour, and
+// starts bright enough at the bottom that ground level still shows against the canvas.
+const ALT_RAMP = ['#b45309', '#d97706', '#f59e0b', '#fbbf24', '#fcd34d', '#fef3c7'];
+const ALT_LUT = rampLut(ALT_RAMP);
+const ALT_STEPS = 12;
+const altCol = u => {
+  const k = Math.round(Math.max(0, Math.min(1, u)) * 255) * 3;
+  return `rgb(${ALT_LUT[k]},${ALT_LUT[k + 1]},${ALT_LUT[k + 2]})`;
+};
 // exp(-x) for x in 0..4.5, i.e. out to three sigma, where the kernel is cut off. A table, because
 // a long walk at 0% bearing is tens of millions of these.
 const FIELD_EXP = (() => {
@@ -1939,8 +1962,9 @@ const FIELD_NEAR = Math.exp(-0.5), FIELD_FAR = Math.exp(-2);
 // and scaled up.
 const FIELD_STEP = 3;
 
-// Cells no finer than this fraction of their range, and never finer than FIELD_CELL_MIN metres.
-const FIELD_CELL_F = 0.06, FIELD_CELL_MIN = 3;
+// A cell is divided while it holds more than this many packets, down to FIELD_CELL_MIN metres
+// across - under a GPS fix's own error, so there is nothing finer worth keeping apart.
+const FIELD_CELL_N = 30, FIELD_CELL_MIN = 4, FIELD_CELL_DEPTH = 18;
 // Scatter within a cell at which it counts for half - about what an antenna swinging on a strap
 // does on its own, so a cell that disagrees with itself by much more is mostly noise.
 const FIELD_MAD0 = 6;
@@ -2083,10 +2107,16 @@ function fieldGather() {
 // or noise - a cell whose packets disagree with each other is telling you it does not know, and
 // is weighed down accordingly.
 //
-// Cells are polar about the base and sized as a fraction of range: fine where the ground station
-// is and the geometry changes fast, coarse far out where packets are sparse and a degree of
-// bearing is a long way. Never coarser than half the reach, or the kernel would have nothing
-// left to smooth.
+// Cells are polar about the base and divided by how much data is in them, not by a fraction of
+// range: the disc is cut in half, and each half in half again, while it still holds more than
+// FIELD_CELL_N packets. Ground walked over repeatedly ends up finely divided because repetition
+// is worth something, and ground crossed once keeps one cell. A fixed fraction of range got this
+// backwards, spending its resolution near the station - where the signal is perfect and nothing
+// is being tested - and running coarse exactly where the range test lives.
+//
+// Two limits on the recursion: nothing smaller than FIELD_CELL_MIN, which is below any GPS fix's
+// own error, and nothing bigger than the reach, so the kernel always has something to smooth
+// and a sparse patch far out cannot become one enormous cell sitting at its own centroid.
 
 const median = a => {
   if (!a.length) return undefined;
@@ -2096,8 +2126,6 @@ const median = a => {
 };
 
 function fieldCells(ev, C) {
-  const lim = Math.max(FIELD_CELL_MIN, fld.reach / 2);
-  const size = r => Math.min(lim, Math.max(FIELD_CELL_MIN, r * FIELD_CELL_F));
   let rmax = 0;
   for (const p of ev) {
     p.r = Math.hypot(p.x - C.x, p.y - C.y);
@@ -2105,33 +2133,42 @@ function fieldCells(ev, C) {
     if (p.th < 0) p.th += 2 * Math.PI;
     if (p.r > rmax) rmax = p.r;
   }
-  // Ring edges, each ring as deep as its own range says.
-  const edge = [0];
-  while (edge[edge.length - 1] < rmax && edge.length < 4000) {
-    const r = edge[edge.length - 1];
-    edge.push(r + size(r));
-  }
-  const ring = r => {            // binary search: which ring a range falls in
-    let lo = 0, hi = edge.length - 1;
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (edge[m] <= r) lo = m; else hi = m; }
-    return lo;
+  const big = Math.max(FIELD_CELL_MIN * 2, fld.reach);
+  const made = [];
+  const keep = pts => {
+    const c = { sx: 0, sy: 0, np: 0, hits: 0, miss: 0, vals: [], alts: [] };
+    for (const p of pts) {
+      c.sx += p.x; c.sy += p.y; c.np++;
+      c.hits += p.hits;
+      c.miss += p.miss;
+      if (p.v !== undefined) c.vals.push(p.v);
+      if (p.alt !== undefined) c.alts.push(p.alt);
+    }
+    made.push(c);
   };
-  const cells = new Map();
-  for (const p of ev) {
-    const i = ring(p.r), rMid = (edge[i] + edge[i + 1]) / 2;
-    const nA = Math.max(1, Math.min(1440, Math.round(2 * Math.PI * rMid / size(rMid))));
-    const j = Math.min(nA - 1, Math.floor(p.th / (2 * Math.PI) * nA));
-    const id = i * 2048 + j;
-    let c = cells.get(id);
-    if (!c) cells.set(id, c = { sx: 0, sy: 0, np: 0, hits: 0, miss: 0, vals: [], alts: [] });
-    c.sx += p.x; c.sy += p.y; c.np++;
-    c.hits += p.hits;
-    c.miss += p.miss;
-    if (p.v !== undefined) c.vals.push(p.v);
-    if (p.alt !== undefined) c.alts.push(p.alt);
-  }
+  const split = (pts, r0, r1, t0, t1, depth) => {
+    if (!pts.length) return;
+    const dr = r1 - r0, arc = (r0 + r1) / 2 * (t1 - t0);
+    const wide = Math.max(dr, arc) > big;
+    const splittable = Math.max(dr, arc) > 2 * FIELD_CELL_MIN;
+    if (depth >= FIELD_CELL_DEPTH || !splittable ||
+        (pts.length <= FIELD_CELL_N && !wide)) return keep(pts);
+    // Halve whichever way round the cell is longer, so cells stay roughly square on the ground
+    // and a "cell" is the same idea at 30 m out as at 3 km.
+    if (dr >= arc) {
+      const m = (r0 + r1) / 2;
+      split(pts.filter(p => p.r < m), r0, m, t0, t1, depth + 1);
+      split(pts.filter(p => p.r >= m), m, r1, t0, t1, depth + 1);
+    } else {
+      const m = (t0 + t1) / 2;
+      split(pts.filter(p => p.th < m), r0, r1, t0, m, depth + 1);
+      split(pts.filter(p => p.th >= m), r0, r1, m, t1, depth + 1);
+    }
+  };
+  split(ev, 0, rmax + 1, 0, 2 * Math.PI, 0);
+
   const out = [];
-  for (const c of cells.values()) {
+  for (const c of made) {
     c.x = c.sx / c.np;
     c.y = c.sy / c.np;
     c.r = Math.hypot(c.x - C.x, c.y - C.y);
@@ -2564,11 +2601,20 @@ function drawFieldTrace(g, W, H) {
   g.lineWidth = 1 / view.dpr;
 
   const dots = new Path2D(), ticks = new Path2D();
+  const pAlt = showAlt ? Array.from({ length: ALT_STEPS }, () => new Path2D()) : null;
   for (const p of fld.ev) {
     const x = sxOf(p.x), y = syOf(p.y);
     if (x < -4 || x > W + 4 || y < -4 || y > H + 4) continue;
-    if (p.hit) { dots.moveTo(x + 1.7, y); dots.arc(x, y, 1.7, 0, Math.PI * 2); }
-    else { ticks.moveTo(x, y - 2.5); ticks.lineTo(x, y + 2.5); }
+    if (showAlt && typeof p.alt === 'number') {
+      const u = (p.alt - alts.lo) / altSpan();
+      const i = Math.max(0, Math.min(ALT_STEPS - 1, Math.floor(u * ALT_STEPS)));
+      pAlt[i].moveTo(x + 2.2, y);
+      pAlt[i].arc(x, y, 2.2, 0, Math.PI * 2);
+    } else if (p.hit) {
+      dots.moveTo(x + 1.7, y); dots.arc(x, y, 1.7, 0, Math.PI * 2);
+    } else if (!showAlt) {
+      ticks.moveTo(x, y - 2.5); ticks.lineTo(x, y + 2.5);
+    }
   }
   g.fillStyle = '#e8eaf0';
   g.fill(dots);
@@ -2576,6 +2622,24 @@ function drawFieldTrace(g, W, H) {
   g.stroke(dots);
   g.strokeStyle = 'rgba(248,113,113,.85)';
   g.stroke(ticks);
+  if (showAlt) pAlt.forEach((p, i) => { g.fillStyle = altCol((i + 0.5) / ALT_STEPS); g.fill(p); });
+}
+
+// The height scale, wherever the legend has got to. Only drawn when there is height to show,
+// which on a walk there never is.
+function drawAltLegend(g, y) {
+  if (!showAlt || !isFinite(alts.lo)) return y;
+  const bw = 120, grad = g.createLinearGradient(12, 0, 12 + bw, 0);
+  ALT_RAMP.forEach((c, i) => grad.addColorStop(i / (ALT_RAMP.length - 1), c));
+  g.fillStyle = grad;
+  g.fillRect(12, y + 3, bw, 8);
+  g.fillStyle = '#8b93a7';
+  g.fillText(`${Math.round(alts.lo)}`, 12, y + 14);
+  g.textAlign = 'right';
+  g.fillText(`${Math.round(alts.hi)} m`, 12 + bw, y + 14);
+  g.textAlign = 'left';
+  g.fillText('height', 12 + bw + 8, y + 3);
+  return y + 30;
 }
 
 function drawFieldLegend(g, W, H) {
@@ -2592,7 +2656,8 @@ function drawFieldLegend(g, W, H) {
   // A backing panel, because the good end of the ramp is nearly white and grey text on it is
   // unreadable - and which end of the ramp is under the legend depends on where you have panned.
   const lines = 2 + (fld.stripes ? 1 : 0) + (fld.model ? 1 : 0) +
-                (fld.model && fld.model.hasAlt ? 1 : 0);
+                (fld.model && fld.model.hasAlt ? 1 : 0) +
+                (showAlt && isFinite(alts.lo) ? 2 : 0);
   g.fillStyle = 'rgba(10,12,17,.66)';
   g.fillRect(6, 4, Math.min(W - 12, 320), 14 + lines * 15);
   g.fillStyle = '#8b93a7';
@@ -2634,8 +2699,11 @@ function drawFieldLegend(g, W, H) {
       txt = 'delivery fit' + (half ? ' · half through at ' + fmtM(half) : '') +
             ` · ${F.n} cells`;
     } else {
-      txt = `fit ${(F.b * Math.log10(2)).toFixed(1)} dB per doubling · ` +
-            `±${F.sigma.toFixed(0)} dB · ${F.n} cells`;
+      // n is the path-loss exponent the fit implies: 2 is free space (inverse square), and
+      // ground-level links run 3.5-4.5 once the ground takes the first Fresnel zone. It is
+      // 20 dB per decade per unit of n, so the slope is the exponent.
+      txt = `fit ${(F.b * Math.log10(2)).toFixed(1)} dB per doubling · n ${(-F.b / 20).toFixed(1)}` +
+            ` · ±${F.sigma.toFixed(0)} dB · ${F.n} cells`;
     }
     g.fillText(txt + (F.H ? ' · height' : '') + (F.B ? ' · bearing' : ''), 12, y);
     y += 15;
@@ -2645,6 +2713,8 @@ function drawFieldLegend(g, W, H) {
       y += 15;
     }
   }
+  g.fillStyle = '#8b93a7';
+  y = drawAltLegend(g, y - 3);
 
   if (!fld.grid) {
     g.textAlign = 'center';
@@ -3026,7 +3096,7 @@ function paintTimeline() {
 const cv  = document.getElementById('cv');
 const cx2 = cv.getContext('2d');
 const view = { cx: 0, cy: 0, mpp: 0.6, w: 0, h: 0, dpr: 1, follow: true, seeded: false };
-let showMiss = true, mapQueued = false;
+let showMiss = true, showAlt = false, mapQueued = false;
 
 const sxOf = x => view.w / 2 + (x - view.cx) / view.mpp;
 const syOf = y => view.h / 2 - (y - view.cy) / view.mpp;
@@ -3197,6 +3267,16 @@ function drawMap() {
   // Marks. One path per radio, so a walk's worth of rays is a handful of strokes rather than
   // tens of thousands.
   const pMiss = new Path2D();
+  // Height dots, batched by colour step - a walk is tens of thousands of marks and a fill each
+  // would be a slideshow.
+  const pAlt = showAlt ? Array.from({ length: ALT_STEPS }, () => new Path2D()) : null;
+  const altDot = (px, py, alt) => {
+    if (typeof alt !== 'number') return;
+    const u = (alt - alts.lo) / altSpan();
+    const i = Math.max(0, Math.min(ALT_STEPS - 1, Math.floor(u * ALT_STEPS)));
+    pAlt[i].moveTo(px + 2.2, py);
+    pAlt[i].arc(px, py, 2.2, 0, Math.PI * 2);
+  };
   const rays = act.map(() => new Path2D());
   // Precomputed per radio: the unit vector its rays point along, and its length mapping.
   const dirs = act.map((S, i) => {
@@ -3223,17 +3303,23 @@ function drawMap() {
       }
     }
 
-    if (showMiss && s.miss) {
+    if (showAlt) altDot(px, py, s.alt);
+
+    if ((showMiss || showAlt) && s.miss) {
       let qi = 0;
       for (const q of missesOf(s)) {
         // Each miss tick nudged too, differently but fixed, so they spread and stay put.
         qi++;
         const qx = sxOf(q.x + (s.jx * qi) % JIT_M), qy = syOf(q.y + (s.jy * qi) % JIT_M);
-        pMiss.moveTo(qx, qy - 2.5); pMiss.lineTo(qx, qy + 2.5);
+        // A height dot says where the far end was; a tick only says a packet was missing, which
+        // the gap in the marks says anyway. So the dot takes the spot when heights are on.
+        if (showAlt) altDot(qx, qy, q.alt);
+        else { pMiss.moveTo(qx, qy - 2.5); pMiss.lineTo(qx, qy + 2.5); }
       }
     }
   }
-  if (showMiss) { g.strokeStyle = 'rgba(248,113,113,.55)'; g.stroke(pMiss); }
+  if (showMiss && !showAlt) { g.strokeStyle = 'rgba(248,113,113,.55)'; g.stroke(pMiss); }
+  if (showAlt) pAlt.forEach((p, i) => { g.fillStyle = altCol((i + 0.5) / ALT_STEPS); g.fill(p); });
   act.forEach((S, i) => { g.strokeStyle = srcCol(S.key); g.stroke(rays[i]); });
   if (fld.on && fld.trace) drawFieldTrace(g, W, H);
 
@@ -3316,6 +3402,7 @@ function drawMap() {
     g.fillText(`${srcLabel(S)}  ${d.sc.slo} → ${d.sc.shi}`, 30, ly);
     ly += 15;
   });
+  ly = drawAltLegend(g, ly);
   if (drawn < samples.length) {
     g.fillStyle = '#6b7488';
     g.fillText(`${drawn} of ${samples.length} marks in view`, 12, ly);
@@ -3520,7 +3607,13 @@ function paintMapBar() {
   g.className = geo.watch === null ? '' : geo.err ? 'bad' : 'on';
   document.getElementById('base').textContent = geo.base ? 'clear base' : 'set base';
   document.getElementById('base').classList.toggle('on', !!geo.base);
-  document.getElementById('mis').classList.toggle('on', showMiss);
+  // Heights take the miss ticks' place, so the ticks' button stops claiming to do anything.
+  document.getElementById('mis').classList.toggle('on', showMiss && !showAlt);
+  document.getElementById('mis').disabled = showAlt;
+  const h = document.getElementById('halt');
+  h.classList.toggle('on', showAlt);
+  // Nothing has a height until a GNSS end has been heard from, and then it stays offered.
+  h.disabled = !isFinite(alts.lo);
 }
 
 function paintMapStat() {
@@ -3535,6 +3628,9 @@ function paintMapStat() {
     bits.push('waiting for a fix');
   }
   if (geo.err) bits.push(`<b class="bad">${esc(geo.err)}</b>`);
+  // Heights only become a thing mid-run, when a board with GNSS is first heard.
+  const hb = document.getElementById('halt');
+  if (hb) hb.disabled = !isFinite(alts.lo);
   // Each GNSS board: how high, how stale, and how far from you. Staleness is on GNSS time
   // against this phone's clock, which is network time - both are UTC, so it is honest to a
   // second or so without either board's clock being involved.
@@ -3624,7 +3720,13 @@ function exportCsv() {
   }
   rows.sort((a, b) => a[2] - b[2]);
 
-  const csv = head.join(',') + '\n' + rows.map(r => r.join(',')).join('\n') + '\n';
+  // Operator names are free text and can hold a comma, which would otherwise shift every column
+  // after it when the file is read back.
+  const cell = v => {
+    const s = v === undefined || v === null ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const csv = head.join(',') + '\n' + rows.map(r => r.map(cell).join(',')).join('\n') + '\n';
   const d = new Date(), p2 = v => String(v).padStart(2, '0');
   const name = `esprangetest-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}` +
                `-${p2(d.getHours())}${p2(d.getMinutes())}.csv`;
@@ -3635,6 +3737,247 @@ function exportCsv() {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
   logMsg(`exported ${rows.length} rows to ${name}`);
+}
+
+// ---- import ------------------------------------------------------------------------------------
+//
+// The other half of export: a walk read back in. Two things it is for - picking up a test from
+// last week to compare against today's, and having something to look at indoors at all.
+//
+// Read by column name, not position, so a file written by an older page still loads as long as
+// the columns it does have are named the same. Positions come back from lat/lon rather than the
+// east/north metres, because those were measured from whatever origin that session happened to
+// start at, and this one has its own.
+//
+// What does not survive the round trip: a packet log's seq bookkeeping, so imported marks sit
+// where the export put them instead of being re-placed as more of a flight arrives, and the
+// individual positions of missed packets, which the export only counts. Misses are spread back
+// along the line from the previous mark on that link, which is what the live page does with them
+// anyway.
+
+function csvSplit(line) {
+  const out = [];
+  let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+// Where a GNSS board's drawn track was at page time t. timePos() answers the same question from
+// the board's own fixes on its own clock, which an import does not have; this one walks the
+// track the import just rebuilt. A wide bracket is a gap in the track, not a position.
+function trackPosAt(node, t) {
+  const G = gtr.get(node);
+  const A = G ? G.list : null;
+  if (!A || A.length < 2 || t < A[0].t || t > A[A.length - 1].t) return null;
+  let lo = 0, hi = A.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (A[m].t <= t) lo = m; else hi = m; }
+  const a = A[lo], b = A[hi];
+  if (b.t - a.t > 5000) return null;
+  const u = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0;
+  return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u,
+           alt: Math.round(a.alt + (b.alt - a.alt) * u) };
+}
+
+function importCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return fail('That file has no rows in it.');
+  const head = csvSplit(lines[0]).map(h => h.trim());
+  const col = {};
+  head.forEach((h, i) => col[h] = i);
+  if (col.type === undefined || col.ms === undefined) {
+    return fail('That does not look like an EspRangeTest export - no type/ms columns.');
+  }
+  const num = (r, name) => {
+    const v = r[col[name]];
+    if (v === undefined || v === '') return undefined;
+    const n = +v;
+    return isFinite(n) ? n : undefined;
+  };
+  const str = (r, name) => (col[name] === undefined ? '' : (r[col[name]] ?? '').trim());
+
+  const rows = lines.slice(1).map(csvSplit).filter(r => r.length > 2);
+  rows.sort((a, b) => (+a[col.ms] || 0) - (+b[col.ms] || 0));
+
+  let fixes = 0, gpos = 0, rx = 0, skipped = 0;
+  const prev = new Map();      // series key -> the last mark on it, for spreading misses
+  for (const r of rows) {
+    const type = str(r, 'type'), t = num(r, 'ms');
+    const lat = num(r, 'lat'), lon = num(r, 'lon');
+    if (t === undefined) { skipped++; continue; }
+
+    if (type === 'fix') {
+      if (lat === undefined || lon === undefined) { skipped++; continue; }
+      const p = project(lat, lon);
+      setRef(lat, lon);
+      const f = { t, lat, lon, acc: num(r, 'acc_m'), x: p.x, y: p.y };
+      geo.fixes.push(f);
+      geo.live = f;
+      fixes++;
+      continue;
+    }
+    if (type === 'gpos') {
+      const node = idOf(str(r, 'dev'));
+      if (lat === undefined || lon === undefined || !node) { skipped++; continue; }
+      const nm = str(r, 'dev_name');
+      if (nm && !names[idOf(node)]) names[idOf(node)] = nm;
+      addPoint(gOf(node), mkPos(Math.round(lat * 1e5), Math.round(lon * 1e5),
+                                num(r, 'alt_m') ?? 0), t);
+      gpos++;
+      continue;
+    }
+    if (type !== 'rx') { skipped++; continue; }
+
+    const dev = str(r, 'dev'), peer = str(r, 'peer'), ch = str(r, 'ch');
+    if (!dev || !peer || !ch) { skipped++; continue; }
+    for (const [id, nm] of [[dev, str(r, 'dev_name')], [peer, str(r, 'peer_name')]]) {
+      if (nm && !names[idOf(id)]) names[idOf(id)] = nm;
+    }
+    const skey = dev + '/' + peer + '/' + ch;
+    const S = ensureSeries(skey, dev, peer, ch);
+    const pos = lat === undefined || lon === undefined ? undefined
+      : (q => ({ x: q.x, y: q.y, prov: false }))(project(lat, lon));
+    const miss = num(r, 'misses') ?? 0;
+    const p0 = prev.get(skey);
+    // Misses belong to the stretch since the last mark on this link, as they do live.
+    // Along whichever track this link was drawn from, the way the live page spreads them -
+    // falling back to the straight line between the two marks when there is no track to follow.
+    let mpos = null;
+    if (miss && pos) {
+      const n = Math.min(miss, 40);
+      const alt = num(r, 'alt_m');
+      const node = gtr.has(idOf(peer)) ? idOf(peer) : gtr.has(idOf(dev)) ? idOf(dev) : null;
+      const t0 = p0 ? p0.t : t;
+      mpos = [];
+      for (let k = 1; k <= n; k++) {
+        const u = k / (n + 1), tk = t0 + (t - t0) * u;
+        const q = (node && trackPosAt(node, tk)) || (!node && posAt(tk));
+        if (q) { mpos.push({ x: q.x, y: q.y, alt: q.alt ?? alt }); continue; }
+        mpos.push(p0 && p0.pos
+          ? { x: p0.pos.x + (pos.x - p0.pos.x) * u, y: p0.pos.y + (pos.y - p0.pos.y) * u,
+              alt: p0.alt !== undefined && alt !== undefined
+                ? p0.alt + (alt - p0.alt) * u : alt }
+          : { x: pos.x, y: pos.y, alt });
+      }
+    }
+    const s = {
+      t, t0: p0 ? p0.t : t, key: skey, dev, peer, ch,
+      rssi: num(r, 'rssi_dbm'), ptx: num(r, 'ptx_dbm'), loss: num(r, 'loss_db'),
+      snr: num(r, 'snr_db') ?? -128, lqi: num(r, 'lqi') ?? 0,
+      pdr: num(r, 'pdr_now') ?? -1, pdrall: num(r, 'pdr_all') ?? -1,
+      hits: num(r, 'hits') ?? 1, miss,
+      pos, mpos, mprov: false, alt: num(r, 'alt_m'),
+    };
+    addSample(S, s);
+    prev.set(skey, s);
+    rx++;
+  }
+  try { localStorage.setItem(NAMES_KEY, JSON.stringify(names)); } catch (e) { /* fine */ }
+  geo.fixes.sort((a, b) => a.t - b.t);
+  for (const G of gtr.values()) G.dirty = true;
+  gRev++;
+  paintMapBar();
+  rebuildSources();
+  syncField(true);
+  mapRedraw();
+  logMsg(`imported ${rx} marks, ${fixes} fixes, ${gpos} track points` +
+         (skipped ? `, skipped ${skipped}` : ''));
+}
+
+// ---- a made-up flight --------------------------------------------------------------------------
+//
+// Not a demo of the page so much as somewhere to stand while reading it: a drone flying petals
+// out to over a kilometre, climbing and descending, with a hill over one arc. Everything it
+// draws is invented, which is why both boards are called "demo" - no run of this ever produced
+// a number worth keeping.
+//
+// The ground truth it is built from: free-space-ish loss against slant range, clutter that only
+// bites low down (the ground taking the first Fresnel zone), a hill that costs 22 dB past 400 m
+// over one arc of bearings, per-packet fading, and the odd wild packet. If the field can find
+// the hill and tell it apart from the climbing, it is doing its job.
+
+const DEMO = {
+  air: 'D00001', ground: 'D00002', ch: '154',
+  n: 2400, step: 700, rmax: 1200, petals: 6,
+  altLo: 5, altHi: 140, hill: [1.9, 2.7], hillFrom: 400, hillDb: 22,
+};
+
+// One fixed stream of numbers, so the same flight comes back every time and anything odd in it
+// can be looked at twice.
+function mulberry(a) {
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function loadDemo() {
+  if (samples.length && !confirm('Add a made-up demo flight alongside what is already here?')) {
+    return;
+  }
+  const rnd = mulberry(20260924);
+  // Around wherever this page already is, so it does not fly off to another continent.
+  const here = geo.live || newestG() || { x: 0, y: 0 };
+  if (!geo.org) project(51.5, -0.1);
+  names[DEMO.air] = names[DEMO.air] || 'demo drone';
+  names[DEMO.ground] = names[DEMO.ground] || 'demo ground';
+  try { localStorage.setItem(NAMES_KEY, JSON.stringify(names)); } catch (e) { /* fine */ }
+  geo.base = { x: here.x, y: here.y, ...unproject(here.x, here.y) };
+
+  const skey = DEMO.ground + '/' + DEMO.air + '/' + DEMO.ch;
+  const S = ensureSeries(skey, DEMO.ground, DEMO.air, DEMO.ch);
+  const t0 = Date.now() - DEMO.n * DEMO.step;
+  const G = gOf(DEMO.air);
+  let carry = [], hits = 0, lost = 0;
+  for (let i = 0; i < DEMO.n; i++) {
+    const u = i / DEMO.n, s = (u * DEMO.petals) % 1;
+    const rr = DEMO.rmax * Math.sin(Math.PI * s);
+    const th = Math.floor(u * DEMO.petals) * 2 * Math.PI / DEMO.petals +
+               0.35 * Math.sin(Math.PI * s * 2);
+    const x = here.x + rr * Math.cos(th), y = here.y + rr * Math.sin(th);
+    const alt = DEMO.altLo + (DEMO.altHi - DEMO.altLo) *
+                (0.5 + 0.5 * Math.sin(u * Math.PI * 7));
+    const t = t0 + i * DEMO.step;
+    const r = Math.hypot(x - here.x, y - here.y), slant = Math.hypot(r, alt);
+    const bear = (Math.atan2(y - here.y, x - here.x) + 2 * Math.PI) % (2 * Math.PI);
+    let rssi = -28 - 22 * Math.log10(Math.max(slant, 1))    // loss against slant range
+             - 18 / (1 + alt / 12);                         // the ground, only felt low down
+    if (bear > DEMO.hill[0] && bear < DEMO.hill[1] && r > DEMO.hillFrom) rssi -= DEMO.hillDb;
+    rssi += rnd() * 8 - 4;                                  // fading, packet to packet
+    if (rnd() < 0.03) rssi -= 25;                           // and the occasional wild one
+    const ll = unproject(x, y);
+    addPoint(G, mkPos(Math.round(ll.lat * 1e5), Math.round(ll.lon * 1e5), Math.round(alt)), t);
+    const p = Math.min(1, Math.max(0, (rssi + 103) / 18));
+    for (let k = 0; k < 3; k++) {
+      if (rnd() < p) {
+        addSample(S, { t: t + k, t0: t, key: skey, dev: DEMO.ground, peer: DEMO.air,
+          ch: DEMO.ch, rssi: Math.round(rssi), ptx: 20, loss: 20 - Math.round(rssi),
+          snr: -128, lqi: 100, pdr: -1, pdrall: -1, hits: 1, miss: carry.length,
+          pos: { x, y, prov: false }, mpos: carry, mprov: false, alt: Math.round(alt) });
+        carry = [];
+        hits++;
+      } else {
+        carry.push({ x, y, alt: Math.round(alt) });
+        lost++;
+      }
+    }
+  }
+  geoSeries.add(skey);
+  paintMapBar();
+  rebuildSources();
+  syncField(true);
+  fitMap();
+  logMsg(`demo flight loaded - ${hits} heard, ${lost} missed. All of it is made up.`, true);
 }
 
 // ---- wiring ------------------------------------------------------------------------------------
@@ -3688,6 +4031,12 @@ document.getElementById('mis').onclick = () => {
   paintMapBar();
   mapRedraw();
 };
+document.getElementById('halt').onclick = () => {
+  showAlt = !showAlt;
+  saveSettings();
+  paintMapBar();
+  mapRedraw();
+};
 document.getElementById('base').onclick = () => {
   if (geo.base) geo.base = null;
   else if (!geo.live) return fail('No fix yet - cannot mark the base.');
@@ -3696,6 +4045,17 @@ document.getElementById('base').onclick = () => {
   mapRedraw();
 };
 document.getElementById('csv').onclick = exportCsv;
+document.getElementById('demo').onclick = loadDemo;
+document.getElementById('imp').onclick = () => {
+  const inp = Object.assign(document.createElement('input'),
+                            { type: 'file', accept: '.csv,text/csv' });
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    f.text().then(importCsv).catch(e => fail('could not read that file: ' + e.message));
+  };
+  inp.click();
+};
 // Readings only. The whole point of clearing is to start a run without the junk from the last
 // one, and that is done *after* everything is set up - so wiping the setup at the same time
 // means every test begins by dialling the scales in again.
@@ -3713,6 +4073,8 @@ document.getElementById('wipe').onclick = () => {
   // arriving back a moment later.
   gtr.clear();
   gRev++;
+  alts.lo = Infinity;
+  alts.hi = -Infinity;
   view.seeded = false;
   paintMapBar();
   mapRedraw();

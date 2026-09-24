@@ -340,6 +340,30 @@ the real trace laid over so guess and measurement can be told apart. The page's 
   question is "can I get one packet in ten through here at all"), and a range-profile chart
   (distance across, one line per bearing sector) for spotting where a link falls off a cliff.
 
+### Cells by data, import, and heights (2026-09-24, same evening)
+
+- **Cells are divided by how many packets are in them**, not by a fraction of range. The owner's
+  objection to the first version: a fixed fraction spends its resolution near the station where
+  the signal is perfect and nothing is being tested. Now the disc is halved, and each half
+  halved again, while it holds more than `FIELD_CELL_N` packets - so ground crossed repeatedly
+  is finely divided (repetition being worth something) and ground crossed once keeps one cell.
+  Floor `FIELD_CELL_MIN` (under a fix's own error), ceiling the reach (so the kernel always has
+  something to smooth).
+- **Import reads the export format back**, which is what makes resuming a previous test
+  possible, and the demo flight loadable. Two things do not survive the trip: a packet log's seq
+  bookkeeping, and *where* missed packets were - the export counts them but does not place them.
+  Import spreads them along the rebuilt track by time, which is close but not the same: on the
+  demo flight the shadow read -27.5 points live and -37.6 after a round trip, because the cell
+  boundaries land differently. Worth knowing before reading an imported shadow as gospel.
+- **The demo flight is made-up data, deliberately labelled as such** (both boards are named
+  "demo"), for looking at the page when a real flight is not possible. Fixed seed, so the same
+  flight comes back and anything odd in it can be looked at twice.
+- **Heights: every mark coloured by how high the far end was**, on a second sequential hue so it
+  can never be read as the field's own colour. It takes the red miss ticks' place, at the
+  owner's suggestion: a tick only says a packet was missing, which the gap in the marks says
+  anyway, while the dot says where the far end was - and with the ground mattering as much as it
+  does, that is the more valuable thing to have in the same pixels.
+
 ## The XIAO RF switch is unpowered out of reset — root cause of everything below
 
 **Drive GPIO3 LOW or the board does not radiate.** Confirmed from the XIAO ESP32C6 schematic
