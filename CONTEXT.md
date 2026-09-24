@@ -306,6 +306,40 @@ the real trace laid over so guess and measurement can be told apart. The page's 
   long as the tab has been open; a reload loses them. Persisting or re-importing an export is
   the obvious next step, not done yet.
 
+### Cells, the fit, and the shadow map (2026-09-24, the owner's second pass)
+
+- **Packets are aggregated into cells before anything reads them.** One reading is not a
+  measurement of the ground - rssi is instantaneous and an antenna swinging on a strap moves it
+  several dB - so a lone low packet must not carve a hard shadow. Cells are polar about the base
+  and sized as a fraction of their own range (finer near the station, coarser far out, never
+  coarser than half the reach): the owner's "variable resolution" ask. A cell carries the median
+  of its packets and its own spread, and a cell whose packets disagree with each other counts for
+  less.
+- **The map is drawn through a fit**, not by blurring alone: signal against log range is a line,
+  and the field is that line plus the interpolated leftovers. This is what lets a few spokes
+  describe a 1 km disc; without it a radial hole wider than 1.5x the reach stayed blank, which is
+  what made the first version look so small.
+- **Height is a term in the fit, and the map is drawn for one stated height.** The owner's
+  correction: the worry was never slant-range geometry, it is that low links have the ground
+  itself in the way. "900 m on the ground is much more impressive than 1.1 km at 100 m up", so a
+  map that averages the two says neither. Height is binned in octaves; the `at` slider says which
+  height the picture answers for. Bearing is a separate, off-by-default term for the ground
+  station's pattern, kept separate because it will absorb a hill that covers a wide arc.
+- **Survivor bias means the shadow map has to be made of delivery, not signal.** Found by
+  testing against a synthetic flight with a known 22 dB hill: the signal leftovers showed
+  -0.5 dB in the shadowed arc versus -0.1 dB elsewhere - nothing - because a shadow that deep
+  kills the link, and a dead link measures no signal at all. The packets that would have read
+  low simply never arrive, and the few that do are the lucky ones. The same run on delivery
+  leftovers reads -27.8 points inside the arc against +2.7 outside. So "leftovers" is a switch
+  over whichever metric is chosen, and on delivery it is the shadow map.
+- **Stripes are off by default.** While the only thing they mark is distance from the trace, the
+  trace already says it, and taking brightness from a colour whose brightness means signal reads
+  as a worse patch rather than a guessed one (the owner's objection). Kept as a switch for when
+  there is a cleverer uncertainty to show - the obvious candidate is the cells' own disagreement.
+- Not built, and wanted eventually: a "P(1 in N)" view over the delivery fit (the owner's real
+  question is "can I get one packet in ten through here at all"), and a range-profile chart
+  (distance across, one line per bearing sector) for spotting where a link falls off a cliff.
+
 ## The XIAO RF switch is unpowered out of reset — root cause of everything below
 
 **Drive GPIO3 LOW or the board does not radiate.** Confirmed from the XIAO ESP32C6 schematic
