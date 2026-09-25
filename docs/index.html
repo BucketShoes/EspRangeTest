@@ -153,6 +153,7 @@
     <button id="base">set base</button>
     <button id="mis" class="on">misses</button>
     <button id="halt" title="Colour every mark by how high the far end was">heights</button>
+    <button id="ftmv" title="FTM ranges as faint rings round where each was measured from: shown over everything, shown on their own with the packet marks and field cleared, or hidden">ftm</button>
     <button id="fld" title="Coverage field: one link, one time span, spread into a colour map">field</button>
     <button id="csv">export</button>
     <button id="imp" title="Load an export back in - last week's walk, or someone else's">import</button>
@@ -169,6 +170,17 @@
   Flash two boards, leave one behind, and walk away with the other plus this page.<br><br>
   Connect to either board — each one reports what <em>it</em> can hear, so the numbers are
   for the link between them. Tap <b>Connect a board</b> again to add the second one.<br><br>
+  Boards start with every test off. Switch on whichever you are testing, on each board - one on
+  its own, or a few together the way they will be used. The Bluetooth link to this page is not a
+  test and stays on; the more tests share the antenna with it, the slower it gets. Holding a
+  board's button turns every test off again.<br><br>
+  <b>ftm</b> on a board ranges to every other board whose AP is up - any board with
+  <b>espnow</b>, <b>ftm</b> or <b>ftm resp</b> on. Each range is a faint ring on the map round
+  where it was measured from, and where the rings agree is where the other board is; once they
+  come from more than one spot a cross marks the best fit. The rings need to know where the
+  measuring board was: its own GNSS if it has one, otherwise tap <b>carry</b> on its card while
+  you have it with you. A board's stockpile of ranges comes down when it is back in reach, like
+  its packets.<br><br>
   For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
   and walk. Every packet gets pinned to where you were standing when it arrived, so bare
   track is ground where nothing got through.<br><br>
@@ -204,14 +216,30 @@
 const SVC = '9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const TX  = '9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const CMD = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
-// Index must match the LC_* values in main/rt.h - 'wifi' is LC_WIFI_UI, the mode where BLE
-// (including this connection) goes fully silent, so its own row disappears from the phone
-// once selected. That is expected, not a dropped link.
-const LC = ['all', 'espnow', 'ble_adv', '154', 'wifi'];
+// The test switches, bit i = TESTS[i]. Must match RT_TEST_* in main/rt.h. Every one is off at
+// boot and the board's button restore turns them all off; the BLE link this page talks over is
+// not one of them and is never off. Written as the whole set in one command, [0x90, mask], so a
+// lost or repeated write cannot leave a switch the wrong way round.
+const TESTS = ['espnow', 'ble_adv', '154', 'ftm', 'ftm resp'];
+const TEST_TITLES = [
+  'ESP-NOW packets out and in. Brings the Wi-Fi driver up, and with it this board’s AP - ' +
+    'which answers FTM, so other boards can range to it.',
+  'The coded-PHY beacon and scanner. The scanner listens continuously when this is the only ' +
+    'test on, and shares the antenna when it is not.',
+  '802.15.4 frames out, and the receiver on.',
+  'FTM initiator: finds other boards’ APs and ranges to them one after another. Brings the ' +
+    'Wi-Fi driver up.',
+  'Keeps the Wi-Fi driver - and so the AP, the FTM responder - up with nothing else on, so ' +
+    'other boards can range to this one. espnow and ftm bring the AP up anyway.',
+];
+const CMD_TESTS = 0x90;
+// A board on v7 or older reports a low-contention mode instead: 0 all three, 1..3 one channel,
+// 4 ESP-NOW with the AP for a phone. What each meant, as switches.
+const LC_AS_TESTS = [7, 1, 2, 4, 17];
+const testsTxt = m => TESTS.filter((_, i) => m & (1 << i)).join(' + ') || 'nothing';
 
-// Command bytes the board accepts on the command characteristic. 0..4 are the LC modes above;
-// these two are LR, which used to be a super-long button hold and is not any more - the button
-// is down to tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
+// LR, which used to be a super-long button hold and is not any more - the button is down to
+// tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
 const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 
 // Antenna port. The board always boots on the internal chip antenna and never remembers this,
@@ -278,7 +306,7 @@ const PWR_CH = ['espnow', 'ble_adv', '154'];  // CH_ order, matches the S line p
 // clamps and quantises whatever it is sent, and the mismatch marker says so - asking Wi-Fi for
 // -15 and being told 2 is information, not an error.
 const PWR_SPAN = { min: -15, max: 20, step: 1 };
-const devs = new Map();   // name -> {name, node, uptime, lc, lr, cmd, rows:Map, seen, want}
+const devs = new Map();   // name -> {name, node, uptime, tests, lr, cmd, rows:Map, ftm:Map, seen}
 const $err = document.getElementById('err');
 const $devs = document.getElementById('devs');
 
@@ -455,6 +483,7 @@ function onNotify(d, view) {
   const t = view.getUint8(0);
   if (t === 0x01 || t === 0x02) return onChunk(d, view);
   if (t === 0x03) return onLog(d, view);
+  if (t === 0x04) return onFtmRows(d, view);
   // Older firmware: CSV text, one line per notification.
   for (const line of new TextDecoder().decode(view).split('\n')) {
     if (line.trim()) onLine(d, line);
@@ -495,8 +524,11 @@ function onChunk(d, v) {
     //
     // v7 is the same tail two bytes shorter, with positions keyed by seq and a different log.
     // A v6 board's report is still read; its log is not asked for.
-    if (ver < 4 || ver > 7) {
-      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v7 - ` +
+    //
+    // v8 is v7's layout with the mode byte turned into the test switches, plus FTM rows (their
+    // own notification, 0x04) and an FTM record in the log.
+    if (ver < 4 || ver > 8) {
+      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v8 - ` +
              (ver < 4 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
@@ -548,7 +580,8 @@ function onChunk(d, v) {
     d.rptVer  = ver;
     d.node    = hexId(node);
     d.uptime  = up;
-    d.lc      = lc;
+    d.tests   = ver >= 8 ? lc : LC_AS_TESTS[lc] ?? 0;
+    d.legacy  = ver < 8;   // commands still go as the old one-byte modes
     d.lr      = state & 1 ? 1 : 0;
     d.ant     = state & 2 ? 1 : 0;
     d.wifiOn  = state & 4 ? 1 : 0;
@@ -639,6 +672,32 @@ function onChunk(d, v) {
   scheduleRender();
 }
 
+// FTM session outcomes: wifi_ftm_status_t, then RT_FTM_ST_NOSTART / RT_FTM_ST_TIMEOUT from main/rt.h.
+const FTM_ST = ['ok', 'unsupported', 'rejected', 'no response', 'fail', 'no valid msmt', 'ended'];
+const ftmSt = s => s === 0xFE ? 'not started' : s === 0xFF ? 'timeout' : FTM_ST[s] ?? `status ${s}`;
+
+// The report's FTM rows (RT_RPT_TYPE_FTM in main/rt.h): one per responder this board has ranged
+// to. Sent after the report they belong to, so they carry its generation, and they are dropped
+// with the rest of a report that has gone stale - see updateCard().
+function onFtmRows(d, v) {
+  if (!d.rptOk || v.byteLength < 4) return;
+  const n = v.getUint8(2);
+  d.ftm = new Map();
+  d.ftmGen = d.genN ?? 0;
+  for (let i = 0, o = 4; i < n && o + 20 <= v.byteLength; i++, o += 20) {
+    const peer = hexId(u24(v, o));
+    const age = v.getUint16(o + 18, true) * 100;
+    d.ftm.set(peer, {
+      peer, st: v.getUint8(o + 3),
+      dist: v.getUint16(o + 4, true) / 10, avg: v.getUint16(o + 6, true) / 10,
+      rssi: v.getInt8(o + 8), pdr: v.getInt8(o + 9),
+      ok: v.getUint32(o + 10, true), fail: v.getUint32(o + 14, true),
+      age, abs: (d.boardMs ?? 0) - age,
+    });
+  }
+  scheduleRender();
+}
+
 function onLine(d, line) {
   const f = line.trim().split(',');
   d.seen = Date.now();
@@ -662,7 +721,8 @@ function onLine(d, line) {
       if (r.gen < d.gen - 1) d.rows.delete(k);
     }
 
-    d.node = f[1]; d.uptime = up; d.lc = +f[3]; d.lr = +f[4];
+    d.node = f[1]; d.uptime = up; d.tests = LC_AS_TESTS[+f[3]] ?? 0; d.legacy = true;
+    d.lr = +f[4];
 
     // The board's own millisecond clock at the instant it took this snapshot. Every age in
     // this report is measured against it, so keeping it lets ages be computed on the board's
@@ -1258,7 +1318,7 @@ function newestG() {
 // as soon as they are complete.
 
 // Record lengths by type byte; 0x40-0x7f is RXD (8), 0x80 and up RXS (5).
-const LOG_REC = { 0x01: 3, 0x02: 34, 0x03: 14, 0x04: 15, 0x05: 10 };
+const LOG_REC = { 0x01: 3, 0x02: 34, 0x03: 14, 0x04: 15, 0x05: 10, 0x06: 9 };
 
 // The lowest block not yet complete - where to ask the board to start from. Complete blocks at
 // the bottom are forgotten as the cursor passes them, and so is anything the board no longer
@@ -1381,6 +1441,13 @@ function parseBlock(d, bn, b) {
       }
     } else if (t === 0x05) {
       P.cur.set(hexId(u24(dv, o + 1)), unpackGeo(dv, o + 4));
+    } else if (t === 0x06) {
+      P.clk += u[o + 1] * 4;
+      const tB = b2t(d, P.clk);
+      if (tB !== undefined) {
+        ftmPut({ t: tB, dev: me, peer: hexId(u24(dv, o + 2)), st: u[o + 5],
+                 dist: dv.getUint16(o + 6, true) / 10, rssi: dv.getInt8(o + 8) });
+      }
     } else if (t === 0x04) {
       P.clk += u[o + 1] * 4;
       const R = { node: hexId(u24(dv, o + 2)), ch: u[o + 5] & 0x7f,
@@ -1888,6 +1955,7 @@ function saveSettings() {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       met: plot.met, minPx: plot.minPx, maxPx: plot.maxPx, rot: plot.rot,
       showPick: plot.showPick, showScale: plot.showScale, showMiss: showMiss, showAlt: showAlt,
+      ftmView,
       on: [...plot.on.entries()], scale: [...plot.scale.entries()],
     }));
   } catch (e) { /* private window, or storage full - the page still works without it */ }
@@ -1906,6 +1974,7 @@ function loadSettings() {
     if (typeof o.showScale === 'boolean') plot.showScale = o.showScale;
     if (typeof o.showMiss === 'boolean') showMiss = o.showMiss;
     if (typeof o.showAlt === 'boolean') showAlt = o.showAlt;
+    if (o.ftmView === 0 || o.ftmView === 1 || o.ftmView === 2) ftmView = o.ftmView;
     if (Array.isArray(o.on)) plot.on = new Map(o.on);
     if (Array.isArray(o.scale)) plot.scale = new Map(o.scale);
   } catch (e) { /* corrupt or unavailable - fall back to defaults rather than failing to load */ }
@@ -3361,11 +3430,203 @@ const cv  = document.getElementById('cv');
 const cx2 = cv.getContext('2d');
 const view = { cx: 0, cy: 0, mpp: 0.6, w: 0, h: 0, dpr: 1, follow: true, seeded: false };
 let showMiss = true, showAlt = false, mapQueued = false;
+// FTM on the map: 0 not drawn, 1 drawn over everything else, 2 drawn with the packet marks and
+// the coverage field cleared away - the tracks stay, since they are where the rings come from.
+let ftmView = 1;
+const FTM_VIEW_NAMES = ['ftm off', 'ftm', 'ftm only'];
 
 const sxOf = x => view.w / 2 + (x - view.cx) / view.mpp;
 const syOf = y => view.h / 2 - (y - view.cy) / view.mpp;
 const unview = (sx, sy) => ({ x: view.cx + (sx - view.w / 2) * view.mpp,
                               y: view.cy - (sy - view.h / 2) * view.mpp });
+
+// ---- where a board is -----------------------------------------------------------------------
+//
+// A packet mark only ever needs the moving end of a link, and the page has always taken that to
+// be the phone. FTM needs more: a distance is measured *from* the board that initiated it, so
+// that board has to be somewhere. A GNSS board says where it is. Any other board is wherever the
+// operator says - "carry" pins it to the phone's GPS for as long as it is carried, and putting it
+// down leaves it at the spot the phone was standing on at that moment.
+//
+// Kept per board id in this browser, with every carried span, so a log that arrives later - the
+// drone's stockpile, downloaded on landing - still lands where the board was at the time, not
+// where it is now. Nothing is sent to the board: this is the operator's knowledge, not its.
+const ROLES_KEY = 'esprt.roles';
+let roles = {};
+try { roles = JSON.parse(localStorage.getItem(ROLES_KEY)) || {}; } catch (e) { roles = {}; }
+let rolesRev = 0;
+
+const carrying = id => { const s = roles[idOf(id)]?.spans; return !!(s && s.length && s[s.length - 1][1] === null); };
+
+function setCarry(id, on) {
+  id = idOf(id);
+  const R = (roles[id] ||= { spans: [], put: null });
+  const now = Date.now();
+  if (on && !carrying(id)) {
+    R.spans.push([now, null]);
+    logMsg(`${labelOf(id)}: carried - it is where the phone is until put down`);
+  } else if (!on && carrying(id)) {
+    R.spans[R.spans.length - 1][1] = now;
+    R.put = geo.live ? { lat: geo.live.lat, lon: geo.live.lon, t: now } : null;
+    logMsg(`${labelOf(id)}: put down` + (geo.live ? ' here' : ' - no GPS fix, so nowhere'),
+           !geo.live);
+  }
+  // A long day of picking one board up and putting it down is still a short list, but not an
+  // endless one.
+  if (R.spans.length > 200) R.spans.splice(0, R.spans.length - 200);
+  try { localStorage.setItem(ROLES_KEY, JSON.stringify(roles)); } catch (e) { /* fine */ }
+  rolesRev++;
+  render();
+  mapRedraw();
+}
+
+// Where board `id` was at page time t: its own GNSS track, else the phone's while it was carried,
+// else where it was put down. null when none of those can say.
+function boardPos(id, t) {
+  const g = timePos(id, t) || trackPosAt(id, t);
+  if (g) return g;
+  const R = roles[id];
+  if (!R) return null;
+  for (const [a, b] of R.spans) {
+    if (t >= a && (b === null || t <= b)) {
+      const p = posAt(t);
+      return p ? { x: p.x, y: p.y, how: 'carry' } : null;
+    }
+  }
+  if (R.put && t >= R.put.t) {
+    const p = project(R.put.lat, R.put.lon);
+    return { x: p.x, y: p.y, how: 'put' };
+  }
+  return null;
+}
+
+// ---- FTM ------------------------------------------------------------------------------------
+//
+// Every session a board initiated, from its log - successful or not, as the log keeps both. One
+// session is one distance from wherever the initiator was to wherever the responder is: a
+// circle, with the responder somewhere on its edge. Drawn as exactly that, a hairline ring at
+// low opacity, so where many of them agree the edges pile up into one bright spot and a stray
+// reading stays a faint line.
+//
+// The distance is the straight line, and a drone is not at ground level. Where the initiator's
+// position has a height, the ring is drawn at the ground distance that slant range means for a
+// responder at ground level - taking "ground" to be the lowest that board's track has been,
+// which for a drone is where it took off. A responder far above or below that is drawn too
+// small or too large.
+//
+// Rings from one spot only say how far, not which way, so the page also finds the spot the
+// rings agree on best, per responder, once they come from more than one place - see ftmEstimate().
+const ftms = [];            // {t, dev, peer, st, dist, rssi, pos?} - pos only on imported ones
+let ftmRev = 0;
+const FTM_MAX = 60000;
+const ftmCols = new Map();  // responder id -> colour, in the order first heard
+
+function ftmPut(f) {
+  ftms.push(f);
+  if (ftms.length > FTM_MAX) ftms.splice(0, 5000);
+  if (!ftmCols.has(f.peer)) ftmCols.set(f.peer, SRC_COLS[(ftmCols.size + 3) % SRC_COLS.length]);
+  ftmRev++;
+  mapRedraw();
+}
+
+// The lowest a GNSS board's track has been. Recomputed when the tracks move on, not per ring.
+function groundOf(id) {
+  const G = gtr.get(id);
+  if (!G || !G.list.length) return undefined;
+  if (G.loRev !== gRev) {
+    let lo = Infinity;
+    for (const F of G.list) if (typeof F.alt === 'number' && F.alt < lo) lo = F.alt;
+    G.lo = isFinite(lo) ? lo : undefined;
+    G.loRev = gRev;
+  }
+  return G.lo;
+}
+
+// A session as a ring on the ground: {x, y, r}, or null while the initiator cannot be placed.
+function ftmRing(f) {
+  const c = f.pos || boardPos(f.dev, f.t);
+  if (!c) return null;
+  let r = f.dist;
+  const lo = groundOf(f.dev);
+  if (typeof c.alt === 'number' && lo !== undefined) {
+    const dz = c.alt - lo;
+    r = Math.sqrt(Math.max(0, r * r - dz * dz));
+  }
+  return { x: c.x, y: c.y, alt: c.alt, r };
+}
+
+// Where one responder most likely is: the point whose distance to each ring's centre best
+// matches that ring's radius. A coarse grid over the ground the rings cover, narrowed three
+// times around the best cell. Each ring's error is capped, so one reading tens of metres off -
+// a reflection, most likely - costs no more than any other miss instead of dragging the answer
+// towards it.
+//
+// Nothing is claimed from rings that all come from about one spot: those agree equally well
+// everywhere around the circle, and a best point among them is noise.
+const FTM_EST_CAP_M = 8;
+const FTM_EST_RINGS = 400;
+const FTM_EST_SPREAD_M = 4;
+
+function ftmEstimate(rings) {
+  if (rings.length < 3) return null;
+  const R = rings.slice(-FTM_EST_RINGS);
+  let mx = 0, my = 0;
+  for (const q of R) { mx += q.x; my += q.y; }
+  mx /= R.length; my /= R.length;
+  let sp = 0;
+  for (const q of R) sp += (q.x - mx) ** 2 + (q.y - my) ** 2;
+  if (Math.sqrt(sp / R.length) < FTM_EST_SPREAD_M) return null;
+
+  const cap2 = FTM_EST_CAP_M * FTM_EST_CAP_M;
+  const cost = (x, y) => {
+    let s = 0;
+    for (const q of R) { const e = Math.hypot(x - q.x, y - q.y) - q.r; s += Math.min(e * e, cap2); }
+    return s;
+  };
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const q of R) {
+    x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r);
+    y0 = Math.min(y0, q.y - q.r); y1 = Math.max(y1, q.y + q.r);
+  }
+  let bx = mx, by = my, best = Infinity;
+  let cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, half = Math.max(x1 - x0, y1 - y0) / 2 + 1;
+  const N = 24;
+  for (let pass = 0; pass < 4; pass++) {
+    for (let i = 0; i <= N; i++) {
+      for (let j = 0; j <= N; j++) {
+        const x = cx - half + 2 * half * i / N, y = cy - half + 2 * half * j / N;
+        const c = cost(x, y);
+        if (c < best) { best = c; bx = x; by = y; }
+      }
+    }
+    cx = bx; cy = by; half = half * 3 / N;
+  }
+  return { x: bx, y: by, rms: Math.sqrt(best / R.length), n: R.length };
+}
+
+// Per responder: the rings as they now resolve, the failures by where they were tried from, and
+// the best point. Worked out at most once a second while anything it depends on is changing.
+let ftmCache = null, ftmTimer = 0;
+function ftmGather() {
+  const key = `${ftmRev}/${gRev}/${rolesRev}/${geo.fixes.length}`;
+  if (ftmCache && ftmCache.key === key) return ftmCache;
+  if (ftmCache && performance.now() - ftmCache.at < 1000) {
+    // Come back for the change once the second is up, even if nothing else redraws by then.
+    if (!ftmTimer) ftmTimer = setTimeout(() => { ftmTimer = 0; mapRedraw(); }, 1000);
+    return ftmCache;
+  }
+  const by = new Map();
+  for (const f of ftms) {
+    let P = by.get(f.peer);
+    if (!P) by.set(f.peer, P = { peer: f.peer, rings: [], fails: [], unplaced: 0 });
+    const q = ftmRing(f);
+    if (!q) { P.unplaced++; continue; }
+    if (f.st === 0) P.rings.push(q); else P.fails.push(q);
+  }
+  for (const P of by.values()) P.est = ftmEstimate(P.rings);
+  ftmCache = { key, at: performance.now(), by };
+  return ftmCache;
+}
 
 function sizeCanvas() {
   // Capped at 3: a 4x display would quadruple the fill cost of a walk's worth of marks for a
@@ -3467,7 +3728,9 @@ function drawMap() {
   if (view.follow && lead) { view.cx = lead.x; view.cy = lead.y; }
 
   // The coverage field goes under everything, and stands in for the rays while it is on.
-  if (fld.on) drawField(g, W, H);
+  // The field is cleared away with the packet marks when FTM is shown on its own.
+  const fieldShown = fld.on && ftmView !== 2;
+  if (fieldShown) drawField(g, W, H);
 
   const act = activeSources();
   const rank = new Map(act.map((S, i) => [S.key, i]));
@@ -3494,7 +3757,7 @@ function drawMap() {
 
   // The track. One path, one stroke - a walk is tens of thousands of segments and stroking
   // them individually is the difference between a smooth pan and a slideshow.
-  if (!fld.on) {
+  if (!fieldShown) {
     g.strokeStyle = '#4d566b';
     g.beginPath();
     for (let i = 0; i < geo.fixes.length; i++) {
@@ -3512,7 +3775,7 @@ function drawMap() {
   for (const G of gtr.values()) {
     if (G.dirty) { G.list.sort((a, b) => a.t - b.t); G.dirty = false; }
     G.col = GNSS_COLS[gi++ % GNSS_COLS.length];
-    if (G.list.length < 2 || fld.on) continue;
+    if (G.list.length < 2 || fieldShown) continue;
     g.strokeStyle = G.col;
     g.globalAlpha = 0.6;
     g.beginPath();
@@ -3549,7 +3812,8 @@ function drawMap() {
   });
   const pad = plot.maxPx + 20;   // rays reach outward, so cull generously rather than exactly
   let drawn = 0;
-  for (let i = 0; !fld.on && i < samples.length; i++) {   // the field places its own
+  // The field places its own; "ftm only" places none.
+  for (let i = 0; !fld.on && ftmView !== 2 && i < samples.length; i++) {
     const s = samples[i];
     placeSample(s, redo);
     if (!s.pos) continue;
@@ -3585,7 +3849,8 @@ function drawMap() {
   if (showMiss && !showAlt) { g.strokeStyle = 'rgba(248,113,113,.55)'; g.stroke(pMiss); }
   if (showAlt) pAlt.forEach((p, i) => { g.fillStyle = altCol((i + 0.5) / ALT_STEPS); g.fill(p); });
   act.forEach((S, i) => { g.strokeStyle = srcCol(S.key); g.stroke(rays[i]); });
-  if (fld.on && fld.trace) drawFieldTrace(g, W, H);
+  if (fieldShown && fld.trace) drawFieldTrace(g, W, H);
+  const ftmG = ftmView ? drawFtm(g) : null;
 
   // Base marker: a small open square, so it reads as a placed thing rather than a measurement.
   if (geo.base) {
@@ -3623,6 +3888,20 @@ function drawMap() {
     g.fill();
     g.fillText(`${labelOf(G.node)} ${F.alt}m`, px + 8, py - 6);
   }
+
+  // Boards placed by the operator rather than by a GNSS of their own: an open circle, at the
+  // phone while carried, where it was left once put down.
+  const tNow = Date.now();
+  for (const id of Object.keys(roles)) {
+    const G = gtr.get(id);
+    if (G && G.list.length) continue;   // it has a track and a diamond of its own
+    const p = boardPos(id, tNow);
+    if (!p) continue;
+    const px = sxOf(p.x), py = syOf(p.y);
+    g.strokeStyle = g.fillStyle = '#e8eaf0';
+    g.beginPath(); g.arc(px, py, 5, 0, Math.PI * 2); g.stroke();
+    g.fillText(labelOf(id) + (p.how === 'carry' ? ' (carried)' : ''), px + 8, py - 6);
+  }
   // Finish placing whatever is still provisional, even if nothing else arrives to cause a redraw.
   if (gRev !== gResolvedRev && !gTimer) {
     gTimer = setTimeout(() => { gTimer = 0; mapRedraw(); }, 1100);
@@ -3643,10 +3922,12 @@ function drawMap() {
   g.fillText('N ↑', W - 30, H - 8);
   g.textBaseline = 'top';
 
-  if (fld.on) {
+  if (ftmG) drawFtmLegend(g, W, ftmG);
+  if (fieldShown) {
     drawFieldLegend(g, W, H);
     return;
   }
+  if (ftmView === 2) return;   // no rays on the map, so nothing for their legend to say
 
   // Legend. Each entry carries a stub drawn at that radio's own angle, so which ray is which
   // can be read off the map without looking away from it.
@@ -3671,6 +3952,71 @@ function drawMap() {
     g.fillStyle = '#6b7488';
     g.fillText(`${drawn} of ${samples.length} marks in view`, 12, ly);
   }
+}
+
+// The rings, the failures and each responder's best point. Rings are one path per responder,
+// stroked once at low opacity: overlapping edges are what build up into a bright spot, so they
+// are never filled and never thickened. Returns what was gathered, for the legend.
+const FTM_RING_ALPHA = 0.2;
+
+function drawFtm(g) {
+  const F = ftmGather();
+  for (const P of F.by.values()) {
+    const col = ftmCols.get(P.peer) || '#e8eaf0';
+    const path = new Path2D();
+    for (const q of P.rings) {
+      const px = sxOf(q.x), py = syOf(q.y), rp = q.r / view.mpp;
+      path.moveTo(px + rp, py);
+      path.arc(px, py, Math.max(rp, 0.5), 0, Math.PI * 2);
+    }
+    g.globalAlpha = FTM_RING_ALPHA;
+    g.strokeStyle = col;
+    g.stroke(path);
+    g.globalAlpha = 1;
+
+    // A session that got nothing back is a miss, and is drawn like one: a tick where it was
+    // tried from.
+    if (showMiss && P.fails.length) {
+      const pm = new Path2D();
+      for (const q of P.fails) {
+        const px = sxOf(q.x), py = syOf(q.y);
+        pm.moveTo(px - 2.5, py - 2.5); pm.lineTo(px + 2.5, py + 2.5);
+      }
+      g.strokeStyle = 'rgba(248,113,113,.55)';
+      g.stroke(pm);
+    }
+
+    if (P.est) {
+      const ex = sxOf(P.est.x), ey = syOf(P.est.y);
+      g.strokeStyle = g.fillStyle = col;
+      g.beginPath();
+      g.moveTo(ex - 8, ey); g.lineTo(ex + 8, ey);
+      g.moveTo(ex, ey - 8); g.lineTo(ex, ey + 8);
+      g.stroke();
+      g.beginPath(); g.arc(ex, ey, Math.max(P.est.rms / view.mpp, 3), 0, Math.PI * 2); g.stroke();
+      g.fillText(`${labelOf(P.peer)} ±${P.est.rms.toFixed(0)}m`, ex + 10, ey + 2);
+    }
+  }
+  return F;
+}
+
+// Top right, clear of the rays' legend on the left.
+function drawFtmLegend(g, W, F) {
+  if (!F.by.size) return;
+  let y = 10;
+  g.textAlign = 'right';
+  g.fillStyle = '#8b93a7';
+  g.fillText('ftm ranges', W - 12, y);
+  y += 15;
+  for (const P of F.by.values()) {
+    g.fillStyle = ftmCols.get(P.peer) || '#e8eaf0';
+    let t = `→ ${labelOf(P.peer)}  ${P.rings.length} ok · ${P.fails.length} failed`;
+    if (P.unplaced) t += ` · ${P.unplaced} unplaced`;
+    if (P.est) t += ` · best fit ±${P.est.rms.toFixed(1)}m`;
+    g.fillText(t, W - 12, y);
+    y += 15;
+  }
+  g.textAlign = 'left';
 }
 
 // ---- pan, zoom, follow ----------------------------------------------------------------------
@@ -3878,6 +4224,9 @@ function paintMapBar() {
   h.classList.toggle('on', showAlt);
   // Nothing has a height until a GNSS end has been heard from, and then it stays offered.
   h.disabled = !isFinite(alts.lo);
+  const fv = document.getElementById('ftmv');
+  fv.textContent = FTM_VIEW_NAMES[ftmView];
+  fv.classList.toggle('on', ftmView > 0);
 }
 
 function paintMapStat() {
@@ -3934,7 +4283,9 @@ function paintMapStat() {
 // timeline.
 
 function exportCsv() {
-  if (!samples.length && !geo.fixes.length && !gtr.size) return fail('Nothing recorded yet.');
+  if (!samples.length && !geo.fixes.length && !gtr.size && !ftms.length) {
+    return fail('Nothing recorded yet.');
+  }
   // dev_name and peer_name are whatever the operator called those boards, carried alongside the
   // ids rather than in place of them: the ids are the record, the names are how the walk was
   // actually thought about, and they only exist in a browser nobody will have open in a month.
@@ -3946,7 +4297,10 @@ function exportCsv() {
                 // Appended, so a script written against the older columns still lines up.
                 // alt_m is the GNSS board's altitude; src says what placed the row - the
                 // phone's GPS, or a GNSS board.
-                'alt_m', 'src'];
+                'alt_m', 'src',
+                // FTM rows: dev ranged to peer from lat/lon (where dev was), dist_m is the
+                // straight-line distance measured, ftm_status says whether it worked.
+                'dist_m', 'ftm_status'];
   const rows = [];
   const n6 = v => v === undefined || v === '' ? '' : (+v).toFixed(6);
   const n1 = v => v === undefined || v === null ? '' : (+v).toFixed(1);
@@ -3981,6 +4335,17 @@ function exportCsv() {
                s.ch === '154' ? s.lqi : '',
                s.pdr, s.pdrall, s.hits, s.miss,
                s.alt ?? '', s.g ? 'gnss' : 'phone']);
+  }
+  for (const f of ftms) {
+    const c = f.pos || boardPos(f.dev, f.t);
+    const ll = c ? unproject(c.x, c.y) : { lat: '', lon: '' };
+    rows.push(['ftm', new Date(f.t).toISOString(), Math.round(f.t),
+               f.dev, nameOf(f.dev) ?? '', f.peer, nameOf(f.peer) ?? '', 'ftm',
+               n6(ll.lat), n6(ll.lon), '',
+               c ? n1(c.x) : '', c ? n1(c.y) : '', c ? baseOf(c.x, c.y) : '',
+               f.rssi === -128 ? '' : f.rssi, '', '', '', '', '', '', '', '',
+               c?.alt ?? '', !c ? '' : c.how === 'carry' || c.how === 'put' ? c.how : 'gnss',
+               f.st === 0 ? f.dist.toFixed(1) : '', ftmSt(f.st)]);
   }
   rows.sort((a, b) => a[2] - b[2]);
 
@@ -4071,7 +4436,7 @@ function importCsv(text) {
   const rows = lines.slice(1).map(csvSplit).filter(r => r.length > 2);
   rows.sort((a, b) => (+a[col.ms] || 0) - (+b[col.ms] || 0));
 
-  let fixes = 0, gpos = 0, rx = 0, skipped = 0;
+  let fixes = 0, gpos = 0, rx = 0, nftm = 0, skipped = 0;
   const prev = new Map();      // series key -> the last mark on it, for spreading misses
   for (const r of rows) {
     const type = str(r, 'type'), t = num(r, 'ms');
@@ -4096,6 +4461,21 @@ function importCsv(text) {
       addPoint(gOf(node), mkPos(Math.round(lat * 1e5), Math.round(lon * 1e5),
                                 num(r, 'alt_m') ?? 0), t);
       gpos++;
+      continue;
+    }
+    if (type === 'ftm') {
+      // Where it was measured from comes back as it was exported, since the carried spans and
+      // the logs that placed it are not in the file.
+      const dev = idOf(str(r, 'dev')), peer = idOf(str(r, 'peer'));
+      const stTxt = str(r, 'ftm_status'), dist = num(r, 'dist_m');
+      if (!dev || !peer) { skipped++; continue; }
+      const q = lat === undefined || lon === undefined ? null : project(lat, lon);
+      const code = stTxt === 'not started' ? 0xFE : stTxt === 'timeout' ? 0xFF
+                 : Math.max(0, FTM_ST.indexOf(stTxt));
+      ftmPut({ t, dev, peer, st: stTxt ? code : dist === undefined ? 4 : 0, dist: dist ?? 0,
+               rssi: num(r, 'rssi_dbm') ?? -128,
+               pos: q ? { x: q.x, y: q.y, alt: num(r, 'alt_m') } : undefined });
+      nftm++;
       continue;
     }
     if (type !== 'rx') { skipped++; continue; }
@@ -4152,7 +4532,7 @@ function importCsv(text) {
   rebuildSources();
   syncField(true);
   mapRedraw();
-  logMsg(`imported ${rx} marks, ${fixes} fixes, ${gpos} track points` +
+  logMsg(`imported ${rx} marks, ${fixes} fixes, ${gpos} track points, ${nftm} FTM ranges` +
          (skipped ? `, skipped ${skipped}` : ''));
 }
 
@@ -4301,6 +4681,13 @@ document.getElementById('halt').onclick = () => {
   paintMapBar();
   mapRedraw();
 };
+// Shown, shown alone, hidden - and round again.
+document.getElementById('ftmv').onclick = () => {
+  ftmView = (ftmView + 1) % 3;
+  saveSettings();
+  paintMapBar();
+  mapRedraw();
+};
 document.getElementById('base').onclick = () => {
   if (geo.base) geo.base = null;
   else if (!geo.live) return fail('No fix yet - cannot mark the base.');
@@ -4327,9 +4714,13 @@ document.getElementById('imp').onclick = () => {
 // The radio list survives too, and so does the projection origin: dropping those would take the
 // per-radio scales and the base marker with them, which are exactly the things worth keeping.
 document.getElementById('wipe').onclick = () => {
-  if ((samples.length || gtr.size) &&
-      !confirm(`Throw away ${samples.length} marks and the tracks?`)) return;
+  if ((samples.length || gtr.size || ftms.length) &&
+      !confirm(`Throw away ${samples.length} marks, ${ftms.length} FTM ranges and the tracks?`)) {
+    return;
+  }
   samples.length = 0;
+  ftms.length = 0;
+  ftmRev++;
   geo.fixes.length = 0;
   geo.live = null;
   // GNSS tracks too. The boards' logs are not asked for again - where this page is up to in
@@ -4393,15 +4784,32 @@ function buildCard(d) {
   R.nm.title = 'Click to name this board. The name is kept in this browser only.';
   R.nm.onclick = () => renameBoard(d.name);
 
-  const modes = document.createElement('div');
-  modes.className = 'row';
-  LC.forEach((label, i) => {
+  // The tests, one switch each. The row of its own, first, because it is what a test run is.
+  const tests = document.createElement('div');
+  tests.className = 'row';
+  tests.appendChild(Object.assign(document.createElement('span'),
+                                  { className: 'pwrlab', textContent: 'tests' }));
+  TESTS.forEach((label, i) => {
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = () => cmd(d, i);
-    modes.appendChild(b);
+    b.title = TEST_TITLES[i];
+    b.onclick = () => flipTest(d, i);
+    tests.appendChild(b);
     R.modes.push(b);
   });
+  el.appendChild(tests);
+
+  const modes = document.createElement('div');
+  modes.className = 'row';
+
+  // Which board the phone is carrying - see "where a board is". Only a display matter: it gives
+  // a board without GNSS a place on the map, and its FTM rings a centre.
+  R.carry = document.createElement('button');
+  R.carry.title = 'Carry: this board is wherever the phone’s GPS says, until you tap again ' +
+                  'to put it down where you are standing. Only this page knows - nothing is ' +
+                  'sent to the board. A board with its own GNSS goes by that instead.';
+  R.carry.onclick = () => setCarry(d.name, !carrying(d.name));
+  modes.appendChild(R.carry);
 
   // LR lives here rather than on the board's button, which is down to two gestures (tap = next
   // mode, hold = restore) so the recovery gesture cannot become a timed window. Turning LR on
@@ -4540,6 +4948,25 @@ function buildCard(d) {
   return R;
 }
 
+// One switch flipped, the rest sent as they are. "As they are" is what this page last asked for
+// if that was only a moment ago - two taps inside one report period would otherwise each start
+// from the board's older state, and the second would undo the first.
+const TEST_PENDING_MS = 3000;
+
+function flipTest(d, i) {
+  if (d.legacy) {
+    // v7 and older take one-byte modes: every radio, or one channel alone, and no FTM.
+    if (i > 2) return fail(`${labelOf(d.name)}: that firmware has no ${TESTS[i]} - reflash it`);
+    return cmd(d, (d.tests ?? 0) === 1 << i ? 0 : i + 1);
+  }
+  const base = d.testsWant !== undefined && Date.now() - d.testsWantAt < TEST_PENDING_MS
+    ? d.testsWant : d.tests ?? 0;
+  d.testsWant = base ^ (1 << i);
+  d.testsWantAt = Date.now();
+  cmd(d, CMD_TESTS, d.testsWant);
+  scheduleRender();
+}
+
 // The slider's own number is always the headline. sl.board is what the radio last reported:
 // undefined if it has not said yet, null if this is the "all" row and the three disagree.
 // Anything other than agreement is annotated, never corrected.
@@ -4557,6 +4984,8 @@ function paintSlider(sl) {
 // 2-4Hz, so a second and a half of silence is already several missed - long enough to mean
 // something, short enough to see it happen rather than read about it later.
 const ROW_STALE_MS = 1500;
+// FTM rows: a session every second or so per responder, fewer with several to take turns.
+const FTM_ROW_STALE_MS = 6000;
 // And how long the whole board may go without a report before the card says so. Two report
 // periods: one missed could be timing, two is the link.
 const LINK_STALE_MS = 2500;
@@ -4579,7 +5008,7 @@ function tickAges() {
       if (bn === undefined) continue;
       const age = bn - a.abs;
       a.cell.textContent = (age / 1000).toFixed(1) + 's';
-      a.tr.classList.toggle('stale', age > ROW_STALE_MS);
+      a.tr.classList.toggle('stale', age > a.stale);
     }
 
     // Freshness of the link itself, which is a different question from row age: rows go quiet
@@ -4617,12 +5046,28 @@ function updateCard(d) {
     (rebooted ? '<b class="bad">REBOOTED</b> · ' : '') +
     (d.reboots ? `<b class="bad">${d.reboots} reset${d.reboots > 1 ? 's' : ''}</b> · ` : '') +
     (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
-    `up ${d.uptime ?? '?'}s · isolating: <b>${LC[d.lc ?? 0]}</b><br />` +
+    `up ${d.uptime ?? '?'}s · testing: <b>${esc(testsTxt(d.tests ?? 0))}</b>` +
+    (d.wifiOn !== undefined ? ` · wifi <b class="dim">${d.wifiOn ? 'on, AP answering FTM' : 'off'}</b>` : '') +
+    (d.legacy ? ' · <b class="warn">old firmware: one test at a time</b>' : '') + '<br />' +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
     'report <b class="fresh"></b>';
   R.fresh = R.meta.querySelector('.fresh');
 
-  R.modes.forEach((b, i) => { b.className = d.lc === i ? 'on' : ''; });
+  // Lit is what the board says. A switch still on its way there - asked for, not yet reported -
+  // is marked, rather than shown as done.
+  if (d.testsWant === d.tests || Date.now() - (d.testsWantAt ?? 0) > TEST_PENDING_MS) {
+    d.testsWant = undefined;
+  }
+  R.modes.forEach((b, i) => {
+    const on = !!((d.tests ?? 0) & (1 << i));
+    const want = d.testsWant === undefined ? on : !!(d.testsWant & (1 << i));
+    b.className = on ? 'on' : '';
+    b.textContent = TESTS[i] + (want !== on ? ' …' : '');
+    b.disabled = !!d.legacy && i > 2;
+  });
+  const carried = carrying(d.name);
+  R.carry.textContent = carried ? 'carried' : roles[idOf(d.name)]?.put ? 'put down' : 'carry';
+  R.carry.className = carried ? 'on' : '';
   R.lr.textContent = d.lr ? 'LR on' : 'LR off';
   R.lr.className = d.lr ? 'on' : '';
 
@@ -4745,10 +5190,36 @@ function updateCard(d) {
       diag.map(s => `<div>${s}</div>`).join('')
     : '';
 
+  // FTM rows ride behind the report they belong to, and go stale with it.
+  const ftmRows = d.ftm && (d.ftmGen ?? -9) >= (d.genN ?? 0) - 1
+    ? [...d.ftm.values()].sort((a, b) => a.peer.localeCompare(b.peer)) : [];
+  const ftmHtml = !ftmRows.length ? '' :
+    '<table style="margin-top:8px"><tr><th>ftm to</th><th>dist</th><th>avg</th><th>rssi</th>' +
+    '<th>pdr</th><th>ok</th><th>fail</th><th>last</th></tr>' +
+    ftmRows.map(f =>
+      // Sessions take turns between responders, so a row is quiet for a while between its own.
+      `<tr data-abs="${f.abs}" data-stale="${FTM_ROW_STALE_MS}"><td><span class="ch">ftm</span> ` +
+      `<span class="peer nameable ${nameOf(f.peer) ? '' : 'dim'}" data-id="${esc(f.peer)}" ` +
+      `title="Click to name this board">${esc(labelOf(f.peer))}</span>` +
+      (f.st ? ` <span class="bad" title="How the last session ended">${esc(ftmSt(f.st))}</span>` : '') +
+      '</td>' +
+      `<td class="big">${f.ok ? f.dist.toFixed(1) + '<span class="dim">m</span>' : '–'}</td>` +
+      `<td class="dim">${f.ok ? f.avg.toFixed(1) : '–'}</td>` +
+      `<td class="dim">${f.rssi === -128 ? '–' : f.rssi}</td>` +
+      `<td class="big ${pdrClass(f.pdr)}" title="Of the last 16 sessions">${pdrTxt(f.pdr)}</td>` +
+      `<td class="dim">${f.ok}</td><td class="dim">${f.fail}</td>` +
+      '<td class="dim">–</td></tr>').join('') +
+    '</table>';
+
   if (!rows.length) {
-    R.body.innerHTML =
-      '<div class="hint">Nothing heard yet. Is the other board powered up?</div>';
-    R.ageEls = [];   // otherwise tickAges keeps writing into cells that are gone
+    R.body.innerHTML = (d.tests ? '<div class="hint">Nothing heard yet. Is the other board ' +
+                                  'powered up, with the same test on?</div>'
+                                : '<div class="hint">No test is on - pick one above.</div>') +
+                       ftmHtml;
+    R.ageEls = [...R.body.querySelectorAll('tr[data-abs]')].map(tr => ({
+      tr, cell: tr.lastElementChild, abs: +tr.dataset.abs, stale: +tr.dataset.stale || ROW_STALE_MS,
+    }));
+    tickAges();
     return;
   }
   // Rebuilt only when a report arrives. The "last" cells are then handed to tickAges(), which
@@ -4781,10 +5252,10 @@ function updateCard(d) {
         `<td class="dim">${r.miss}</td>` +
         `<td class="dim">–</td></tr>`;
     }).join('') +
-    '</table>';
+    '</table>' + ftmHtml;
 
   R.ageEls = [...R.body.querySelectorAll('tr[data-abs]')].map(tr => ({
-    tr, cell: tr.lastElementChild, abs: +tr.dataset.abs,
+    tr, cell: tr.lastElementChild, abs: +tr.dataset.abs, stale: +tr.dataset.stale || ROW_STALE_MS,
   }));
   tickAges();
 }
