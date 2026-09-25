@@ -49,6 +49,46 @@ trades rate for range. This applies uniformly across every link kind measured, i
 future ones like FTM — the question is always "did anything arrive," never "how much" or
 "how fast."
 
+### Tests became switches, and FTM joined them (2026-09-26)
+
+The owner's framing, which supersedes "low contention" as the organising idea:
+
+- **Where it is going.** Walking with a phone's GPS was the start. Flying is faster and reaches
+  further, so a board and a GNSS now ride a drone - which puts the drone out of reach of the
+  phone's BLE for most of a flight (hence the log, buffered and downloaded on return). The chain
+  is phone → drone → lost tracker today, and likely phone → handheld board → drone → tracker
+  later, because the phone can only do BLE and BLE is looking like it will not be the best
+  *practical* long-range link: coded PHY may reach further in theory, but it cuts off and cannot
+  reconnect until much closer, where ESP-NOW LR and 802.15.4 keep getting even 10% through.
+- **The candidate use:** find the tracker by 802.15.4 RSSI to get close-ish, then FTM for the
+  last stretch. Whatever wins for distance (802.15.4 or ESP-NOW) runs *alongside* FTM, so
+  real use is neither "all at once" nor "one at a time" but a chosen few.
+- **So every test is an independent switch, and all default off** (`RT_TEST_*` in `main/rt.h`).
+  The BLE control link is not a test, is always on, and should still spend as little antenna
+  time as it reasonably can without ever becoming unrecoverable. `LC_WIFI_UI` (BLE off, phone
+  on the AP) was dropped: there is no HTTP server, and BLE is never off now.
+- **Button restore = boot state**: every test off. The control link then has the antenna to
+  itself, which is the most reconnectable a board can be. Tap steps through single tests for
+  bench work without a phone.
+- **FTM initiator**: scans only our own channel, ranges only to `ESPRT-` APs that advertise the
+  responder bit, one session at a time with a randomised gap - not the 2-4Hz of the packet
+  tests. Every session, failed or not, goes in the report and the log. The owner confirmed their
+  C6 revisions do FTM both ways (see Errata WIFI-9686 under Platform findings).
+- **Wi-Fi is never STA-only**, even when only the FTM initiator wants it:
+  `CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE` is on, so an unassociated station without an AP
+  beside it power-saves and ESP-NOW goes deaf. So the AP (the FTM responder) is up whenever the
+  driver is. A judgement call, not a measured fault - revisit if the AP's airtime matters.
+- **11g/11n (HT20) join the protocol list while FTM is on** - an assumption that FTM needs
+  them, not a tested fact. ESP-NOW's rate is pinned separately and is unaffected.
+- **On the map**, a range is a hairline ring at ~20% opacity round where the initiator was, so
+  agreeing rings pile up into a bright spot; a best-fit cross is drawn once rings come from more
+  than one place. A drone's slant range is flattened to ground distance, with "ground" taken as
+  the lowest that drone's track has been - an assumption, stated on the page.
+- **"Carry"** (CONTEXT's old "pick up / put down" role idea, finally built): the phone's GPS is
+  ascribed to a board while carried; put down, it stays where the phone was. Page-only, never
+  sent to the board. It places non-GNSS boards and their FTM rings; packet marks still go where
+  the phone was, as before.
+
 ### The central question: BLE coded PHY S=8
 
 The working hypothesis is that BLE coded S=8 wins. It has a trap:
@@ -82,7 +122,9 @@ similar distance, it is not.
   "Working means working" — success is the metric, not volume. Must work with 2 boards and
   scale to more peers than can be connected at once.
 
-**Radio isolation**
+**Radio isolation** (written in low-contention terms; since 2026-09-26 the modes are independent
+test switches - see "Tests became switches" above. The principles below all still hold: a
+switch turns off everything its radio does, and `rt_apply_test_radios()` is the definition.)
 - Low-contention mode means "turn off everything but X" (or X plus a UI channel) — and
   "everything" means anything that touches the radio, not just the other two channels' own
   measurement packets. That includes **stopping the Wi-Fi driver**, not merely muting ESP-NOW's

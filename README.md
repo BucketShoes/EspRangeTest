@@ -3,11 +3,12 @@
 A throwaway range tester for the ESP32-C6. Flash two boards, walk away with one, watch how
 far each radio still gets packets through.
 
-Every radio broadcasts a small numbered packet on a timer and listens the rest of the time.
-Every 2 seconds the results go out over serial:
+Each test broadcasts a small numbered packet on a timer and listens the rest of the time; the
+FTM test measures distance to the other boards instead. Every test is a switch of its own and
+starts **off**. The results go out over serial every `REPORT_MS` (`main/main.c`):
 
 ```
-== node C5  up 42s  lc=off ==
+== node C5  up 42s  tests=espnow+ble_adv+154 ==
   tx: espnow=168 ble_adv=84 154=168
   C6 espnow   rssi  -71 (avg  -68, -78..-59)  pdr  96% now /  98% all  rx 164 miss 3   251ms ago
   C6 ble_adv  rssi  -84 (avg  -81, -91..-70)  pdr  75% now /  82% all  rx  69 miss 15  502ms ago
@@ -24,6 +25,10 @@ in the sequence numbers.
 | **ESP-NOW** | broadcast, no pairing, no ack — every 250ms |
 | **BLE** | extended advertising on the **coded PHY**, and a coded-PHY scanner — every 500ms |
 | **802.15.4** | raw frames, channel 26 — every 250ms |
+| **FTM** | 802.11mc fine timing measurement to other boards' APs, one after another |
+
+(Periods and channels as of writing; each file's `TX_PERIOD_MS` / `CHANNEL` / `ADV_PERIOD_MS`
+has the real one.)
 
 Raw 802.15.4 rather than Thread or Zigbee on purpose: both of those ride this exact PHY
 (2.4GHz O-QPSK, 250kbps), so the range is identical. The stacks only add addressing and
@@ -37,27 +42,71 @@ with no connection. Note that the C6 is Bluetooth 5.3 and the feature that would
 receiver read back S=2 vs S=8 (Advertising Coding Selection) is 5.4 — so the controller
 reports "coded" without saying which. Measured range is the answer here, not a status field.
 
+## Tests are switches
+
+The radios share one antenna and arbitrate for it, so running them together costs something.
+Real use is one thing under test, or a chosen few together the way they will be flown — say
+802.15.4 to get close to a lost board and FTM for the last stretch — so each test is its own
+switch (`RT_TEST_*` in `main/rt.h`), set from the phone, and all of them are off at boot:
+
+| switch | what it runs |
+|---|---|
+| `espnow` | ESP-NOW packets out and in. Brings the Wi-Fi driver up. |
+| `ble_adv` | the coded-PHY beacon and scanner. The scanner listens continuously when this is the only test on, and duty-cycles when sharing. |
+| `154` | 802.15.4 frames out, and the receiver on. |
+| `ftm` | the FTM initiator: scan our Wi-Fi channel for other boards' APs, range to each in turn. Brings the Wi-Fi driver up. |
+| `ftm resp` | keeps the Wi-Fi driver up for nothing else, so this board's AP is there to be ranged. |
+
+A switch turns off everything its radio does on its own schedule, not just its packets: with no
+Wi-Fi test on the Wi-Fi driver stops, with `ble_adv` off the coded scanner stops, with `154` off
+its receiver sleeps.
+
+Whenever the Wi-Fi driver is up its AP is up too, and the AP is the FTM responder — so any board
+with `espnow`, `ftm` or `ftm resp` on can be ranged to. (It is never STA-only: an unassociated
+station power-saves and ESP-NOW goes deaf.)
+
+The BLE link to the phone is **not** a test and has no switch — it is always on. It runs slow
+(long advert and connection intervals) while some test other than `ble_adv` is on, to hand that
+test the antenna, and fast otherwise. See `UI_SLOW()` in `main/rt_ui.c`.
+
 ## GPIO9
 
-All three radios share one antenna and arbitrate for it, so running them together costs
-something. The BOOT button switches low-contention mode, which isolates one channel so it
-gets a clean run at the antenna:
-
-- **tap** — cycle: all → espnow only → ble only → 154 only → all
-- **hold** — back to all radios
-
-Low contention does more than stop the other two channels' own packets: it also stops the
-BLE coded-PHY scanner (a 100% duty-cycle receiver — the one continuous, always-on source of
-contention this board creates on its own) and slows the phone-UI advert and connection
-interval right down, trading a laggy link for airtime. Expect low-contention testing of
-anything other than `ble_adv` to be a bench-test affair with serial output, not a live walk
-with the phone connected.
+- **tap** — step through the tests one at a time: none → espnow → ble_adv → 154 → ftm →
+  ftm resp → none. For a bench without a phone; combinations are set from the page. A tap on a
+  combination clears it.
+- **hold** — restore: every test off, LR off, control link back on coded PHY, tx unmuted —
+  exactly as booted.
 
 Switching does **not** reset the counters, and neither does anything else — not power, LR or
 antenna either. Each board's card in the phone UI has its own **reset stats** button, and that
 is the only thing that clears it. Changing a setting on one board used to wipe that board's
 record of what it had heard from the other one, which was backwards: the slider changes what
 the board *transmits*, and the table is what it *received*.
+
+## FTM
+
+With `ftm` on, a board scans its own Wi-Fi channel for APs named `ESPRT-xxxxxx` whose beacon
+says they answer FTM, and ranges to them one session at a time with a randomised pause between
+— no fixed rate. Timings, frame count and how long an unanswering board is kept on the list are
+at the top of `main/rt_ftm.c`. It never ranges to anything that isn't one of ours.
+
+Every session is a result, successful or not: it goes in the FTM rows of the report (distance,
+recent average, RSSI of the FTM frames, success rate of the last 16) and into the packet log,
+GNSS or not, so a board that ranged while out of reach of the phone hands its ranges over when
+it is back, like its packets.
+
+While FTM is on (either switch), Wi-Fi adds 11g/11n (HT20) to its 11b — every FTM exchange seen
+so far ran with them, and whether an 11b-only AP answers at all is untried. ESP-NOW's own rate is
+pinned separately and is unaffected.
+
+On the page each range is a faint ring round where it was measured from; where they agree is
+where the other board is, and once they come from more than one spot a cross marks the best fit.
+The **ftm** button on the map cycles showing them over everything, on their own, or not at all.
+A board with its own GNSS is placed by it; any other board is placed by tapping **carry** on its
+card — it then follows the phone's GPS until tapped again, which leaves it where you stood.
+
+Distances are raw: nothing is calibrated out yet. A ring from a drone is drawn at the ground
+distance its slant range means, taking the lowest the drone has been as ground level.
 
 ## GNSS (optional)
 
@@ -148,7 +197,7 @@ have no 802.15.4 radio, so that channel is skipped and the boot log says so.
 
 `docs/index.html` — connect over Web Bluetooth and watch the same numbers on a phone while
 you walk. Each board advertises as `ESPRT-xxxxxx` (last three MAC bytes); tap **Connect a board** twice to watch both
-at once. The low-contention buttons switch radio isolation remotely, and it reconnects by
+at once. The test switches on each card turn tests on and off remotely, and it reconnects by
 itself when a board comes back into range.
 
 Web Bluetooth needs a secure context, so a `file://` page will not work:
@@ -183,4 +232,4 @@ and logs whether the phone accepted.
 
 ## Not done yet
 
-Wi-Fi beacons, LR mode, and FTM ranging.
+Wi-Fi beacons as a measurement, and FTM distance calibration. FTM has not been tried with LR on.
