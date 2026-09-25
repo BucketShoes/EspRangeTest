@@ -63,31 +63,47 @@ The owner's framing, which supersedes "low contention" as the organising idea:
 - **The candidate use:** find the tracker by 802.15.4 RSSI to get close-ish, then FTM for the
   last stretch. Whatever wins for distance (802.15.4 or ESP-NOW) runs *alongside* FTM, so
   real use is neither "all at once" nor "one at a time" but a chosen few.
-- **So every test is an independent switch, and all default off** (`RT_TEST_*` in `main/rt.h`).
-  The BLE control link is not a test, is always on, and should still spend as little antenna
-  time as it reasonably can without ever becoming unrecoverable. `LC_WIFI_UI` (BLE off, phone
-  on the AP) was dropped: there is no HTTP server, and BLE is never off now.
+- **So every test is an independent switch, and all default off** (`RT_TEST_*` in `main/rt.h`):
+  espnow, ble_adv, 154, ftm, ap. The BLE control link is not a test, is always on, and should
+  still spend as little antenna time as it reasonably can without ever becoming unrecoverable.
+- **The AP is a test channel of its own**, owner's correction the same day. It stands in for
+  anything a phone could later do over Wi-Fi (ping, a page) and is what the tracker needs up to
+  be ranged by FTM. `LC_WIFI_UI`'s "BLE off" part is gone; the AP part is the `ap` switch.
+  Ordinary Wi-Fi traffic is otherwise abandoned: even 11b loses to LR for the same reason BLE
+  does - it has to connect, and a connection fails where connectionless ESP-NOW still gets 10%
+  through. **Assume most testing is LR**; the LR toggle stays in case LR upsets FTM.
+- **ESP-NOW-only must be possible**, so the driver runs station-only whenever `ap` is off.
+  An earlier revision that day kept it APSTA "because an unassociated station power-saves and
+  ESP-NOW goes deaf" - that was a guess from `CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE`, never
+  observed, and wrong: `esp_now_set_wake_window()` defaults to always awake. (The old espnow mode
+  always had the AP up too, so no earlier test ran station-only.)
+- **Protocols stay 11b (+LR).** The same revision added 11g/n "for FTM"; the owner: FTM is
+  802.11mc, uses the AP only to arrange the session, and reaches further than those rates could.
 - **Button restore = boot state**: every test off. The control link then has the antenna to
   itself, which is the most reconnectable a board can be. Tap steps through single tests for
   bench work without a phone.
-- **FTM initiator**: scans only our own channel, ranges only to `ESPRT-` APs that advertise the
-  responder bit, one session at a time with a randomised gap - not the 2-4Hz of the packet
-  tests. Every session, failed or not, goes in the report and the log. The owner confirmed their
-  C6 revisions do FTM both ways (see Errata WIFI-9686 under Platform findings).
-- **Wi-Fi is never STA-only**, even when only the FTM initiator wants it:
-  `CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE` is on, so an unassociated station without an AP
-  beside it power-saves and ESP-NOW goes deaf. So the AP (the FTM responder) is up whenever the
-  driver is. A judgement call, not a measured fault - revisit if the AP's airtime matters.
-- **11g/11n (HT20) join the protocol list while FTM is on** - an assumption that FTM needs
-  them, not a tested fact. ESP-NOW's rate is pinned separately and is unaffected.
+- **FTM initiator**: scans only our own channel, ranges to every `ESPRT-` AP (the responder bit
+  is counted, not required), one session at a time with a randomised gap - not the 2-4Hz of the
+  packet tests. Every session, failed or not, goes in the report and the log, and the report
+  says what the last scan found so "no results" explains itself. The owner confirmed their C6
+  revisions do FTM both ways (see Errata WIFI-9686 under Platform findings).
+- **FTM distances are signed.** `dist_est` is declared unsigned, but uncalibrated FTM goes below
+  zero close up, and v8 turned that into kilometre rings. Zeroing is per pair, on the page, with
+  the boards side by side; the raw figure is what is recorded.
 - **On the map**, a range is a hairline ring at ~20% opacity round where the initiator was, so
   agreeing rings pile up into a bright spot; a best-fit cross is drawn once rings come from more
-  than one place. A drone's slant range is flattened to ground distance, with "ground" taken as
-  the lowest that drone's track has been - an assumption, stated on the page.
+  than one place. Each range is also a sample, so FTM distance - and height - can be drawn as
+  ticks and compared with rssi, lqi and the rest. Every layer has its own on/off switch (rings,
+  tracks, field, misses); no switch hides other layers.
+- **Height**: a drone's slant range is flattened to ground distance for the rings, and the
+  height tick is measured from the lowest anything has been - both display zeros only, never
+  applied to a recorded number.
 - **"Carry"** (CONTEXT's old "pick up / put down" role idea, finally built): the phone's GPS is
   ascribed to a board while carried; put down, it stays where the phone was. Page-only, never
   sent to the board. It places non-GNSS boards and their FTM rings; packet marks still go where
   the phone was, as before.
+- **UI holds still**: buttons are as wide as their longest label, and ticking ages are at most
+  four characters, so nothing reflows as values change.
 
 ### The central question: BLE coded PHY S=8
 
