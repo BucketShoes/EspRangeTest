@@ -2,6 +2,7 @@
   "name": "EspRangeTest",
   "short_name": "RangeTest",
   "description": "Range-walk tool for ESP32 radio links: live per-link signal over Bluetooth, pinned to GPS, drawn as a coverage map.",
+  "id": "/EspRangeTest/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
