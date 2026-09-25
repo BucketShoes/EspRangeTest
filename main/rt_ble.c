@@ -42,12 +42,12 @@ static const char *TAG = "ble";
 // gap. Measured: in all-radios mode that was 100.0% of 802.15.4 transmits refused, and with
 // the scanner off it was 0%.
 //
-// Continuous is right while ble_adv is the channel under test: it is the thing being measured
-// and nothing else is transmitting. It is wrong in all-radios mode, where the point is to
-// measure all three *at the same instant* - which is the only way to compare them without
-// aiming, multipath and where you happened to be standing varying between runs. A duty-cycled
-// scanner loses coded adverts it would otherwise have heard; that loss is the price of the
-// comparison, not a defect, and it is cheaper than a channel that cannot transmit at all.
+// Continuous is right while ble_adv is the only test on: it is the thing being measured and
+// nothing else wants the antenna. It is wrong alongside any other test, where the point is to
+// measure them *at the same instant* - which is the only way to compare them without aiming,
+// multipath and where you happened to be standing varying between runs. A duty-cycled scanner
+// loses coded adverts it would otherwise have heard; that loss is the price of the comparison,
+// not a defect, and it is cheaper than a channel that cannot transmit at all.
 #define SCAN_ITVL_SOLO   0x0060  // 0.625ms units -> 60ms, window == interval
 #define SCAN_ITVL_SHARED 0x0140  // -> 200ms
 #define SCAN_WIN_SHARED  0x0080  // -> 80ms, so 40% duty and 60% left for everyone else
@@ -85,8 +85,8 @@ static esp_power_level_t pwr_level(int dbm)
 
 void rt_ble_apply_power(void)
 {
-    // Same reasoning as the Wi-Fi path: report the request now, so a level chosen while
-    // advertising is stopped (LC_WIFI_UI) does not read as having been ignored. start_adv()
+    // Same reasoning as the Wi-Fi path: report the request now, so a level chosen while the
+    // beacon is off does not read as having been ignored. start_adv()
     // replaces it with the controller's actual selection once it runs.
     rt_power_set_actual(CH_BLE_ADV, rt_power_dbm(CH_BLE_ADV));
 
@@ -219,8 +219,13 @@ static int scan_gap_cb(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-// solo: ble_adv is the channel under test, so listen continuously. Otherwise duty-cycle, so
+// solo: ble_adv is the only test on, so listen continuously. Otherwise duty-cycle, so
 // 802.15.4 and Wi-Fi have somewhere to go.
+static bool scan_solo(void)
+{
+    return g_tests == RT_TEST_BLE_ADV;
+}
+
 static void start_scan(bool solo)
 {
     struct ble_gap_ext_disc_params coded = { 0 };
@@ -239,8 +244,8 @@ static void start_scan(bool solo)
     s_scanning  = true;
     s_scan_solo = solo;
     ESP_LOGI(TAG, "scanning coded PHY, %s",
-             solo ? "continuously (ble_adv is the channel under test)"
-                  : "40% duty (sharing the antenna with the other radios)");
+             solo ? "continuously (ble_adv is the only test on)"
+                  : "40% duty (sharing the antenna with the other tests)");
 }
 
 // Quiet: callers say why, since this is used both to stop scanning altogether and to drop the
@@ -274,7 +279,7 @@ static void adv_task(void *pv)
             ble_gap_ext_adv_stop(ADV_INSTANCE);
             if (s_scanning) {
                 stop_scan();
-                ESP_LOGI(TAG, "coded PHY scan stopped (low contention on another channel)");
+                ESP_LOGI(TAG, "coded PHY beacon and scan stopped (ble_adv test off)");
             }
             continue;
         }
@@ -290,9 +295,9 @@ static void adv_task(void *pv)
             } else if (set_adv_data() == 0) {
                 ble_gap_ext_adv_start(ADV_INSTANCE, 0, 0);
             }
-            // Also catches a mode change between all-radios and the ble_adv test, which needs
+            // Also catches another test being switched on or off beside this one, which needs
             // the same scan restarted at a different duty cycle.
-            const bool solo = (g_lc == CH_BLE_ADV + 1);
+            const bool solo = scan_solo();
             if (!s_scanning || s_scan_solo != solo) {
                 stop_scan();
                 start_scan(solo);
@@ -319,11 +324,11 @@ static void on_sync(void)
     }
     // Same gate adv_task applies, applied here too rather than left for its first tick: the
     // scanner is the one continuous claim on the antenna this board makes, and half a second
-    // of it is half a second of a channel under test not getting what the mode promised. In
-    // practice the board always boots at lc=0, so this only matters if that ever stops
-    // being true - which is exactly the kind of assumption that put 802.15.4 at 100% loss.
+    // of it is half a second of a channel under test not getting what was promised. The board
+    // boots with every test off, so this normally does nothing - which is exactly the kind of
+    // assumption that put 802.15.4 at 100% loss, so it is checked rather than relied on.
     if (rt_tx_enabled(CH_BLE_ADV)) {
-        start_scan(g_lc == CH_BLE_ADV + 1);
+        start_scan(scan_solo());
     }
 #if RT_STAGE >= 4
     rt_ui_on_sync(s_own_addr_type);

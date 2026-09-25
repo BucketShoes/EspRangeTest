@@ -27,6 +27,7 @@ static const char *TAG = "log";
 #define REC_NOFIX  0x03
 #define REC_RX     0x04
 #define REC_POS    0x05
+#define REC_FTM    0x06
 #define REC_RXD    0x40
 #define REC_RXS    0x80
 
@@ -35,6 +36,7 @@ static const char *TAG = "log";
 #define LEN_NOFIX  14
 #define LEN_RX     15
 #define LEN_POS    10
+#define LEN_FTM    9
 #define LEN_RXD    8
 #define LEN_RXS    5
 
@@ -315,6 +317,24 @@ void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, 
         put8((uint8_t)rssi);
         put8(q);
     }
+    portEXIT_CRITICAL_SAFE(&s_mux);
+}
+
+void rt_log_ftm(uint32_t node, uint8_t status, uint16_t dist_dm, int8_t rssi)
+{
+    if (s_ring == NULL) {
+        return;
+    }
+    const uint32_t now = rt_ms();
+    portENTER_CRITICAL_SAFE(&s_mux);
+    room(now, LEN_FTM, false);
+    const uint8_t dt = tick(now);
+    put8(REC_FTM);
+    put8(dt);
+    put24(node);
+    put8(status);
+    put16(dist_dm);
+    put8((uint8_t)rssi);
     portEXIT_CRITICAL_SAFE(&s_mux);
 }
 

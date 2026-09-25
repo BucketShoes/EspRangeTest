@@ -16,6 +16,7 @@ idf_component_register(
         "rt_ui.c"
         "rt_log.c"
         "rt_gnss.c"
+        "rt_ftm.c"
     INCLUDE_DIRS
         "."
     REQUIRES

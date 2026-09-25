@@ -24,7 +24,7 @@ static const char *TAG = "stats";
 
 const char *rt_chan_name[CH_COUNT] = { "espnow", "ble_adv", "154" };
 
-volatile int g_lc = 0;
+volatile uint8_t g_tests;   // RT_TEST_*, all off at boot - see rt.h
 volatile bool g_tx_mute;
 
 void rt_set_tx_mute(bool mute)
@@ -281,29 +281,26 @@ const char *rt_node_name(void)
     return name;
 }
 
+// The channel's own bit, which is why RT_TEST_ESPNOW..RT_TEST_154 are 1 << CH_*.
 bool rt_tx_enabled(int chan)
 {
-    if (g_lc == 0) {
-        return true;
-    }
-    if (g_lc == LC_WIFI_UI) {
-        return chan == CH_ESPNOW;
-    }
-    return g_lc == chan + 1;
+    return chan >= 0 && chan < CH_COUNT && (g_tests & (1u << chan)) != 0;
 }
 
-// LC_WIFI_UI isn't "channel (lc-1)" like the others, so callers that want to name the current
-// mode (the report header, the >>> line) go through this instead of indexing rt_chan_name
-// directly - that indexing is only valid for lc in 1..CH_COUNT.
-static const char *lc_name(int lc)
+const char *rt_tests_name(unsigned mask, char *buf, int len)
 {
-    if (lc == 0) {
-        return "off (all radios)";
+    static const char *const nm[] = { "espnow", "ble_adv", "154", "ftm", "ftm_resp" };
+    int n = 0;
+    buf[0] = '\0';
+    for (int i = 0; i < 5 && n < len; i++) {
+        if (mask & (1u << i)) {
+            n += snprintf(buf + n, len - n, "%s%s", n ? "+" : "", nm[i]);
+        }
     }
-    if (lc == LC_WIFI_UI) {
-        return "wifi+phone (BLE off, LR forced off)";
+    if (!n) {
+        snprintf(buf, len, "none");
     }
-    return rt_chan_name[lc - 1];
+    return buf;
 }
 
 void rt_stats_reset(void)
@@ -322,26 +319,25 @@ void rt_stats_reset(void)
     memset(s_tx_count, 0, sizeof(s_tx_count));
     memset(s_tx_ok, 0, sizeof(s_tx_ok));
     memset(s_tx_fail, 0, sizeof(s_tx_fail));
+    rt_ftm_reset();
     // s_rx_offmode is deliberately NOT cleared. It counts a fault, not a measurement, and it
     // is the one number here that is worth more the longer it has been accumulating.
     printf("\n>>> results cleared\n");
 }
 
-void rt_set_lc(int lc)
+void rt_set_tests(unsigned mask)
 {
-    if (lc < 0 || lc >= LC_COUNT) {
-        return;
-    }
-    // Set g_lc first: rt_apply_lc_radios() and everything it reaches decide what to do by
-    // reading g_lc, not the argument.
-    g_lc = lc;
+    // Set g_tests first: rt_apply_test_radios() and every radio task decide what to do by
+    // reading g_tests, not an argument.
+    g_tests = (uint8_t)(mask & RT_TEST_ALL);
 
-    // The table is not touched. A mode change says which channel gets the antenna; it says
-    // nothing about what this board already heard, and clearing it here threw away the other
-    // board's results every time you pressed the button. RT_CMD_STATS_RESET is the way now.
-    rt_apply_lc_radios(lc);
+    // The table is not touched. A switch says which radios use the antenna; it says nothing
+    // about what this board already heard, and clearing it on a mode change threw away the
+    // other board's results every time you pressed the button. RT_CMD_STATS_RESET does that.
+    rt_apply_test_radios();
 
-    printf("\n>>> low contention = %s\n", lc_name(lc));
+    char nm[48];
+    printf("\n>>> tests = %s\n", rt_tests_name(g_tests, nm, sizeof(nm)));
 }
 
 void rt_geo_publish(const rt_geo_t *g)
@@ -670,7 +666,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
 
         n = put_u8(out, n, RT_RPT_VER);
         n = put_u24(out, n, rt_node_id());
-        n = put_u8(out, n, (uint8_t)g_lc);
+        n = put_u8(out, n, g_tests);
         n = put_u8(out, n, state);
         n = put_u8(out, n, g_led);
         n = put_u32(out, n, now);
@@ -804,9 +800,11 @@ void rt_report(void)
     // Everything that matters, every report. A one-off startup banner is invisible to anyone
     // who was not watching at the moment it scrolled past - and the moment worth watching is
     // always the one after something went wrong, by which time the banner is long gone.
-    printf("\n== node %06lX  up %lus  lc=%s  lr=%s  wifi=%s  ant=%s  led=%s  rst=%s ==\n",
+    char tn[48];
+    printf("\n== node %06lX  up %lus  tests=%s  lr=%s  wifi=%s  ant=%s  led=%s  rst=%s ==\n",
            (unsigned long)rt_node_id(),
-           (unsigned long)(now / 1000), lc_name(g_lc), g_lr ? "on" : "off",
+           (unsigned long)(now / 1000), rt_tests_name(g_tests, tn, sizeof(tn)),
+           g_lr ? "on" : "off",
            rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int",
            rt_led_name(g_led), rt_reset_reason());
     // Asked-for versus achieved. They differ whenever the radio quantised the request, which
@@ -873,6 +871,8 @@ void rt_report(void)
     } else {
         printf("  log: none (no memory)\n");
     }
+
+    rt_ftm_report();
 
     // Loud, and repeated for as long as it stands. A packet arriving on a channel this mode
     // says is off is a bug, and it is spending airtime that another channel was promised.

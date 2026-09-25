@@ -45,12 +45,42 @@ enum {
 
 extern const char *rt_chan_name[CH_COUNT];
 
-// Low-contention mode values are 0..CH_COUNT (see g_lc below) plus one more: LC_WIFI_UI, a
-// state that isn't "just one channel" like the others. It keeps ESP-NOW and the Wi-Fi AP on,
-// forces BLE fully off, and forces LR off - the one mode where a phone must reach the board
-// over Wi-Fi instead of BLE, which only works with LR off.
-#define LC_WIFI_UI (CH_COUNT + 1)
-#define LC_COUNT   (CH_COUNT + 2)  // total states the button cycles through
+// ---- Tests: which radios are in use ----------------------------------------------------------
+//
+// Every test is a switch of its own, and every switch is off at boot. This replaced a single
+// "low contention" mode - all of them, or exactly one - which matched neither way the rig is
+// actually used: one thing under test, or a chosen few running together because that is how
+// they will be flown (802.15.4 to get close, FTM for the last stretch, say).
+//
+// The BLE control link is not a test and has no switch. It is always on, in every combination,
+// and everything here is arranged around keeping it that way.
+//
+// Each bit means everything its radio does on its own schedule, not just its packets:
+//   ESPNOW   ESP-NOW packets out and in. Needs the Wi-Fi driver.
+//   BLE_ADV  the coded-PHY beacon and the coded-PHY scanner - the scanner listens continuously
+//            when this is the only test on, and duty-cycles when it is sharing (rt_ble.c).
+//   154      802.15.4 frames out, and the receiver on.
+//   FTM      FTM initiator: scans for other boards' APs and ranges to them in turn (rt_ftm.c).
+//            Needs the Wi-Fi driver.
+//   FTM_RESP keeps the Wi-Fi driver up for no reason of its own, so that the SoftAP - which is
+//            the FTM responder - is there to be ranged. For a board that is only a target.
+//
+// The Wi-Fi driver runs whenever any of ESPNOW, FTM or FTM_RESP is on, and whenever it runs it
+// is APSTA, so the responder answers in all three. It is never STA alone: with no AP the
+// unassociated station power-saves (CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE) and ESP-NOW
+// stops hearing things, and the AP is what keeps it awake.
+#define RT_TEST_ESPNOW   (1u << CH_ESPNOW)
+#define RT_TEST_BLE_ADV  (1u << CH_BLE_ADV)
+#define RT_TEST_154      (1u << CH_154)
+#define RT_TEST_FTM      (1u << 3)
+#define RT_TEST_FTM_RESP (1u << 4)
+#define RT_TEST_ALL      0x1Fu
+#define RT_TEST_WIFI     (RT_TEST_ESPNOW | RT_TEST_FTM | RT_TEST_FTM_RESP)
+
+// Two bytes: { RT_CMD_TESTS, mask }. The whole set, not a toggle - same reason as the LED: a
+// write that is lost or repeated cannot leave the board one step out of phase with the page.
+// Bits outside RT_TEST_ALL are ignored.
+#define RT_CMD_TESTS 0x90
 
 // 32 bits, not 16.
 //
@@ -348,36 +378,38 @@ typedef struct rt_sleeper rt_sleeper_t;
 rt_sleeper_t *rt_sleeper_new(const char *name);
 void rt_sleep_rand(rt_sleeper_t *s, uint32_t min_ms, uint32_t max_ms);
 
-// Low-contention mode: which channel gets the antenna mostly to itself. 0 = all of them
-// (normal operation); otherwise only channel (g_lc-1) transmits, and everything else that
-// might touch the radio on its own schedule backs off too - the Wi-Fi driver stops outright,
-// the BLE coded-PHY scanner stops, and the phone-UI advert/connection/notify cadence all slow
-// down. The point is a clean per-radio baseline, not just "this channel stops sending packets
-// while everyone else keeps using the antenna."
+// Which tests are on - RT_TEST_* above. 0 at boot, and the button restore puts it back to 0.
 //
-// rt_tx_enabled() below answers only the narrow question the three tx loops ask. It is not the
-// whole of what a mode means - see rt_apply_lc_radios(), which is - and reading it as though
-// it were is how "low contention" spent several revisions isolating nothing at all.
-extern volatile int g_lc;
+// rt_tx_enabled() below answers only the narrow question the tx loops ask. It is not the whole
+// of what a test switch means - see rt_apply_test_radios(), which is - and reading it as though
+// it were is how the old low-contention modes spent several revisions isolating nothing at all.
+extern volatile uint8_t g_tests;
 bool rt_tx_enabled(int chan);
-void rt_set_lc(int lc);
+void rt_set_tests(unsigned mask);
+// "espnow+154+ftm", or "none". Into buf, which is returned.
+const char *rt_tests_name(unsigned mask, char *buf, int len);
+
+// The page before tests were switches sent one byte, 0..4, naming a low-contention mode. Still
+// understood so a cached copy of that page does something sensible: 0 was every radio, 1..3
+// one channel alone, and 4 - Wi-Fi for the phone, with BLE off - no longer exists, because BLE
+// is now never off. See rt_ui.c.
+#define RT_CMD_LEGACY_LC_MAX 3
 
 // LR (long range PHY) affects Wi-Fi and ESP-NOW together and needs a full radio reinit to
 // change - see wifi_apply() in main.c. Merely having WIFI_PROTOCOL_LR in the protocol
 // list blinds a phone to the SoftAP even though ESP-to-ESP links keep working, which is why
-// this is a deliberate, infrequent, operator-commanded toggle (long-hold GPIO9) rather than
-// part of the low-contention cycle - see LC_WIFI_UI above for the one mode that forces it off.
+// this is a deliberate, infrequent, operator-commanded toggle rather than part of the tests.
+// FTM has not been tried in LR; nothing stops the combination.
 extern volatile bool g_lr;
 void rt_set_lr(bool lr);
 
-// Command bytes accepted on the GATT command characteristic (rt_ui.c). Low values are a
-// low-contention mode; the high-bit values are LR, which used to be a super-long button hold
-// and is not any more - the button is down to two gestures and restore has to be one of them
-// (see HOLD_MS in main.c). Putting LR here is safe precisely because holding the button undoes
-// it: no command can strand the board that the physical control cannot take back.
+// Command bytes accepted on the GATT command characteristic (rt_ui.c). LR used to be a
+// super-long button hold and is not any more - the button is down to two gestures and restore
+// has to be one of them (see HOLD_MS in main.c). Putting LR here is safe precisely because
+// holding the button undoes it: no command can strand the board that the physical control
+// cannot take back.
 //
-// Values outside both ranges are ignored, so an older web UI that only ever sends 0..LC_COUNT-1
-// keeps working unchanged.
+// Values this firmware does not know are ignored.
 #define RT_CMD_LR_OFF 0x80
 #define RT_CMD_LR_ON  0x81
 #define RT_CMD_ANT_INT 0x82
@@ -561,20 +593,18 @@ void rt_ble_apply_power(void);
 // switch must not be powered until it has. See the antenna comment in main.c.
 bool rt_ble_power_ready(void);
 
-// Called by rt_set_lc() after every mode change, from whichever context asked for it (button
+// Called by rt_set_tests() after every change, from whichever context asked for it (button
 // task, or a BLE command write). Defined in main.c because that is the file owning the Wi-Fi
-// driver - rt_stats.c has no business touching a radio directly. It applies everything a mode
-// change means at the radio level, which is more than muting tx loops:
-//   - stops the Wi-Fi driver outright in modes that isolate a non-Wi-Fi channel. Gating only
-//     ESP-NOW's tx loop leaves the SoftAP beaconing every ~100ms and its receiver on
-//     continuously, both of which outrank 802.15.4 in the coex arbiter - so the antenna stays
-//     exactly as busy while the report claims the channel has been isolated.
-//   - forces LR off for LC_WIFI_UI, the one mode where a phone must reach the SoftAP.
+// driver - rt_stats.c has no business touching a radio directly. It stops the Wi-Fi driver
+// outright when no Wi-Fi test is on. Gating only ESP-NOW's tx loop would leave the SoftAP
+// beaconing every ~100ms and its receiver on continuously, both of which outrank 802.15.4 in
+// the coex arbiter - so the antenna would stay exactly as busy while the report claimed it was
+// free. The other radios apply their own switches on their own tasks.
 //
 // Note what it deliberately does not do: touch anyone's coexistence priority. Isolation comes
 // from radios being off or backed off, never from re-ranking the arbiter - see the long
 // comment at the top of rt_154.c for why that is not the same thing.
-void rt_apply_lc_radios(int lc);
+void rt_apply_test_radios(void);
 
 // Whether the Wi-Fi driver is actually started right now, as opposed to merely not being
 // asked to transmit. Printed in the report: the recurring bug in this project is a radio
@@ -650,7 +680,8 @@ void rt_report(void);
 //   status block (84 bytes, only in a 0x01 chunk, immediately after the header)
 //     u8  ver           RT_RPT_VER
 //     u24 node          rt_node_id()
-//     u8  lc
+//     u8  tests         v8: g_tests, the RT_TEST_* bits. Up to v7 this byte was the
+//                       low-contention mode, 0..4.
 //     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
 //                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded),
 //                       bit6 tx_mute
@@ -720,7 +751,27 @@ void rt_report(void);
 // degree, so the packet extension is 6 bytes instead of 14 (18 in all, and v6 and v7 cannot hear
 // each other's), the status tail lost log_bsize (18 bytes, not 20), and the log records changed.
 // The page reads a v6 report but does not ask a v6 board for its log.
-#define RT_RPT_VER      7
+//
+// v8 changes what the fifth byte means - the test switches, not a mode - and adds FTM: rows of
+// their own (below) and an FTM record in the log. The layout is otherwise v7's, and the packets
+// boards send each other are untouched, so v7 and v8 boards still range-test each other.
+//
+//   FTM rows: a notification of their own, type 0x04, after the report's last chunk, only
+//   while this board has FTM results to describe. Not rows in the report proper, because a
+//   page that does not know them would read them as 23-byte link rows.
+//     u8 0x04, u8 gen (the report's), u8 n, u8 flags (0)
+//     n x 20 bytes:
+//       u24 peer        the responder's node id, from its SSID
+//       u8  status      the last session's wifi_ftm_status_t; 0 = success
+//       u16 dist_dm     the last successful session's distance, decimetres, clamped at 0xFFFF
+//       u16 avg_dm      the mean of the last RT_FTM_AVG successful ones
+//       i8  rssi        of the last successful session's FTM frames, averaged; -128 unknown
+//       i8  pdr         successful share of the last 16 sessions, percent; -1 before any
+//       u32 ok, u32 fail  sessions since boot or the last stats reset
+//       u16 age_ds      since the last session ended, either way, 0.1s units, clamped
+#define RT_RPT_VER      8
+#define RT_RPT_TYPE_FTM 0x04
+#define RT_RPT_FTM_ROW  20
 #define RT_RPT_HDR      4
 #define RT_RPT_STATUS   102
 #define RT_RPT_ROW      23
@@ -806,6 +857,11 @@ int rt_snapshot_rows(void);
 //   0x80+ RXS   (5)  type = 0x80 | geo << 6 | ref, dt, u8 gap, i8 rssi, u8 q
 //                    A packet heard on an existing ref: seq = that ref's last seq + gap. geo: it
 //                    carried exactly the node's current POS.
+//   0x06 FTM    (9)  dt, u24 node, u8 status, u16 dist_dm, i8 rssi
+//                    v8: one FTM session this board initiated, to that node's AP, ended at
+//                    clock - successful or not. Fields as in the report's FTM rows. Always
+//                    logged, GNSS or not: the page puts it wherever this board was at the time
+//                    (its own GNSS track, or the phone's while the page says it is carried).
 //
 //   q is the channel's quality figure: SNR in dB (as i8) on espnow, LQI on 154, 0 on ble_adv.
 //
@@ -836,6 +892,7 @@ void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT]);
 void rt_log_nofix(const uint32_t seq_next[CH_COUNT]);
 void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, int8_t rssi,
                uint8_t q, const rt_geo_wire_t *sender);
+void rt_log_ftm(uint32_t node, uint8_t status, uint16_t dist_dm, int8_t rssi);
 
 typedef struct {
     uint32_t session, oldest, newest;
@@ -848,6 +905,33 @@ void rt_log_status(rt_log_st_t *out);
 // or 0 if there is nothing to send from there yet. Does not move *c: on a successful send the
 // caller copies *adv into it, so a notification that fails to queue is simply built again.
 int rt_log_chunk(const rt_log_cur_t *c, uint8_t *out, int cap, rt_log_cur_t *adv);
+
+// ---- FTM initiator (rt_ftm.c) ------------------------------------------------------------
+//
+// While RT_TEST_FTM is on: scan our own Wi-Fi channel for APs named like ours that say they
+// answer FTM, then range to each in turn, one session at a time with a pause between - see the
+// timings at the top of rt_ftm.c. Every session is a result, success or not: it lands in the
+// FTM rows of the report and in the log.
+//
+// A board ranges only to boards running this firmware: an AP is a candidate only if its SSID is
+// rt_node_name()'s pattern and its beacon has the FTM responder bit. Its node id comes from the
+// SSID, so FTM results are filed under the same id as everything else.
+#define RT_FTM_AVG 8
+
+// Session outcomes, as carried in the status byte of the rows and the log: wifi_ftm_status_t
+// (0 success, 1 unsupported, 2 rejected, 3 no response, 4 fail, 5 no valid measurement, 6 user
+// ended) plus two of ours for the sessions the driver never reported on.
+#define RT_FTM_ST_NOSTART 0xFE   // esp_wifi_ftm_initiate_session() refused to start it
+#define RT_FTM_ST_TIMEOUT 0xFF   // started, and no report came back in time
+
+void rt_ftm_start(void);
+// Clear the FTM results - part of RT_CMD_STATS_RESET, like the rest of the table.
+void rt_ftm_reset(void);
+// Rows for the report, as described under RT_RPT_TYPE_FTM. Returns bytes written into out, or 0
+// if there is nothing to say. cap is what the connection can carry.
+int rt_ftm_rows(uint8_t *out, int cap, uint8_t gen);
+// One line per responder, for the serial report.
+void rt_ftm_report(void);
 
 void rt_espnow_start(void);
 void rt_ble_start(void);

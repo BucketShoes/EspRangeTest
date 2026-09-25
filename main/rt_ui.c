@@ -10,7 +10,6 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "nimble/ble.h"  // BLE_ERR_REM_USER_CONN_TERM
 #include "host/ble_hs.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
@@ -38,16 +37,16 @@ static const char *TAG = "ui";
 #define UI_ITVL_SLOW_MIN 0x03C0  // -> 600ms
 #define UI_ITVL_SLOW_MAX 0x0640  // -> 1000ms
 
-// Slow in exactly two modes - espnow and 154 - and fast everywhere else.
+// Slow while some test other than BLE is on and ble_adv is not; fast otherwise.
 //
-// Those two are the only ones whose entire point is handing the airtime to a channel that is
-// not BLE, and they are bench-test modes where a laggy phone costs nothing. Slowing this link
-// anywhere else costs something real:
+// Slow is for handing airtime to a channel that is not BLE: every millisecond this link does
+// not use is one espnow, 802.15.4 or FTM can. Fast everywhere else, because slowing this link
+// where nothing is waiting for the antenna buys nothing and costs something real:
 //
-//   - lc=0 is the normal walking mode. Boards and phone continually connect and drop as they
-//     move in and out of range, and every reconnect *starts* with seeing an advert - so a 1s
-//     advert interval is a 1s-plus stall on every single one of them. The link being
-//     re-established constantly is the normal case here, not an edge case.
+//   - with every test off, this link is the only thing on the air. Nothing gains from it
+//     being slow, and it is the state the button restores to - the one that has to be
+//     easiest to reconnect to. Every reconnect *starts* with seeing an advert, so a 1s advert
+//     interval is a 1s-plus stall on each one.
 //   - ble_adv is the BLE test itself, which is partly about whether a connection can be
 //     established and held at all and asks for coded S=8 on it. Throttling the UI there
 //     handicaps the thing under test.
@@ -57,7 +56,7 @@ static const char *TAG = "ui";
 //
 // (This is the UI advert on UI_INSTANCE, the 1M control link. The coded-PHY measurement beacon
 // is ADV_INSTANCE in rt_ble.c and nothing here has ever touched its interval.)
-#define UI_SLOW() (g_lc == CH_ESPNOW + 1 || g_lc == CH_154 + 1)
+#define UI_SLOW() ((g_tests & ~RT_TEST_BLE_ADV) != 0 && (g_tests & RT_TEST_BLE_ADV) == 0)
 
 // Connection parameters requested once a phone connects. Peripheral-preferred, so the phone
 // may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
@@ -125,7 +124,7 @@ static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static bool     s_subscribed;
 static uint8_t  s_own_addr_type;
 static char     s_name[16];
-static int      s_last_lc = -1;  // forces the first apply_lc_ble_params() to actually run
+static int      s_last_tests = -1;  // forces the first apply_test_ble_params() to actually run
 
 // Bumped on every connection. A log request belongs to the connection it arrived on; one left
 // over from a phone that has since gone is not something to keep streaming for.
@@ -164,8 +163,6 @@ static void apply_conn_params(bool slow)
         ESP_LOGW(TAG, "update_params rc=%d", rc);
     }
 }
-
-static bool s_ui_suspended;
 
 // ---- control-link PHY ----------------------------------------------------------------------
 //
@@ -209,32 +206,11 @@ void rt_set_conn_phy(bool two_m)
     apply_conn_phy();
 }
 
-// Called whenever g_lc changes. LC_WIFI_UI is the one mode that wants BLE fully off, not just
-// throttled - a phone has to reach the AP instead, which only works with LR off (see
-// rt_apply_lc_radios in main.c). Everywhere else, low contention on some other channel just
-// means this link only needs to keep working, not be responsive - see the UI_ITVL_SLOW /
+// Called whenever g_tests changes. This link is never switched off - there is no test that
+// does it - only slowed while another channel wants the antenna. See the UI_ITVL_SLOW /
 // CONN_*_SLOW comments.
-static void apply_lc_ble_params(void)
+static void apply_test_ble_params(void)
 {
-    const bool wifi_ui = (g_lc == LC_WIFI_UI);
-
-    if (wifi_ui) {
-        if (!s_ui_suspended) {
-            s_ui_suspended = true;
-            if (s_conn != BLE_HS_CONN_HANDLE_NONE) {
-                ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
-            }
-            ble_gap_ext_adv_stop(UI_INSTANCE);
-            ESP_LOGI(TAG, "phone UI advert stopped (wifi+phone mode - use the AP instead)");
-        }
-        return;
-    }
-
-    if (s_ui_suspended) {
-        s_ui_suspended = false;
-        start_adv();
-    }
-
     const bool slow = UI_SLOW();
     if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
         // Only touch the advertising instance while nothing is connected on it - restarting
@@ -293,8 +269,15 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         rt_set_power(b[0] - RT_CMD_PWR_SET, (int8_t)b[1]);  // clamps per radio
-    } else {
-        rt_set_lc(b[0]);  // ignores anything out of range on its own
+    } else if (b[0] == RT_CMD_TESTS) {
+        if (len < 2) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        rt_set_tests(b[1]);
+    } else if (b[0] <= RT_CMD_LEGACY_LC_MAX) {
+        // A page from before the switches: 0 was every radio, 1..3 one channel on its own.
+        rt_set_tests(b[0] == 0 ? (RT_TEST_ESPNOW | RT_TEST_BLE_ADV | RT_TEST_154)
+                               : 1u << (b[0] - 1));
     }
     return 0;
 }
@@ -391,14 +374,6 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
 
 static int start_adv(void)
 {
-    if (g_lc == LC_WIFI_UI) {
-        // BLE is fully off in this mode - the phone is expected to reach the board over the
-        // Wi-Fi AP instead. Guarded here, once, rather than at every call site (on_sync,
-        // connect-failed, disconnect, adv-complete, a low-contention change) so none of them
-        // can accidentally re-arm the radio.
-        return 0;
-    }
-
     struct ble_gap_ext_adv_params p = { 0 };
     p.connectable   = 1;
     p.scannable     = 1;
@@ -579,13 +554,13 @@ static void log_stream(int cap)
 // gives a partial update rather than nothing at all.
 void rt_ui_notify(void)
 {
-    // Polled here rather than driven from rt_set_lc() directly: this runs on the ui task,
-    // not whatever task/ISR context a low-contention change was requested from (button task,
-    // or the NimBLE host task via cmd_write). Every REPORT_MS is plenty responsive for a
-    // deliberate, operator-commanded mode switch.
-    if (g_lc != s_last_lc) {
-        s_last_lc = g_lc;
-        apply_lc_ble_params();
+    // Polled here rather than driven from rt_set_tests() directly: this runs on the ui task,
+    // not whatever task/ISR context a switch was requested from (button task, or the NimBLE
+    // host task via cmd_write). Every REPORT_MS is plenty responsive for a deliberate,
+    // operator-commanded change.
+    if (g_tests != s_last_tests) {
+        s_last_tests = g_tests;
+        apply_test_ble_params();
     }
 
     // Advertising power is fixed when the instance is configured, so a level change needs the
@@ -596,7 +571,7 @@ void rt_ui_notify(void)
     static int s_last_pwr = -128;
     if (g_pwr_dbm[CH_BLE_ADV] != s_last_pwr) {
         s_last_pwr = g_pwr_dbm[CH_BLE_ADV];
-        if (s_conn == BLE_HS_CONN_HANDLE_NONE && !s_ui_suspended) {
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
             ble_gap_ext_adv_stop(UI_INSTANCE);
             start_adv();
         }
@@ -630,6 +605,11 @@ void rt_ui_notify(void)
             log_backoff();
             return;
         }
+    }
+    // FTM's rows are part of the report, sent straight after it with the same generation.
+    if ((len = rt_ftm_rows(buf, cap, s_gen)) > 0 && !send(buf, len)) {
+        log_backoff();
+        return;
     }
 
     // After the report, never before it.
