@@ -186,7 +186,15 @@ function revalidate(cache, url, cached) {
 // built here and handed to waitUntil straight away.
 function staleWhileRevalidate(ev, url) {
   var cacheP = caches.open(CACHE_NAME);
-  var cachedP = cacheP.then(function(cache) { return cache.match(url); });
+  // ignoreSearch so a cache-busted URL still hits its precached entry. Older
+  // copies of the page (and any tab still running one) request
+  // `app.js?_=<timestamp>`, a URL that can never be in the cache; without this
+  // they get a 504 offline, no script and no stylesheet load, and the page
+  // renders as dead unstyled HTML that looks like a broken app rather than a
+  // stale one.
+  var cachedP = cacheP.then(function(cache) {
+    return cache.match(url, { ignoreSearch: true });
+  });
   var freshP = Promise.all([cacheP, cachedP]).then(function(r) {
     return revalidate(r[0], url, r[1]);
   });
