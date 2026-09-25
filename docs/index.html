@@ -193,6 +193,60 @@
   and open <code>http://localhost:8000</code>.
 </div>
 
+<!-- What the page can see about its own caching. On a range walk there are no
+     dev tools and often no signal, so both of these are plain on-page links
+     rather than something you have to remember the name of. -->
+<div style="text-align:center;margin:10px 0 4px">
+  <span id="diaglink" style="color:var(--dim);font-size:11px;cursor:pointer;border-bottom:1px dotted var(--line)">diagnostics</span>
+  <span style="color:var(--line);font-size:11px">&middot;</span>
+  <a href="?nosw" style="color:var(--dim);font-size:11px">clear offline copy</a>
+</div>
+
+<script>
+// Self-report: which build, who is serving it, what is cached. Written for a
+// phone in a field, where every other signal about caching is ambiguous.
+(function(){
+  window.ESPRT_BUILD = '2026-09-25a';   // bump for an explicit fence across deploys
+  function report(){
+    var L = [];
+    L.push('build: ' + window.ESPRT_BUILD);
+    L.push('url: ' + location.href);
+    L.push('secure context: ' + window.isSecureContext);
+    L.push('online: ' + navigator.onLine);
+    L.push('standalone: ' + (window.matchMedia('(display-mode: standalone)').matches ? 'yes (installed)' : 'no (browser tab)'));
+    try {
+      var res = performance.getEntriesByType('resource') || [];
+      var bad = [];
+      for (var i = 0; i < res.length; i++) {
+        if (/^(http|ws):\/\//i.test(res[i].name)) bad.push(res[i].name);
+      }
+      L.push('resources loaded: ' + res.length);
+      L.push('INSECURE resources: ' + (bad.length ? '' : 'none'));
+      for (var j = 0; j < bad.length && j < 8; j++) L.push('  !! ' + bad[j]);
+    } catch (e) { L.push('resource list unavailable: ' + e.message); }
+    var done = function(){ alert(L.join('\n')); };
+    if (!('serviceWorker' in navigator)) { L.push('service worker: unsupported'); done(); return; }
+    var ctrl = navigator.serviceWorker.controller;
+    L.push('controlled by: ' + (ctrl ? ctrl.scriptURL : 'NOTHING (browser cache or network)'));
+    navigator.serviceWorker.getRegistrations().then(function(rs){
+      L.push('registrations on this origin:');
+      if (!rs.length) L.push('  (none)');
+      rs.forEach(function(r){ L.push('  ' + r.scope); });
+      return (window.caches ? caches.keys() : Promise.resolve([]));
+    }).then(function(ks){
+      L.push('caches on this origin:');
+      if (!ks.length) L.push('  (none)');
+      ks.forEach(function(k){ L.push('  ' + k); });
+      done();
+    }).catch(function(e){ L.push('diagnostic error: ' + e.message); done(); });
+  }
+  window.addEventListener('load', function(){
+    var el = document.getElementById('diaglink');
+    if (el) el.addEventListener('click', report);
+  });
+})();
+</script>
+
 <script>
 const SVC = '9c7a0001-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 const TX  = '9c7a0002-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
@@ -4597,6 +4651,12 @@ setInterval(tickAges, 50);
   // unregisters its worker. Needed because a bad cached build would otherwise
   // survive every reload, and halfway up a hill there is no dev-tools escape.
   if (/[?&]nosw\b/.test(location.search)) {
+    if (!confirm('Clear the offline copy of this page?\n\n' +
+                 'You will need an internet connection to get it back' +
+                 (navigator.onLine ? '.' : ', and you are offline right now.'))) {
+      location.replace(location.pathname);   // back to the normal page, untouched
+      return;
+    }
     // The worker deletes its own caches, then we unregister it. Doing it the
     // other way round loses the race: this very navigation kicked off a
     // background revalidate, and its cache.put() lands after the delete and
