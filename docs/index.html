@@ -127,7 +127,9 @@
            margin-top:8px;line-height:1.5}
   /* PWA update prompt — shown by the service-worker registration at the end of
      this file when a newer build has been fetched in the background. */
-  .pwa-toast{display:none;position:fixed;left:50%;bottom:calc(12px + env(safe-area-inset-bottom));
+  /* Top, not bottom: the footer carries a destructive "clear offline copy"
+     link, and a transient overlay must never land on top of it. */
+  .pwa-toast{display:none;position:fixed;left:50%;top:calc(10px + env(safe-area-inset-top));
     transform:translateX(-50%);z-index:9000;background:var(--card);color:var(--acc);
     border:1px solid var(--acc);border-radius:9px;padding:9px 16px;font-size:14px;
     cursor:pointer;box-shadow:0 3px 14px #0009;max-width:calc(100vw - 24px)}
@@ -4895,11 +4897,16 @@ setInterval(tickAges, 50);
   // unregisters its worker. Needed because a bad cached build would otherwise
   // survive every reload, and halfway up a hill there is no dev-tools escape.
   if (/[?&]nosw\b/.test(location.search)) {
+    // Strip ?nosw from the address bar up front, before anything slow happens.
+    // The purge can take up to the 3s fallback below, and a refresh during that
+    // window would otherwise re-enter this branch and ask again — which is how
+    // a one-shot recovery turns into a loop you cannot refresh your way out of.
+    try { history.replaceState({}, '', location.pathname); } catch (e) {}
+
     if (!confirm('Clear the offline copy of this page?\n\n' +
                  'You will need an internet connection to get it back' +
                  (navigator.onLine ? '.' : ', and you are offline right now.'))) {
-      location.replace(location.pathname);   // back to the normal page, untouched
-      return;
+      return;   // URL already cleaned above; page is untouched
     }
     // The worker deletes its own caches, then we unregister it. Doing it the
     // other way round loses the race: this very navigation kicked off a
@@ -4920,7 +4927,12 @@ setInterval(tickAges, 50);
         });
       }).then(function(){
         document.title = 'offline copy cleared';
-        alert('Offline copy cleared. Reload without ?nosw to reinstall.');
+        alert('Offline copy cleared.');
+      }).then(function(){
+        // Never leave ?nosw in the address bar. It is a destructive action, and
+        // leaving it there means every later refresh re-runs it — including a
+        // refresh made while offline, when there is no way back.
+        location.replace(location.pathname);
       });
     }
 
