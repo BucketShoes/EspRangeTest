@@ -49,6 +49,17 @@
   .big{font-size:17px;font-weight:700}
   .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.dim{color:var(--dim)}
   .stale{opacity:.4}
+  /* Buttons that change their words hold still - see setLab(). */
+  .stk{display:inline-grid}
+  .stk>span{grid-area:1/1;visibility:hidden;text-align:center}
+  .stk>span.v{visibility:visible}
+  /* Numbers that tick: each column as wide as its widest value will ever be, so rows and the
+     line above do not shuffle when a digit is added. Ages are always four characters or fewer
+     - see fmtAge4(). */
+  td.age{min-width:3.2em}
+  td+td{min-width:2.6em}
+  .fresh{display:inline-block;min-width:5.5em}
+  button.mini{padding:1px 6px;font-size:11px;border-radius:5px;margin-left:4px}
   #err{font-size:12px;margin-bottom:8px;font-variant-numeric:tabular-nums;
        max-height:150px;overflow-y:auto}
   #err div{padding:1px 0}
@@ -155,7 +166,8 @@
     <button id="base">set base</button>
     <button id="mis" class="on">misses</button>
     <button id="halt" title="Colour every mark by how high the far end was">heights</button>
-    <button id="ftmv" title="FTM ranges as faint rings round where each was measured from: shown over everything, shown on their own with the packet marks and field cleared, or hidden">ftm</button>
+    <button id="ftmv" title="FTM ranges as faint rings round where each was measured from, and the best fit where they agree">rings</button>
+    <button id="trk" title="The track lines: the phone's, and every GNSS board's">tracks</button>
     <button id="fld" title="Coverage field: one link, one time span, spread into a colour map">field</button>
     <button id="csv">export</button>
     <button id="imp" title="Load an export back in - last week's walk, or someone else's">import</button>
@@ -176,13 +188,15 @@
   its own, or a few together the way they will be used. The Bluetooth link to this page is not a
   test and stays on; the more tests share the antenna with it, the slower it gets. Holding a
   board's button turns every test off again.<br><br>
-  <b>ftm</b> on a board ranges to every other board whose AP is up - any board with
-  <b>espnow</b>, <b>ftm</b> or <b>ftm resp</b> on. Each range is a faint ring on the map round
-  where it was measured from, and where the rings agree is where the other board is; once they
-  come from more than one spot a cross marks the best fit. The rings need to know where the
-  measuring board was: its own GNSS if it has one, otherwise tap <b>carry</b> on its card while
-  you have it with you. A board's stockpile of ranges comes down when it is back in reach, like
-  its packets.<br><br>
+  <b>ftm</b> on a board ranges to every other board with <b>ap</b> on. Each range is a faint
+  ring on the map round where it was measured from (<b>rings</b> shows and hides them), and
+  where the rings agree is where the other board is; once they come from more than one spot a
+  cross marks the best fit. Each range is also a mark like a packet, so <b>ftm distance</b>,
+  its RSSI and its success rate can be drawn as ticks beside any other link - and so can
+  <b>height</b>. FTM reads with an offset until zeroed: with the two boards side by side, tap
+  the <b>0</b> on that FTM row. The rings need to know where the measuring board was: its own
+  GNSS if it has one, otherwise tap <b>carry</b> on its card while you have it with you. A
+  board's stockpile of ranges comes down when it is back in reach, like its packets.<br><br>
   For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
   and walk. Every packet gets pinned to where you were standing when it arrived, so bare
   track is ground where nothing got through.<br><br>
@@ -276,22 +290,22 @@ const CMD = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 // boot and the board's button restore turns them all off; the BLE link this page talks over is
 // not one of them and is never off. Written as the whole set in one command, [0x90, mask], so a
 // lost or repeated write cannot leave a switch the wrong way round.
-const TESTS = ['espnow', 'ble_adv', '154', 'ftm', 'ftm resp'];
+const TESTS = ['espnow', 'ble_adv', '154', 'ftm', 'ap'];
 const TEST_TITLES = [
-  'ESP-NOW packets out and in. Brings the Wi-Fi driver up, and with it this board’s AP - ' +
-    'which answers FTM, so other boards can range to it.',
+  'ESP-NOW packets out and in, station side only. Brings the Wi-Fi driver up.',
   'The coded-PHY beacon and scanner. The scanner listens continuously when this is the only ' +
     'test on, and shares the antenna when it is not.',
   '802.15.4 frames out, and the receiver on.',
   'FTM initiator: finds other boards’ APs and ranges to them one after another. Brings the ' +
-    'Wi-Fi driver up.',
-  'Keeps the Wi-Fi driver - and so the AP, the FTM responder - up with nothing else on, so ' +
-    'other boards can range to this one. espnow and ftm bring the AP up anyway.',
+    'Wi-Fi driver up, station side only - the boards it ranges to need ap on.',
+  'The Wi-Fi AP: beaconing, listening, and visible to a phone while LR is off. It is also the ' +
+    'FTM responder, so a board that others should range to needs this on.',
 ];
 const CMD_TESTS = 0x90;
-// A board on v7 or older reports a low-contention mode instead: 0 all three, 1..3 one channel,
-// 4 ESP-NOW with the AP for a phone. What each meant, as switches.
-const LC_AS_TESTS = [7, 1, 2, 4, 17];
+// A board on v7 or older reports a low-contention mode instead: 0 every radio (the AP was up
+// whenever Wi-Fi was), 1..3 one channel, 4 ESP-NOW with the AP for a phone. What each meant, as
+// switches.
+const LC_AS_TESTS = [23, 1, 2, 4, 17];
 const testsTxt = m => TESTS.filter((_, i) => m & (1 << i)).join(' + ') || 'nothing';
 
 // LR, which used to be a super-long button hold and is not any more - the button is down to
@@ -446,6 +460,21 @@ function paintLog() {
 
 const fail = m => logMsg(m, true);
 
+// A button whose text changes keeps one width: every label it can show is laid in the same grid
+// cell and all but one hidden, so the button is always as wide as its longest - and nothing
+// beside it moves when it changes. A label not in the list joins it (and may widen it, once).
+function setLab(b, labels, text) {
+  if (!b._lab || !b._lab.includes(text) || b._labKey !== labels.join('\u0001')) {
+    const all = [...new Set([...labels, text])];
+    b._lab = all;
+    b._labKey = labels.join('\u0001');
+    b.innerHTML = '<span class="stk">' + all.map(l => `<span>${esc(l)}</span>`).join('') +
+                  '</span>';
+  }
+  const kids = b.firstChild.children;
+  for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('v', b._lab[i] === text);
+}
+
 document.getElementById('add').onclick = async () => {
   logLines.length = 0; paintLog();
   if (!navigator.bluetooth) {
@@ -532,6 +561,9 @@ function disconnect(dev, d) {
 const RST_NAMES = ['unknown', 'power-on', 'sw-restart', 'PANIC', 'INT-WDT', 'TASK-WDT',
                    'WDT', 'BROWNOUT', 'ext-pin', 'deepsleep', 'usb'];
 const PHY_NAMES = ['?', '1M', '2M', 'coded'];
+// Everything the control-link PHY button can say, so it can be sized for the longest.
+const PHY_LABELS = ['phy ?', ...['coded', '2M'].flatMap(w =>
+  [`phy ${w}`, ...PHY_NAMES.map(g => `phy ${w} (${g})`)])];
 const CH_NAMES  = ['espnow', 'ble_adv', '154'];
 
 function onNotify(d, view) {
@@ -583,8 +615,10 @@ function onChunk(d, v) {
     //
     // v8 is v7's layout with the mode byte turned into the test switches, plus FTM rows (their
     // own notification, 0x04) and an FTM record in the log.
-    if (ver < 4 || ver > 8) {
-      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v8 - ` +
+    // v9: bit 4 of that byte is the AP test, FTM distances are signed, and the FTM notification
+    // opens with what the last scan found.
+    if (ver < 4 || ver > 9) {
+      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v9 - ` +
              (ver < 4 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
@@ -740,12 +774,24 @@ function onFtmRows(d, v) {
   const n = v.getUint8(2);
   d.ftm = new Map();
   d.ftmGen = d.genN ?? 0;
-  for (let i = 0, o = 4; i < n && o + 20 <= v.byteLength; i++, o += 20) {
+  // v9 opens with what the last scan found, and carries distances signed. A v8 board sent them
+  // unsigned, and wrapped anything below zero round to kilometres.
+  const v9 = (d.rptVer ?? 0) >= 9;
+  let o = 4;
+  if (v9 && v.byteLength >= 12) {
+    const age = v.getUint16(8, true);
+    d.ftmScan = { on: !!(v.getUint8(3) & 1), aps: v.getUint8(4), ours: v.getUint8(5),
+                  noftm: v.getUint8(6), known: v.getUint8(7),
+                  age: age === 0xFFFF ? undefined : age / 10 };
+    o = 12;
+  }
+  const d16 = k => (v9 ? v.getInt16(k, true) : v.getUint16(k, true)) / 10;
+  for (let i = 0; i < n && o + 20 <= v.byteLength; i++, o += 20) {
     const peer = hexId(u24(v, o));
     const age = v.getUint16(o + 18, true) * 100;
     d.ftm.set(peer, {
       peer, st: v.getUint8(o + 3),
-      dist: v.getUint16(o + 4, true) / 10, avg: v.getUint16(o + 6, true) / 10,
+      dist: d16(o + 4), avg: d16(o + 6),
       rssi: v.getInt8(o + 8), pdr: v.getInt8(o + 9),
       ok: v.getUint32(o + 10, true), fail: v.getUint32(o + 14, true),
       age, abs: (d.boardMs ?? 0) - age,
@@ -1037,7 +1083,7 @@ function ensureSeries(skey, dev, peer, ch) {
           // rssi and the two pdr figures exist on every radio; the rest have to prove they
           // exist on this one before they clutter the menu with a column of dashes.
           has: { rssi: true, pdr: true, pdrall: true, hit: true,
-                 loss: false, snr: false, lqi: ch === '154' } };
+                 loss: false, snr: false, lqi: ch === '154', dist: ch === 'ftm', alt: false } };
     series.set(skey, S);
     seriesRev++;
   }
@@ -1067,6 +1113,7 @@ function addSample(S, s) {
   S.n++;
   if (s.loss !== undefined && !S.has.loss) { S.has.loss = true; seriesRev++; }
   if (s.snr !== -128 && !S.has.snr)        { S.has.snr  = true; seriesRev++; }
+  if (typeof s.alt === 'number' && !S.has.alt) { S.has.alt = true; seriesRev++; }
   samples.push(s);
   if (samples.length > SAMP_MAX) samples.splice(0, 20000);
   mapRedraw();
@@ -1501,8 +1548,10 @@ function parseBlock(d, bn, b) {
       P.clk += u[o + 1] * 4;
       const tB = b2t(d, P.clk);
       if (tB !== undefined) {
-        ftmPut({ t: tB, dev: me, peer: hexId(u24(dv, o + 2)), st: u[o + 5],
-                 dist: dv.getUint16(o + 6, true) / 10, rssi: dv.getInt8(o + 8) });
+        ftmPut({ t: tB, dev: d.name, peer: hexId(u24(dv, o + 2)), st: u[o + 5],
+                 dist: ((d.rptVer ?? 0) >= 9 ? dv.getInt16(o + 6, true)
+                                             : dv.getUint16(o + 6, true)) / 10,
+                 rssi: dv.getInt8(o + 8) });
       }
     } else if (t === 0x04) {
       P.clk += u[o + 1] * 4;
@@ -1612,6 +1661,11 @@ const METRICS = {
   pdr:    { lab: 'pdr now', unit: '%',   lo: 0,    hi: 100, slo: 0,    shi: 100 },
   pdrall: { lab: 'pdr all', unit: '%',   lo: 0,    hi: 100, slo: 0,    shi: 100 },
   hit:    { lab: 'packets', unit: '',    lo: 0,    hi: 20,  slo: 0,    shi: 8 },
+  // FTM's distance, zero offset taken off - see ftmCal().
+  dist:   { lab: 'ftm distance', unit: 'm', lo: -50, hi: 3000, slo: 0,   shi: 300 },
+  // Height of the GNSS end, above the lowest any mark on this page has been: a zero for the
+  // scale only. The altitude itself is what is recorded and exported.
+  alt:    { lab: 'height', unit: 'm',    lo: 0,    hi: 1000, slo: 0,    shi: 120 },
   // The coverage field's own, not in MKEYS, as a ray has no such thing: the share of packets
   // heard, and - the "leftovers" switch - how far under or over the range fit a patch measured,
   // which is the shadow map. Delivery's leftovers are in points of percentage, not per cent.
@@ -1620,9 +1674,13 @@ const METRICS = {
   rssires: { lab: 'rssi vs fit', unit: 'dB', lo: -60, hi: 30, slo: -20, shi: 5 },
   lossres: { lab: 'loss vs fit', unit: 'dB', lo: -60, hi: 30, slo: -20, shi: 5 },
 };
-const MKEYS = ['rssi', 'loss', 'snr', 'lqi', 'pdr', 'pdrall', 'hit'];
-const mval  = (s, m) => m === 'hit' ? s.hits : s[m];
-const PROTOS = ['espnow', 'ble_adv', '154'];
+const MKEYS = ['rssi', 'loss', 'snr', 'lqi', 'pdr', 'pdrall', 'hit', 'dist', 'alt'];
+const mval  = (s, m) =>
+  m === 'hit'  ? s.hits
+  : m === 'alt'  ? (typeof s.alt === 'number' && isFinite(alts.lo) ? s.alt - alts.lo : undefined)
+  : m === 'dist' ? (s.f && s.f.st === 0 ? s.f.dist - ftmCal(s.f.dev, s.f.peer) : undefined)
+  : s[m];
+const PROTOS = ['espnow', 'ble_adv', '154', 'ftm'];
 
 const plot = {
   met: 'rssi',
@@ -2011,7 +2069,7 @@ function saveSettings() {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       met: plot.met, minPx: plot.minPx, maxPx: plot.maxPx, rot: plot.rot,
       showPick: plot.showPick, showScale: plot.showScale, showMiss: showMiss, showAlt: showAlt,
-      ftmView,
+      showRings, showTracks,
       on: [...plot.on.entries()], scale: [...plot.scale.entries()],
     }));
   } catch (e) { /* private window, or storage full - the page still works without it */ }
@@ -2030,7 +2088,8 @@ function loadSettings() {
     if (typeof o.showScale === 'boolean') plot.showScale = o.showScale;
     if (typeof o.showMiss === 'boolean') showMiss = o.showMiss;
     if (typeof o.showAlt === 'boolean') showAlt = o.showAlt;
-    if (o.ftmView === 0 || o.ftmView === 1 || o.ftmView === 2) ftmView = o.ftmView;
+    if (typeof o.showRings === 'boolean') showRings = o.showRings;
+    if (typeof o.showTracks === 'boolean') showTracks = o.showTracks;
     if (Array.isArray(o.on)) plot.on = new Map(o.on);
     if (Array.isArray(o.scale)) plot.scale = new Map(o.scale);
   } catch (e) { /* corrupt or unavailable - fall back to defaults rather than failing to load */ }
@@ -3486,10 +3545,9 @@ const cv  = document.getElementById('cv');
 const cx2 = cv.getContext('2d');
 const view = { cx: 0, cy: 0, mpp: 0.6, w: 0, h: 0, dpr: 1, follow: true, seeded: false };
 let showMiss = true, showAlt = false, mapQueued = false;
-// FTM on the map: 0 not drawn, 1 drawn over everything else, 2 drawn with the packet marks and
-// the coverage field cleared away - the tracks stay, since they are where the rings come from.
-let ftmView = 1;
-const FTM_VIEW_NAMES = ['ftm off', 'ftm', 'ftm only'];
+// Each its own switch, like misses and heights: the FTM rings, and the track lines (the phone's
+// and every GNSS board's). The field has its own switch and its own trace.
+let showRings = true, showTracks = true;
 
 const sxOf = x => view.w / 2 + (x - view.cx) / view.mpp;
 const syOf = y => view.h / 2 - (y - view.cy) / view.mpp;
@@ -3577,12 +3635,71 @@ let ftmRev = 0;
 const FTM_MAX = 60000;
 const ftmCols = new Map();  // responder id -> colour, in the order first heard
 
+// Zero offsets, per initiator→responder pair, in metres. FTM out of the box reads with an offset
+// of its own - and uncalibrated, it can read below zero close up - so the pair can be zeroed
+// with the boards side by side (the "zero" on the card's FTM row). The offset is taken off
+// wherever a distance is drawn or shown as measured; the raw figure stays in the records and
+// the export, with the offset beside it.
+const FTM_OFF_KEY = 'esprt.ftmoff';
+let ftmOff = {};
+try { ftmOff = JSON.parse(localStorage.getItem(FTM_OFF_KEY)) || {}; } catch (e) { ftmOff = {}; }
+const ftmCal = (dev, peer) => ftmOff[idOf(dev) + '>' + idOf(peer)] ?? 0;
+
+function setFtmCal(dev, peer, m) {
+  const k = idOf(dev) + '>' + idOf(peer);
+  if (m === undefined) delete ftmOff[k]; else ftmOff[k] = Math.round(m * 10) / 10;
+  try { localStorage.setItem(FTM_OFF_KEY, JSON.stringify(ftmOff)); } catch (e) { /* fine */ }
+  logMsg(m === undefined ? `ftm ${labelOf(dev)}→${labelOf(peer)}: zero cleared`
+                         : `ftm ${labelOf(dev)}→${labelOf(peer)}: zeroed, ${ftmOff[k]} m taken off`);
+  ftmRev++;
+  srcBuiltRev = -1;
+  render();
+  mapRedraw();
+}
+
+// One session. Kept twice over: in ftms for the rings, and as a sample like any packet, so its
+// distance, the RSSI of its frames and its success rate can be drawn as ticks alongside every
+// other link's rssi or lqi. A failed session is a miss, drawn where it was tried from.
 function ftmPut(f) {
   ftms.push(f);
   if (ftms.length > FTM_MAX) ftms.splice(0, 5000);
   if (!ftmCols.has(f.peer)) ftmCols.set(f.peer, SRC_COLS[(ftmCols.size + 3) % SRC_COLS.length]);
   ftmRev++;
-  mapRedraw();
+
+  const ok = f.st === 0;
+  const skey = f.dev + '/' + f.peer + '/ftm';
+  const S = ensureSeries(skey, f.dev, f.peer, 'ftm');
+  const w = (S.gw ||= []);
+  w.push(ok ? 1 : 0);
+  if (w.length > 40) w.shift();
+  S.gh = (S.gh || 0) + (ok ? 1 : 0);
+  S.gm = (S.gm || 0) + (ok ? 0 : 1);
+  addSample(S, {
+    t: f.t, t0: f.t, key: skey, dev: f.dev, peer: f.peer, ch: 'ftm', f,
+    rssi: ok && f.rssi !== -128 ? f.rssi : undefined, snr: -128, lqi: 0,
+    pdr: Math.round(100 * w.reduce((a, x) => a + x, 0) / w.length),
+    pdrall: Math.round(100 * S.gh / (S.gh + S.gm)),
+    hits: ok ? 1 : 0, miss: ok ? 0 : 1,
+    pos: undefined, mpos: null, mprov: false, fp: true,
+  });
+}
+
+// Where an FTM sample goes: wherever its initiator was. Re-asked whenever anything that could
+// place it has moved on - a GNSS log arriving, a board being carried, a new phone fix.
+function placeFtm(s) {
+  const k = gRev + '/' + rolesRev + '/' + geo.fixes.length;
+  if (s.fpk === k) return;
+  s.fpk = k;
+  const p = s.f.pos || boardPos(idOf(s.dev), s.t);
+  s.pos = p ? { x: p.x, y: p.y, prov: false } : undefined;
+  s.mpos = s.miss && p ? [{ x: p.x, y: p.y, alt: p.alt }] : [];
+  if (p && typeof p.alt === 'number' && s.alt !== p.alt) {
+    s.alt = p.alt;
+    if (p.alt < alts.lo) alts.lo = p.alt;
+    if (p.alt > alts.hi) alts.hi = p.alt;
+    const S = series.get(s.key);
+    if (S && !S.has.alt) { S.has.alt = true; seriesRev++; }
+  }
 }
 
 // The lowest a GNSS board's track has been. Recomputed when the tracks move on, not per ring.
@@ -3600,10 +3717,10 @@ function groundOf(id) {
 
 // A session as a ring on the ground: {x, y, r}, or null while the initiator cannot be placed.
 function ftmRing(f) {
-  const c = f.pos || boardPos(f.dev, f.t);
+  const c = f.pos || boardPos(idOf(f.dev), f.t);
   if (!c) return null;
-  let r = f.dist;
-  const lo = groundOf(f.dev);
+  let r = Math.max(0, f.dist - ftmCal(f.dev, f.peer));
+  const lo = groundOf(idOf(f.dev));
   if (typeof c.alt === 'number' && lo !== undefined) {
     const dz = c.alt - lo;
     r = Math.sqrt(Math.max(0, r * r - dz * dz));
@@ -3728,7 +3845,9 @@ function mapRedraw() {
 
 // Where a sample landed - shared by the rays and the coverage field.
 function placeSample(s, redo) {
-  if (s.g) {
+  if (s.fp) {
+    placeFtm(s);
+  } else if (s.g) {
     if (needsResolve(s, redo)) resolveG(s);
   } else if (!s.pos || s.pos.prov) {
     s.pos = posAt(s.t);
@@ -3739,7 +3858,7 @@ function placeSample(s, redo) {
 // on every frame is the one thing here that would actually cost something. Log-drawn samples
 // have theirs from resolveG().
 function missesOf(s) {
-  if (!s.g && (!s.mpos || s.mprov)) {
+  if (!s.g && !s.fp && (!s.mpos || s.mprov)) {
     const n = Math.min(s.miss, 40);
     s.mpos = []; s.mprov = false;
     for (let k = 1; k <= n; k++) {
@@ -3784,8 +3903,8 @@ function drawMap() {
   if (view.follow && lead) { view.cx = lead.x; view.cy = lead.y; }
 
   // The coverage field goes under everything, and stands in for the rays while it is on.
-  // The field is cleared away with the packet marks when FTM is shown on its own.
-  const fieldShown = fld.on && ftmView !== 2;
+  // The field under everything, when its switch is on.
+  const fieldShown = fld.on;
   if (fieldShown) drawField(g, W, H);
 
   const act = activeSources();
@@ -3813,7 +3932,7 @@ function drawMap() {
 
   // The track. One path, one stroke - a walk is tens of thousands of segments and stroking
   // them individually is the difference between a smooth pan and a slideshow.
-  if (!fieldShown) {
+  if (!fieldShown && showTracks) {
     g.strokeStyle = '#4d566b';
     g.beginPath();
     for (let i = 0; i < geo.fixes.length; i++) {
@@ -3831,7 +3950,7 @@ function drawMap() {
   for (const G of gtr.values()) {
     if (G.dirty) { G.list.sort((a, b) => a.t - b.t); G.dirty = false; }
     G.col = GNSS_COLS[gi++ % GNSS_COLS.length];
-    if (G.list.length < 2 || fieldShown) continue;
+    if (G.list.length < 2 || fieldShown || !showTracks) continue;
     g.strokeStyle = G.col;
     g.globalAlpha = 0.6;
     g.beginPath();
@@ -3868,8 +3987,8 @@ function drawMap() {
   });
   const pad = plot.maxPx + 20;   // rays reach outward, so cull generously rather than exactly
   let drawn = 0;
-  // The field places its own; "ftm only" places none.
-  for (let i = 0; !fld.on && ftmView !== 2 && i < samples.length; i++) {
+  // The field places its own.
+  for (let i = 0; !fld.on && i < samples.length; i++) {
     const s = samples[i];
     placeSample(s, redo);
     if (!s.pos) continue;
@@ -3906,7 +4025,7 @@ function drawMap() {
   if (showAlt) pAlt.forEach((p, i) => { g.fillStyle = altCol((i + 0.5) / ALT_STEPS); g.fill(p); });
   act.forEach((S, i) => { g.strokeStyle = srcCol(S.key); g.stroke(rays[i]); });
   if (fieldShown && fld.trace) drawFieldTrace(g, W, H);
-  const ftmG = ftmView ? drawFtm(g) : null;
+  const ftmG = showRings ? drawFtm(g) : null;
 
   // Base marker: a small open square, so it reads as a placed thing rather than a measurement.
   if (geo.base) {
@@ -3983,7 +4102,6 @@ function drawMap() {
     drawFieldLegend(g, W, H);
     return;
   }
-  if (ftmView === 2) return;   // no rays on the map, so nothing for their legend to say
 
   // Legend. Each entry carries a stub drawn at that radio's own angle, so which ray is which
   // can be read off the map without looking away from it.
@@ -4269,9 +4387,11 @@ function gpsStop() {
 
 function paintMapBar() {
   const g = document.getElementById('gps');
-  g.textContent = geo.watch === null ? 'GPS off' : geo.err ? 'GPS error' : 'GPS on';
+  setLab(g, ['GPS off', 'GPS on', 'GPS error'],
+         geo.watch === null ? 'GPS off' : geo.err ? 'GPS error' : 'GPS on');
   g.className = geo.watch === null ? '' : geo.err ? 'bad' : 'on';
-  document.getElementById('base').textContent = geo.base ? 'clear base' : 'set base';
+  setLab(document.getElementById('base'), ['set base', 'clear base'],
+         geo.base ? 'clear base' : 'set base');
   document.getElementById('base').classList.toggle('on', !!geo.base);
   // Heights take the miss ticks' place, so the ticks' button stops claiming to do anything.
   document.getElementById('mis').classList.toggle('on', showMiss && !showAlt);
@@ -4280,9 +4400,8 @@ function paintMapBar() {
   h.classList.toggle('on', showAlt);
   // Nothing has a height until a GNSS end has been heard from, and then it stays offered.
   h.disabled = !isFinite(alts.lo);
-  const fv = document.getElementById('ftmv');
-  fv.textContent = FTM_VIEW_NAMES[ftmView];
-  fv.classList.toggle('on', ftmView > 0);
+  document.getElementById('ftmv').classList.toggle('on', showRings);
+  document.getElementById('trk').classList.toggle('on', showTracks);
 }
 
 function paintMapStat() {
@@ -4356,7 +4475,7 @@ function exportCsv() {
                 'alt_m', 'src',
                 // FTM rows: dev ranged to peer from lat/lon (where dev was), dist_m is the
                 // straight-line distance measured, ftm_status says whether it worked.
-                'dist_m', 'ftm_status'];
+                'dist_m', 'ftm_status', 'ftm_zero_m'];
   const rows = [];
   const n6 = v => v === undefined || v === '' ? '' : (+v).toFixed(6);
   const n1 = v => v === undefined || v === null ? '' : (+v).toFixed(1);
@@ -4379,6 +4498,7 @@ function exportCsv() {
     }
   }
   for (const s of samples) {
+    if (s.fp) continue;   // FTM sessions have rows of their own, below
     const p = s.pos || (s.g ? null : posAt(s.t));
     const ll = p ? unproject(p.x, p.y) : { lat: '', lon: '' };
     rows.push(['rx', new Date(s.t).toISOString(), s.t,
@@ -4393,7 +4513,7 @@ function exportCsv() {
                s.alt ?? '', s.g ? 'gnss' : 'phone']);
   }
   for (const f of ftms) {
-    const c = f.pos || boardPos(f.dev, f.t);
+    const c = f.pos || boardPos(idOf(f.dev), f.t);
     const ll = c ? unproject(c.x, c.y) : { lat: '', lon: '' };
     rows.push(['ftm', new Date(f.t).toISOString(), Math.round(f.t),
                f.dev, nameOf(f.dev) ?? '', f.peer, nameOf(f.peer) ?? '', 'ftm',
@@ -4401,7 +4521,7 @@ function exportCsv() {
                c ? n1(c.x) : '', c ? n1(c.y) : '', c ? baseOf(c.x, c.y) : '',
                f.rssi === -128 ? '' : f.rssi, '', '', '', '', '', '', '', '',
                c?.alt ?? '', !c ? '' : c.how === 'carry' || c.how === 'put' ? c.how : 'gnss',
-               f.st === 0 ? f.dist.toFixed(1) : '', ftmSt(f.st)]);
+               f.st === 0 ? f.dist.toFixed(1) : '', ftmSt(f.st), ftmCal(f.dev, f.peer) || '']);
   }
   rows.sort((a, b) => a[2] - b[2]);
 
@@ -4522,7 +4642,7 @@ function importCsv(text) {
     if (type === 'ftm') {
       // Where it was measured from comes back as it was exported, since the carried spans and
       // the logs that placed it are not in the file.
-      const dev = idOf(str(r, 'dev')), peer = idOf(str(r, 'peer'));
+      const dev = str(r, 'dev'), peer = idOf(str(r, 'peer'));
       const stTxt = str(r, 'ftm_status'), dist = num(r, 'dist_m');
       if (!dev || !peer) { skipped++; continue; }
       const q = lat === undefined || lon === undefined ? null : project(lat, lon);
@@ -4737,9 +4857,14 @@ document.getElementById('halt').onclick = () => {
   paintMapBar();
   mapRedraw();
 };
-// Shown, shown alone, hidden - and round again.
 document.getElementById('ftmv').onclick = () => {
-  ftmView = (ftmView + 1) % 3;
+  showRings = !showRings;
+  saveSettings();
+  paintMapBar();
+  mapRedraw();
+};
+document.getElementById('trk').onclick = () => {
+  showTracks = !showTracks;
   saveSettings();
   paintMapBar();
   mapRedraw();
@@ -4793,7 +4918,7 @@ document.getElementById('wipe').onclick = () => {
 };
 document.getElementById('fold').onclick = function () {
   const folded = document.getElementById('map').classList.toggle('fold');
-  this.textContent = folded ? 'show' : 'hide';
+  setLab(this, ['hide', 'show'], folded ? 'show' : 'hide');
   if (!folded) mapRedraw();
 };
 
@@ -4993,6 +5118,11 @@ function buildCard(d) {
   // card - the phone is only connected to some of them - and they are the ones whose ids are
   // hardest to place.
   R.body.onclick = ev => {
+    const z = ev.target.closest('[data-zero]');
+    if (z) {
+      const peer = z.dataset.zero;
+      return setFtmCal(d.name, peer, ftmCal(d.name, peer) ? undefined : +z.dataset.avg);
+    }
     const t = ev.target.closest('.peer');
     if (t) renameBoard(t.dataset.id);
   };
@@ -5050,6 +5180,15 @@ const LINK_STALE_MS = 2500;
 // offset. Everything time-related is computed on this rather than on when a line arrived.
 const boardNow = d => (d.offset === undefined ? undefined : Date.now() - d.offset);
 
+// An age in at most four characters - 0.3s, 9.9s, 42s, 17m, 2.5h - so a ticking cell never
+// changes width. Tenths only while they still mean something.
+function fmtAge4(ms) {
+  const s = Math.max(0, ms) / 1000;
+  return s < 9.95 ? s.toFixed(1) + 's' : s < 99.5 ? Math.round(s) + 's'
+       : s < 5970 ? Math.round(s / 60) + 'm' : s < 35640 ? (s / 3600).toFixed(1) + 'h'
+       : Math.min(99, Math.round(s / 3600)) + 'h';
+}
+
 // The ages tick on their own, ~20fps, without touching anything else on the card. Rebuilding
 // the whole card at that rate would be wasteful and would fight the sliders; rebuilding it at
 // 2Hz, which is what happened before, is what made the counters stutter.
@@ -5063,7 +5202,7 @@ function tickAges() {
     for (const a of R.ageEls || []) {
       if (bn === undefined) continue;
       const age = bn - a.abs;
-      a.cell.textContent = (age / 1000).toFixed(1) + 's';
+      a.cell.textContent = fmtAge4(age);
       a.tr.classList.toggle('stale', age > a.stale);
     }
 
@@ -5072,9 +5211,7 @@ function tickAges() {
     if (R.fresh) {
       const since = wall - (d.seen ?? wall);
       const stale = since > LINK_STALE_MS;
-      R.fresh.textContent = stale
-        ? `none for ${(since / 1000).toFixed(0)}s`
-        : `${(since / 1000).toFixed(1)}s ago`;
+      R.fresh.textContent = stale ? `none ${fmtAge4(since)}` : `${fmtAge4(since)} ago`;
       R.fresh.className = stale ? 'bad' : 'dim';
     }
   }
@@ -5118,45 +5255,47 @@ function updateCard(d) {
     const on = !!((d.tests ?? 0) & (1 << i));
     const want = d.testsWant === undefined ? on : !!(d.testsWant & (1 << i));
     b.className = on ? 'on' : '';
-    b.textContent = TESTS[i] + (want !== on ? ' …' : '');
+    setLab(b, [TESTS[i], TESTS[i] + ' …'], TESTS[i] + (want !== on ? ' …' : ''));
     b.disabled = !!d.legacy && i > 2;
   });
   const carried = carrying(d.name);
-  R.carry.textContent = carried ? 'carried' : roles[idOf(d.name)]?.put ? 'put down' : 'carry';
+  setLab(R.carry, ['carry', 'carried', 'put down'],
+         carried ? 'carried' : roles[idOf(d.name)]?.put ? 'put down' : 'carry');
   R.carry.className = carried ? 'on' : '';
-  R.lr.textContent = d.lr ? 'LR on' : 'LR off';
+  setLab(R.lr, ['LR off', 'LR on'], d.lr ? 'LR on' : 'LR off');
   R.lr.className = d.lr ? 'on' : '';
 
-  R.ant.textContent = d.ant === undefined ? 'ant ?'
-                    : d.ant ? 'ant external' : 'ant internal';
+  setLab(R.ant, ['ant ?', 'ant internal', 'ant external'], d.ant === undefined ? 'ant ?'
+                    : d.ant ? 'ant external' : 'ant internal');
   R.ant.className = d.ant ? 'on' : '';
 
-  R.txm.textContent = d.txMute === undefined ? 'tx ?'
-                    : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on';
+  setLab(R.txm, ['tx ?', 'espnow+154 tx on', 'espnow+154 tx muted'], d.txMute === undefined ? 'tx ?'
+                    : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on');
   R.txm.className = d.txMute ? 'on' : '';
 
   // A v4 board has no LED to command, so the button says so rather than offering a press the
   // firmware would ignore. Nothing else on the row does this, because nothing else is missing
   // from v4 - and once every board is reflashed this condition is simply never true.
   R.led.disabled = d.rptVer !== undefined && d.rptVer < 5;
-  R.led.textContent = R.led.disabled ? 'led n/a' : (LED_NAMES[d.led] ?? 'led ?');
+  setLab(R.led, ['led n/a', 'led ?', ...LED_NAMES],
+         R.led.disabled ? 'led n/a' : (LED_NAMES[d.led] ?? 'led ?'));
   R.led.className = d.led ? 'on' : '';
 
   // Only where there is a GNSS to speak of: a board that has never seen NMEA has nothing to set.
   R.geo.style.display = d.gnss && d.gnss.state ? '' : 'none';
-  R.geo.textContent = GEO_MODE_NAMES[d.gnss?.mode ?? 0] ?? 'pos ?';
+  setLab(R.geo, ['pos ?', ...GEO_MODE_NAMES], GEO_MODE_NAMES[d.gnss?.mode ?? 0] ?? 'pos ?');
   R.geo.className = d.gnss && d.gnss.mode ? 'on' : '';
 
   // Requested on the left, what the controller actually settled on in brackets when the two
   // disagree - a phone that declined 2M reads "2M (1M)" rather than silently looking applied.
   if (d.conn2m === undefined) {
-    R.phy.textContent = 'phy ?';
+    setLab(R.phy, PHY_LABELS, 'phy ?');
     R.phy.className = '';
   } else {
     const want = d.conn2m ? '2M' : 'coded';
     const got  = PHY_NAMES[d.connPhy] ?? '?';
     const agree = (d.conn2m && d.connPhy === 2) || (!d.conn2m && d.connPhy === 3);
-    R.phy.textContent = agree || !d.connPhy ? `phy ${want}` : `phy ${want} (${got})`;
+    setLab(R.phy, PHY_LABELS, agree || !d.connPhy ? `phy ${want}` : `phy ${want} (${got})`);
     R.phy.className = d.conn2m ? 'on' : '';
   }
 
@@ -5218,6 +5357,16 @@ function updateCard(d) {
                        `<b class="ok">fix</b> · ${G.sats} sats · hdop ${hd} · ${G.baud} baud` +
                        ` · packets carry ${(GEO_MODE_NAMES[G.mode] ?? '?').slice(5)}`));
   }
+  // What FTM is doing when it has nothing to show in the table - heard no APs, heard some and
+  // none were ours, or found ours and got nothing back. Said every report while FTM is on.
+  if (d.ftmScan && (d.ftmScan.on || d.ftm?.size)) {
+    const s = d.ftmScan;
+    diag.push('<span class="ch">ftm</span> ' + (!s.on ? 'off' : s.age === undefined
+      ? '<b class="warn">not scanned yet</b>'
+      : `last scan ${fmtAge4(s.age * 1000)} ago: ${s.aps} APs, ` +
+        `<b class="${s.ours + s.noftm ? 'ok' : 'warn'}">${s.ours + s.noftm} ours</b>` +
+        (s.noftm ? ` (${s.noftm} not advertising FTM)` : '') + ` · ${s.known} in rotation`));
+  }
   if (d.logSt) {
     const L = d.logSt;
     if (L.v6) {
@@ -5249,22 +5398,32 @@ function updateCard(d) {
   // FTM rows ride behind the report they belong to, and go stale with it.
   const ftmRows = d.ftm && (d.ftmGen ?? -9) >= (d.genN ?? 0) - 1
     ? [...d.ftm.values()].sort((a, b) => a.peer.localeCompare(b.peer)) : [];
+  // Distances with this pair's zero taken off; the raw figure is in the cell's tooltip.
   const ftmHtml = !ftmRows.length ? '' :
     '<table style="margin-top:8px"><tr><th>ftm to</th><th>dist</th><th>avg</th><th>rssi</th>' +
     '<th>pdr</th><th>ok</th><th>fail</th><th>last</th></tr>' +
-    ftmRows.map(f =>
+    ftmRows.map(f => {
+      const cal = ftmCal(d.name, f.peer);
+      const raw = `raw ${f.dist.toFixed(1)} m, avg ${f.avg.toFixed(1)} m` +
+                  (cal ? `; ${cal} m zero taken off` : '; not zeroed');
       // Sessions take turns between responders, so a row is quiet for a while between its own.
-      `<tr data-abs="${f.abs}" data-stale="${FTM_ROW_STALE_MS}"><td><span class="ch">ftm</span> ` +
+      return `<tr data-abs="${f.abs}" data-stale="${FTM_ROW_STALE_MS}"><td><span class="ch">ftm</span> ` +
       `<span class="peer nameable ${nameOf(f.peer) ? '' : 'dim'}" data-id="${esc(f.peer)}" ` +
       `title="Click to name this board">${esc(labelOf(f.peer))}</span>` +
       (f.st ? ` <span class="bad" title="How the last session ended">${esc(ftmSt(f.st))}</span>` : '') +
+      // Zero: the boards are side by side now, so the current average is the offset.
+      (f.ok ? `<button class="mini${cal ? ' on' : ''}" data-zero="${esc(f.peer)}" ` +
+              `data-avg="${f.avg}" title="${cal ? 'Zeroed (' + cal + ' m). Tap to clear.'
+              : 'With the two boards side by side: take the current average off every distance ' +
+                'between them from now on, here and on the map'}">0</button>` : '') +
       '</td>' +
-      `<td class="big">${f.ok ? f.dist.toFixed(1) + '<span class="dim">m</span>' : '–'}</td>` +
-      `<td class="dim">${f.ok ? f.avg.toFixed(1) : '–'}</td>` +
+      `<td class="big" title="${raw}">${f.ok ? (f.dist - cal).toFixed(1) + '<span class="dim">m</span>' : '–'}</td>` +
+      `<td class="dim" title="${raw}">${f.ok ? (f.avg - cal).toFixed(1) : '–'}</td>` +
       `<td class="dim">${f.rssi === -128 ? '–' : f.rssi}</td>` +
       `<td class="big ${pdrClass(f.pdr)}" title="Of the last 16 sessions">${pdrTxt(f.pdr)}</td>` +
       `<td class="dim">${f.ok}</td><td class="dim">${f.fail}</td>` +
-      '<td class="dim">–</td></tr>').join('') +
+      '<td class="dim age">–</td></tr>';
+    }).join('') +
     '</table>';
 
   if (!rows.length) {
@@ -5306,7 +5465,7 @@ function updateCard(d) {
         `<td class="big ${pdrClass(r.pdrNow)}">${pdrTxt(r.pdrNow)}</td>` +
         `<td class="dim">${pdrTxt(r.pdrAll)}</td>` +
         `<td class="dim">${r.miss}</td>` +
-        `<td class="dim">–</td></tr>`;
+        `<td class="dim age">–</td></tr>`;
     }).join('') +
     '</table>' + ftmHtml;
 
