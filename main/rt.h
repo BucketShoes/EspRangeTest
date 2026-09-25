@@ -61,21 +61,21 @@ extern const char *rt_chan_name[CH_COUNT];
 //            when this is the only test on, and duty-cycles when it is sharing (rt_ble.c).
 //   154      802.15.4 frames out, and the receiver on.
 //   FTM      FTM initiator: scans for other boards' APs and ranges to them in turn (rt_ftm.c).
-//            Needs the Wi-Fi driver.
-//   FTM_RESP keeps the Wi-Fi driver up for no reason of its own, so that the SoftAP - which is
-//            the FTM responder - is there to be ranged. For a board that is only a target.
+//            Needs the Wi-Fi driver, station side only.
+//   AP       the SoftAP: beaconing, listening, visible to a phone while LR is off - a test of
+//            its own, standing in for everything a phone could later do over it. It is also
+//            the FTM responder, so a board that is to be ranged to needs this on.
 //
-// The Wi-Fi driver runs whenever any of ESPNOW, FTM or FTM_RESP is on, and whenever it runs it
-// is APSTA, so the responder answers in all three. It is never STA alone: with no AP the
-// unassociated station power-saves (CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE) and ESP-NOW
-// stops hearing things, and the AP is what keeps it awake.
+// The Wi-Fi driver runs whenever any of ESPNOW, FTM or AP is on: APSTA with AP, STA alone
+// without. A station on its own does not doze and miss ESP-NOW frames - esp_now's wake window
+// defaults to always awake (esp_now_set_wake_window() in esp_now.h), and nothing here changes it.
 #define RT_TEST_ESPNOW   (1u << CH_ESPNOW)
 #define RT_TEST_BLE_ADV  (1u << CH_BLE_ADV)
 #define RT_TEST_154      (1u << CH_154)
 #define RT_TEST_FTM      (1u << 3)
-#define RT_TEST_FTM_RESP (1u << 4)
+#define RT_TEST_AP       (1u << 4)
 #define RT_TEST_ALL      0x1Fu
-#define RT_TEST_WIFI     (RT_TEST_ESPNOW | RT_TEST_FTM | RT_TEST_FTM_RESP)
+#define RT_TEST_WIFI     (RT_TEST_ESPNOW | RT_TEST_FTM | RT_TEST_AP)
 
 // Two bytes: { RT_CMD_TESTS, mask }. The whole set, not a toggle - same reason as the LED: a
 // write that is lost or repeated cannot leave the board one step out of phase with the page.
@@ -391,9 +391,9 @@ const char *rt_tests_name(unsigned mask, char *buf, int len);
 
 // The page before tests were switches sent one byte, 0..4, naming a low-contention mode. Still
 // understood so a cached copy of that page does something sensible: 0 was every radio, 1..3
-// one channel alone, and 4 - Wi-Fi for the phone, with BLE off - no longer exists, because BLE
-// is now never off. See rt_ui.c.
-#define RT_CMD_LEGACY_LC_MAX 3
+// one channel alone, 4 ESP-NOW with the AP up - which is what it maps to now, minus the part
+// where it turned BLE off; BLE is never off. See rt_ui.c.
+#define RT_CMD_LEGACY_LC_MAX 4
 
 // LR (long range PHY) affects Wi-Fi and ESP-NOW together and needs a full radio reinit to
 // change - see wifi_apply() in main.c. Merely having WIFI_PROTOCOL_LR in the protocol
@@ -756,20 +756,33 @@ void rt_report(void);
 // their own (below) and an FTM record in the log. The layout is otherwise v7's, and the packets
 // boards send each other are untouched, so v7 and v8 boards still range-test each other.
 //
-//   FTM rows: a notification of their own, type 0x04, after the report's last chunk, only
-//   while this board has FTM results to describe. Not rows in the report proper, because a
-//   page that does not know them would read them as 23-byte link rows.
-//     u8 0x04, u8 gen (the report's), u8 n, u8 flags (0)
+// v9: the fifth byte's bit 4 is the AP test (it was "ftm resp"), FTM distances are signed -
+// uncalibrated FTM reads below zero close up, and v8 wrapped those to kilometres - and the FTM
+// notification always goes while FTM is on and starts with what the last scan found, so "no
+// results" can say why. The log's FTM record is signed from v9 on.
+//
+//   FTM: a notification of its own, type 0x04, after the report's last chunk, while FTM is on
+//   or this board has FTM results to describe. Not rows in the report proper, because a page
+//   that does not know them would read them as 23-byte link rows.
+//     u8 0x04, u8 gen (the report's), u8 n, u8 flags (bit0 = the FTM test is on)
+//     scan, 8 bytes:
+//       u8  aps         APs the last scan heard, any
+//       u8  ours        of them ours, answering FTM
+//       u8  ours_noftm  of them ours, but not advertising the FTM responder bit
+//       u8  known       responders being taken in turn now
+//       u16 age_ds      since the last scan, 0.1s units; 0xFFFF = never scanned
+//       u16 reserved
 //     n x 20 bytes:
 //       u24 peer        the responder's node id, from its SSID
 //       u8  status      the last session's wifi_ftm_status_t; 0 = success
-//       u16 dist_dm     the last successful session's distance, decimetres, clamped at 0xFFFF
-//       u16 avg_dm      the mean of the last RT_FTM_AVG successful ones
+//       i16 dist_dm     the last successful session's distance, decimetres, clamped
+//       i16 avg_dm      the mean of the last RT_FTM_AVG successful ones
 //       i8  rssi        of the last successful session's FTM frames, averaged; -128 unknown
 //       i8  pdr         successful share of the last 16 sessions, percent; -1 before any
 //       u32 ok, u32 fail  sessions since boot or the last stats reset
 //       u16 age_ds      since the last session ended, either way, 0.1s units, clamped
-#define RT_RPT_VER      8
+#define RT_RPT_VER      9
+#define RT_RPT_FTM_SCAN 8
 #define RT_RPT_TYPE_FTM 0x04
 #define RT_RPT_FTM_ROW  20
 #define RT_RPT_HDR      4
@@ -857,7 +870,7 @@ int rt_snapshot_rows(void);
 //   0x80+ RXS   (5)  type = 0x80 | geo << 6 | ref, dt, u8 gap, i8 rssi, u8 q
 //                    A packet heard on an existing ref: seq = that ref's last seq + gap. geo: it
 //                    carried exactly the node's current POS.
-//   0x06 FTM    (9)  dt, u24 node, u8 status, u16 dist_dm, i8 rssi
+//   0x06 FTM    (9)  dt, u24 node, u8 status, i16 dist_dm, i8 rssi (u16 in v8)
 //                    v8: one FTM session this board initiated, to that node's AP, ended at
 //                    clock - successful or not. Fields as in the report's FTM rows. Always
 //                    logged, GNSS or not: the page puts it wherever this board was at the time
@@ -892,7 +905,7 @@ void rt_log_fix(const rt_geo_t *g, const uint32_t seq_next[CH_COUNT]);
 void rt_log_nofix(const uint32_t seq_next[CH_COUNT]);
 void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, int8_t rssi,
                uint8_t q, const rt_geo_wire_t *sender);
-void rt_log_ftm(uint32_t node, uint8_t status, uint16_t dist_dm, int8_t rssi);
+void rt_log_ftm(uint32_t node, uint8_t status, int16_t dist_dm, int8_t rssi);
 
 typedef struct {
     uint32_t session, oldest, newest;

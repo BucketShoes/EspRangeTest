@@ -320,7 +320,7 @@ void rt_log_rx(uint32_t node, int chan, int8_t ptx, uint32_t seq, uint32_t gap, 
     portEXIT_CRITICAL_SAFE(&s_mux);
 }
 
-void rt_log_ftm(uint32_t node, uint8_t status, uint16_t dist_dm, int8_t rssi)
+void rt_log_ftm(uint32_t node, uint8_t status, int16_t dist_dm, int8_t rssi)
 {
     if (s_ring == NULL) {
         return;
@@ -333,7 +333,7 @@ void rt_log_ftm(uint32_t node, uint8_t status, uint16_t dist_dm, int8_t rssi)
     put8(dt);
     put24(node);
     put8(status);
-    put16(dist_dm);
+    put16((uint16_t)dist_dm);
     put8((uint8_t)rssi);
     portEXIT_CRITICAL_SAFE(&s_mux);
 }

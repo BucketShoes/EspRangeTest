@@ -289,7 +289,7 @@ bool rt_tx_enabled(int chan)
 
 const char *rt_tests_name(unsigned mask, char *buf, int len)
 {
-    static const char *const nm[] = { "espnow", "ble_adv", "154", "ftm", "ftm_resp" };
+    static const char *const nm[] = { "espnow", "ble_adv", "154", "ftm", "ap" };
     int n = 0;
     buf[0] = '\0';
     for (int i = 0; i < 5 && n < len; i++) {

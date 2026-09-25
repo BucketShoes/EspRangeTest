@@ -66,8 +66,8 @@ typedef struct {
 
     bool     any;            // at least one session has ended, either way
     uint8_t  last_st;
-    uint16_t dist_dm;        // last success
-    uint16_t hist[RT_FTM_AVG];
+    int16_t  dist_dm;        // last success; signed - see record()
+    int16_t  hist[RT_FTM_AVG];
     uint8_t  nhist, hhead;
     int8_t   rssi;           // last success
     uint16_t bits;           // last 16 sessions, bit0 newest: 1 = success
@@ -83,13 +83,13 @@ static SemaphoreHandle_t s_scan_done, s_ftm_done;
 // The last report, as the event handler copied it. Read by the task once s_ftm_done is given.
 static volatile uint8_t  s_rep_mac[6];
 static volatile uint8_t  s_rep_st;
-static volatile uint32_t s_rep_dist_cm;
+static volatile int32_t  s_rep_dist_cm;
 static volatile uint8_t  s_rep_n;
 
 // For the serial report: what the last scan found, so "no responders" can say whether that was
 // "heard nothing at all" or "heard APs, none of them ours".
 static uint32_t s_scan_ms;
-static uint16_t s_scan_aps, s_scan_ours;
+static uint16_t s_scan_aps, s_scan_ours, s_scan_noftm;
 static bool     s_scanned;
 
 static const char *st_name(uint8_t st)
@@ -119,7 +119,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             s_rep_mac[i] = r->peer_mac[i];
         }
         s_rep_st      = (uint8_t)r->status;
-        s_rep_dist_cm = r->dist_est;
+        // Declared unsigned, but it is a difference of timestamps less a calibration: close up
+        // and uncalibrated it goes below zero, and read unsigned that is 40 million km.
+        s_rep_dist_cm = (int32_t)r->dist_est;
         s_rep_n       = r->ftm_report_num_entries;
         xSemaphoreGive(s_ftm_done);
     }
@@ -216,23 +218,26 @@ static void scan(void)
     }
 
     const uint32_t now = rt_ms();
-    uint16_t ours = 0;
+    uint16_t ours = 0, noftm = 0;
     for (int i = 0; i < n; i++) {
         const uint32_t node = node_of(ap[i].ssid);
-        // Ours, not ourselves, and saying it answers FTM - a board without the responder built
-        // in would only ever answer "unsupported", and nothing else is ours to range to.
-        if (node == 0 || node == rt_node_id() || !ap[i].ftm_responder) {
+        // Ours and not ourselves - the name is the filter, nothing else is ours to range to.
+        // Whether its beacon claims the FTM responder bit is counted but not required: the
+        // session's own answer ("unsupported", or a distance) is the better authority, and a
+        // board left out because of a capability bit would never say why.
+        if (node == 0 || node == rt_node_id()) {
             continue;
         }
-        ours++;
+        if (ap[i].ftm_responder) ours++; else noftm++;
         note_responder(node, ap[i].bssid, ap[i].primary, now);
     }
     free(ap);
 
-    s_scan_ms   = now;
-    s_scan_aps  = n;
-    s_scan_ours = ours;
-    s_scanned   = true;
+    s_scan_ms    = now;
+    s_scan_aps   = n;
+    s_scan_ours  = ours;
+    s_scan_noftm = noftm;
+    s_scanned    = true;
 }
 
 static void forget_stale(uint32_t now)
@@ -255,11 +260,13 @@ static int known(void)
     return k;
 }
 
-static void record(int idx, uint32_t node, uint8_t st, uint32_t dist_cm, int8_t rssi)
+// dist_cm is signed: see on_wifi_event(). Decimetres, clamped to what an i16 holds.
+static void record(int idx, uint32_t node, uint8_t st, int32_t dist_cm, int8_t rssi)
 {
     const uint32_t now = rt_ms();
-    const uint32_t dm  = (dist_cm + 5) / 10;
-    const uint16_t d16 = st == FTM_STATUS_SUCCESS ? (uint16_t)(dm > 0xFFFF ? 0xFFFF : dm) : 0;
+    const int32_t  dm  = (dist_cm >= 0 ? dist_cm + 5 : dist_cm - 5) / 10;
+    const int16_t  d16 = st != FTM_STATUS_SUCCESS ? 0
+                       : (int16_t)(dm > INT16_MAX ? INT16_MAX : dm < -INT16_MAX ? -INT16_MAX : dm);
 
     portENTER_CRITICAL(&s_mux);
     resp_t *r = &s_r[idx];
@@ -354,7 +361,7 @@ static void session(int idx)
         }
     }
     const uint8_t  st   = s_rep_st;
-    const uint32_t dist = s_rep_dist_cm;
+    const int32_t  dist = s_rep_dist_cm;
     const int8_t   rssi = report_rssi(s_rep_n);
     record(idx, node, st, dist, st == FTM_STATUS_SUCCESS ? rssi : -128);
 }
@@ -440,13 +447,13 @@ void rt_ftm_reset(void)
     portEXIT_CRITICAL(&s_mux);
 }
 
-static uint16_t avg_dm(const resp_t *r)
+static int16_t avg_dm(const resp_t *r)
 {
-    uint32_t s = 0;
+    int32_t s = 0;
     for (int i = 0; i < r->nhist; i++) {
         s += r->hist[i];
     }
-    return r->nhist ? (uint16_t)(s / r->nhist) : 0;
+    return r->nhist ? (int16_t)(s / r->nhist) : 0;
 }
 
 static int pdr(const resp_t *r)
@@ -458,12 +465,17 @@ static int pdr(const resp_t *r)
     return __builtin_popcount(r->bits & m) * 100 / r->nbits;
 }
 
-static int put16(uint8_t *b, int n, uint32_t v)
+// Raw 16 bits; callers clamp or cast first - an i16 goes through as its two's complement.
+static int put16(uint8_t *b, int n, uint16_t v)
 {
-    if (v > 0xFFFF) v = 0xFFFF;
     b[n] = (uint8_t)v;
     b[n + 1] = (uint8_t)(v >> 8);
     return n + 2;
+}
+
+static uint16_t clamp16(uint32_t v)
+{
+    return v > 0xFFFF ? 0xFFFF : (uint16_t)v;
 }
 
 static int put32(uint8_t *b, int n, uint32_t v)
@@ -476,7 +488,7 @@ static int put32(uint8_t *b, int n, uint32_t v)
 
 int rt_ftm_rows(uint8_t *out, int cap, uint8_t gen)
 {
-    if (cap < RT_RPT_HDR + RT_RPT_FTM_ROW) {
+    if (cap < RT_RPT_HDR + RT_RPT_FTM_SCAN + RT_RPT_FTM_ROW) {
         return 0;
     }
     resp_t snap[RT_MAX_PEERS];
@@ -484,8 +496,19 @@ int rt_ftm_rows(uint8_t *out, int cap, uint8_t gen)
     memcpy(snap, s_r, sizeof(snap));
     portEXIT_CRITICAL(&s_mux);
 
+    const bool on = (g_tests & RT_TEST_FTM) != 0;
     const uint32_t now = rt_ms();
     int n = RT_RPT_HDR, rows = 0;
+
+    // What the last scan found. Always there, so a board with FTM on and nothing to show says
+    // whether it heard no APs, heard some and none were ours, or found ours and got no answer.
+    out[n++] = (uint8_t)(s_scan_aps > 255 ? 255 : s_scan_aps);
+    out[n++] = (uint8_t)(s_scan_ours > 255 ? 255 : s_scan_ours);
+    out[n++] = (uint8_t)(s_scan_noftm > 255 ? 255 : s_scan_noftm);
+    out[n++] = (uint8_t)known();
+    n = put16(out, n, s_scanned ? clamp16(((now - s_scan_ms) + 50) / 100) : 0xFFFF);
+    n = put16(out, n, 0);
+
     for (int i = 0; i < RT_MAX_PEERS && n + RT_RPT_FTM_ROW <= cap; i++) {
         const resp_t *r = &snap[i];
         if (!r->used || !r->any) {
@@ -495,68 +518,72 @@ int rt_ftm_rows(uint8_t *out, int cap, uint8_t gen)
         out[n++] = (uint8_t)(r->node >> 8);
         out[n++] = (uint8_t)(r->node >> 16);
         out[n++] = r->last_st;
-        n = put16(out, n, r->dist_dm);
-        n = put16(out, n, avg_dm(r));
+        n = put16(out, n, (uint16_t)r->dist_dm);
+        n = put16(out, n, (uint16_t)avg_dm(r));
         out[n++] = (uint8_t)(r->ok ? r->rssi : -128);
         out[n++] = (uint8_t)(int8_t)pdr(r);
         n = put32(out, n, r->ok);
         n = put32(out, n, r->fail);
         const int32_t age = (int32_t)(now - r->last_ms);
-        n = put16(out, n, age > 0 ? ((uint32_t)age + 50) / 100 : 0);
+        n = put16(out, n, clamp16(age > 0 ? ((uint32_t)age + 50) / 100 : 0));
         rows++;
     }
-    if (!rows) {
-        return 0;
+    if (!rows && !on) {
+        return 0;   // FTM off and nothing ever measured: nothing worth a notification
     }
     out[0] = RT_RPT_TYPE_FTM;
     out[1] = gen;
     out[2] = (uint8_t)rows;
-    out[3] = 0;
+    out[3] = on ? 0x01 : 0x00;
     return n;
+}
+
+// Decimetres as metres with one place, sign included, without the float formatter.
+static void print_dm(int16_t dm)
+{
+    const int a = dm < 0 ? -dm : dm;
+    printf("%s%d.%d", dm < 0 ? "-" : "", a / 10, a % 10);
 }
 
 void rt_ftm_report(void)
 {
-    if (!(g_tests & RT_TEST_FTM)) {
-        // Results from before the switch went off stay in the table, like every other link's.
-        bool any = false;
-        for (int i = 0; i < RT_MAX_PEERS; i++) any = any || (s_r[i].used && s_r[i].any);
-        if (!any) {
-            return;
-        }
-    }
     resp_t snap[RT_MAX_PEERS];
     portENTER_CRITICAL(&s_mux);
     memcpy(snap, s_r, sizeof(snap));
     portEXIT_CRITICAL(&s_mux);
 
+    const bool on = (g_tests & RT_TEST_FTM) != 0;
     const uint32_t now = rt_ms();
-    int shown = 0;
-    for (int i = 0; i < RT_MAX_PEERS; i++) {
-        const resp_t *r = &snap[i];
-        if (!r->used) {
-            continue;
-        }
-        shown++;
-        if (!r->any) {
-            printf("  ftm %06lX  found, no session yet\n", (unsigned long)r->node);
-            continue;
-        }
-        const uint16_t a = avg_dm(r);
-        printf("  ftm %06lX  %u.%um (avg %u.%u, rssi %d)  ok %lu fail %lu  %d%% of last %u"
-               "  last %s %lums ago\n",
-               (unsigned long)r->node, r->dist_dm / 10, r->dist_dm % 10, a / 10, a % 10,
-               r->ok ? r->rssi : 0, (unsigned long)r->ok, (unsigned long)r->fail, pdr(r),
-               r->nbits, st_name(r->last_st), (unsigned long)(now - r->last_ms));
-    }
-    if (!shown && (g_tests & RT_TEST_FTM)) {
+
+    // Said every report while FTM is on, like the GNSS line: "nothing found" and "found, nothing
+    // answered" are different faults and neither shows in the rows.
+    if (on) {
         if (!rt_wifi_active()) {
             printf("  ftm: on, waiting for the Wi-Fi driver\n");
         } else if (!s_scanned) {
             printf("  ftm: on, not scanned yet\n");
         } else {
-            printf("  ftm: no responders - last scan %lus ago heard %u APs, %u of them ours\n",
-                   (unsigned long)((now - s_scan_ms) / 1000), s_scan_aps, s_scan_ours);
+            printf("  ftm: last scan %lus ago heard %u APs - %u ours with the FTM bit, %u ours "
+                   "without; %d in rotation\n", (unsigned long)((now - s_scan_ms) / 1000),
+                   s_scan_aps, s_scan_ours, s_scan_noftm, known());
         }
+    }
+    // Results from before the switch went off stay in the table, like every other link's.
+    for (int i = 0; i < RT_MAX_PEERS; i++) {
+        const resp_t *r = &snap[i];
+        if (!r->used || (!on && !r->any)) {
+            continue;
+        }
+        if (!r->any) {
+            printf("  ftm %06lX  found, no session yet\n", (unsigned long)r->node);
+            continue;
+        }
+        printf("  ftm %06lX  ", (unsigned long)r->node);
+        print_dm(r->dist_dm);
+        printf("m (avg ");
+        print_dm(avg_dm(r));
+        printf(", rssi %d)  ok %lu fail %lu  %d%% of last %u  last %s %lums ago\n",
+               r->ok ? r->rssi : 0, (unsigned long)r->ok, (unsigned long)r->fail, pdr(r),
+               r->nbits, st_name(r->last_st), (unsigned long)(now - r->last_ms));
     }
 }

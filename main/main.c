@@ -134,19 +134,15 @@ uint8_t rt_reset_code(void)
 // CONTEXT.md) - the flag is not a preference, it is a different world.
 #define WIFI_PROTO_BASE (WIFI_PROTOCOL_11B)
 
-// FTM adds 11g and 11n while an FTM switch is on.
-//
-// Every FTM example and every FTM exchange this project has seen ran with them in the list, and
-// the measurement frames are timed off the OFDM PHY; whether an 11b-only AP answers FTM at all
-// has not been tried. Adding them costs the measurement nothing: the only data frames anything
-// here sends are ESP-NOW's, and pin_rate() in rt_espnow.c fixes those at 11b 1M whatever the
-// list says. Bandwidth is held at HT20 alongside, so 11n does not widen the channel.
-#define WIFI_PROTO_FTM (WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N)
-
 // What the driver is actually doing right now, so wifi_apply() can tell a real change from a
 // repeat and leave a working AP alone when nothing needs to move.
 static bool    s_wifi_on;
 static uint8_t s_wifi_proto;
+static bool    s_wifi_ap;
+
+// Set once in wifi_start(), and put back every time the AP comes up again after a spell in
+// STA-only mode, rather than trusting the driver to have kept it across the mode change.
+static wifi_config_t s_ap_cfg;
 
 // Held on through boot, whatever the tests say, because esp_now_init() wants a started driver.
 // Released in app_main once ESP-NOW is up. That start happens before the antenna switch is
@@ -171,9 +167,15 @@ static bool wifi_wanted(void)
 
 static uint8_t wifi_proto(void)
 {
-    return WIFI_PROTO_BASE
-         | ((g_tests & (RT_TEST_FTM | RT_TEST_FTM_RESP)) ? WIFI_PROTO_FTM : 0)
-         | (g_lr ? WIFI_PROTOCOL_LR : 0);
+    return WIFI_PROTO_BASE | (g_lr ? WIFI_PROTOCOL_LR : 0);
+}
+
+// The AP only while the AP test is on - it beacons every ~100ms and listens continuously, and
+// ESP-NOW and the FTM initiator both work from the station side alone. Not during the boot hold
+// either: nothing has asked for it yet.
+static bool ap_wanted(void)
+{
+    return (g_tests & RT_TEST_AP) != 0;
 }
 
 // Idempotent: brings the driver to whatever g_tests and g_lr currently ask for. Both a switch
@@ -183,14 +185,15 @@ static uint8_t wifi_proto(void)
 // LR needs that full reinit rather than a live protocol change (CONTEXT.md, established by the
 // owner's earlier testing). Merely having WIFI_PROTOCOL_LR in the list is enough to blind a
 // phone to the SoftAP even though it does not stop other ESPs reaching it - so it is applied
-// to both interfaces together, matching that they share one radio. The FTM protocols ride the
-// same restart.
+// to both interfaces together, matching that they share one radio. The AP coming and going
+// rides the same restart.
 static void wifi_apply(void)
 {
     const bool    want  = wifi_wanted();
+    const bool    ap    = want && ap_wanted();
     const uint8_t proto = wifi_proto();
 
-    if (s_wifi_on == want && (!want || s_wifi_proto == proto)) {
+    if (s_wifi_on == want && (!want || (s_wifi_proto == proto && s_wifi_ap == ap))) {
         return;
     }
 
@@ -207,8 +210,12 @@ static void wifi_apply(void)
         return;
     }
 
+    RT_TRY(TAG, esp_wifi_set_mode(ap ? WIFI_MODE_APSTA : WIFI_MODE_STA));
     RT_TRY(TAG, esp_wifi_set_protocol(WIFI_IF_STA, proto));
-    RT_TRY(TAG, esp_wifi_set_protocol(WIFI_IF_AP, proto));
+    if (ap) {
+        RT_TRY(TAG, esp_wifi_set_protocol(WIFI_IF_AP, proto));
+        RT_TRY(TAG, esp_wifi_set_config(WIFI_IF_AP, &s_ap_cfg));
+    }
 
     RT_TRY(TAG, esp_wifi_start());
     s_wifi_on = true;
@@ -219,16 +226,13 @@ static void wifi_apply(void)
     // this API, only made as short as possible.
     rt_wifi_apply_power();
 
-    if (proto & WIFI_PROTOCOL_11N) {
-        RT_TRY(TAG, esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20));
-        RT_TRY(TAG, esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20));
-    }
     RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
     s_wifi_proto = proto;
+    s_wifi_ap    = ap;
     rt_espnow_resume();  // no-op until rt_espnow_start() has run
 
-    ESP_LOGI(TAG, "wifi started: lr=%s, %s", g_lr ? "on" : "off",
-             (proto & WIFI_PROTOCOL_11N) ? "11b/g/n HT20 for FTM" : "11b only");
+    ESP_LOGI(TAG, "wifi started: %s, lr=%s", ap ? "AP + station" : "station only",
+             g_lr ? "on" : "off");
 }
 #endif
 
@@ -326,7 +330,7 @@ static void restore_control(void)
 static unsigned next_solo(unsigned tests)
 {
     static const uint8_t cycle[] = { 0, RT_TEST_ESPNOW, RT_TEST_BLE_ADV, RT_TEST_154,
-                                     RT_TEST_FTM, RT_TEST_FTM_RESP };
+                                     RT_TEST_FTM, RT_TEST_AP };
     const int n = sizeof(cycle) / sizeof(cycle[0]);
     for (int i = 0; i < n; i++) {
         if (cycle[i] == tests) {
@@ -353,21 +357,17 @@ static void wifi_start(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     RT_TRY(TAG, esp_wifi_init(&cfg));
     RT_TRY(TAG, esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    // APSTA, not STA: ESP-NOW and the FTM initiator use the STA side, the AP is the FTM
-    // responder - and its presence is also what keeps the unassociated station from power-saving
-    // and missing ESP-NOW frames (see RT_TEST_* in rt.h).
-    RT_TRY(TAG, esp_wifi_set_mode(WIFI_MODE_APSTA));
-
-    wifi_config_t ap = { 0 };
-    char ssid[sizeof(ap.ap.ssid) + 1];
+    // The AP's config, kept for whenever the AP test turns it on - see wifi_apply(). The mode
+    // itself is set there too: APSTA while the AP test is on, STA otherwise.
+    wifi_config_t *ap = &s_ap_cfg;
+    char ssid[sizeof(ap->ap.ssid) + 1];
     snprintf(ssid, sizeof(ssid), "%s", rt_node_name());
-    memcpy(ap.ap.ssid, ssid, strlen(ssid));
-    ap.ap.ssid_len       = strlen(ssid);
-    ap.ap.channel        = WIFI_CHAN;
-    ap.ap.authmode       = WIFI_AUTH_OPEN;   // throwaway instrument, not a product
-    ap.ap.max_connection = 4;
-    ap.ap.ftm_responder  = true;             // needs CONFIG_ESP_WIFI_FTM_ENABLE (sdkconfig.defaults)
-    RT_TRY(TAG, esp_wifi_set_config(WIFI_IF_AP, &ap));
+    memcpy(ap->ap.ssid, ssid, strlen(ssid));
+    ap->ap.ssid_len       = strlen(ssid);
+    ap->ap.channel        = WIFI_CHAN;
+    ap->ap.authmode       = WIFI_AUTH_OPEN;   // throwaway instrument, not a product
+    ap->ap.max_connection = 4;
+    ap->ap.ftm_responder  = true;             // needs CONFIG_ESP_WIFI_FTM_ENABLE (sdkconfig.defaults)
 
     wifi_apply();  // started for ESP-NOW's init; app_main stops it again right after
 }

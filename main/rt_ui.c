@@ -275,9 +275,13 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
         }
         rt_set_tests(b[1]);
     } else if (b[0] <= RT_CMD_LEGACY_LC_MAX) {
-        // A page from before the switches: 0 was every radio, 1..3 one channel on its own.
-        rt_set_tests(b[0] == 0 ? (RT_TEST_ESPNOW | RT_TEST_BLE_ADV | RT_TEST_154)
-                               : 1u << (b[0] - 1));
+        // A page from before the switches: 0 was every radio, 1..3 one channel on its own, 4
+        // ESP-NOW with the AP up for a phone.
+        static const uint8_t legacy[] = {
+            RT_TEST_ESPNOW | RT_TEST_BLE_ADV | RT_TEST_154 | RT_TEST_AP,
+            RT_TEST_ESPNOW, RT_TEST_BLE_ADV, RT_TEST_154, RT_TEST_ESPNOW | RT_TEST_AP,
+        };
+        rt_set_tests(legacy[b[0]]);
     }
     return 0;
 }
