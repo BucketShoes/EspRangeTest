@@ -381,14 +381,15 @@ static void restore_control(void)
     rt_set_tests(0);
 }
 
-// What a tap selects next: nothing, then each test on its own, then nothing again. Single tests
+// What a tap selects next: nothing, then each range candidate on its own, then nothing again. The
+// candidates are the links that could answer "which gives the best practical range" - FTM and the
+// Wi-Fi scan are not, so they are on the page only. Single tests
 // only - a combination is a thing to choose on the page, where you can see what you chose;
 // counting taps in a pocket is for getting one radio going on a bench without a phone.
 static unsigned next_solo(unsigned tests)
 {
     static const uint8_t cycle[] = { 0, RT_TEST_ESPNOW, RT_TEST_BLE_ADV, RT_TEST_154,
-                                     RT_TEST_FTM, RT_TEST_AP, RT_TEST_FTM_RESP,
-                                     RT_TEST_AP_SCAN };
+                                     RT_TEST_AP };
     const int n = sizeof(cycle) / sizeof(cycle[0]);
     for (int i = 0; i < n; i++) {
         if (cycle[i] == tests) {
