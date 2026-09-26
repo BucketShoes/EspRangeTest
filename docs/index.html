@@ -194,7 +194,8 @@
   cross marks the best fit. Each range is also a mark like a packet, so <b>ftm distance</b>,
   its RSSI and its success rate can be drawn as ticks beside any other link - and so can
   <b>height</b>. FTM reads with an offset until zeroed: bring the two boards together once, then tap
-  the <b>0</b> on that FTM row - it zeroes on the shortest distance seen. The rings need to know
+  the <b>0</b> on that FTM row - it zeroes on the shortest distance ever seen between them, kept
+  in this browser; tap it twice to start again from this session only. The rings need to know
   where the measuring board was: its own GNSS if it has one, otherwise tap <b>carry</b> on its
   card while you have it with you. A board's stockpile of ranges comes down when it is back in
   reach, like its packets.<br><br>
@@ -309,10 +310,6 @@ const TEST_TITLES = [
     'A scan costs more antenna time than running an AP.',
 ];
 const CMD_TESTS = 0x90;
-// A board on v7 or older reports a low-contention mode instead: 0 every radio (the AP was up
-// whenever Wi-Fi was), 1..3 one channel, 4 ESP-NOW with the AP for a phone. What each meant, as
-// switches.
-const LC_AS_TESTS = [23, 1, 2, 4, 17];
 const testsTxt = m => TESTS.filter((_, i) => m & (1 << i)).join(' + ') || 'nothing';
 
 // LR, which used to be a super-long button hold and is not any more - the button is down to
@@ -365,7 +362,7 @@ const CMD_PHY_CODED = 0x84, CMD_PHY_2M = 0x85;
 const CMD_STATS_RESET = 0x88;
 
 // "Send me your packet log from here": [0x8C, u32 session, u32 block, u16 offset]. Only ever sent
-// to a v6 board, which then streams its log alongside the report until the link drops. Must
+// once per connection, and the board then streams its log alongside the report until the link drops. Must
 // match RT_CMD_LOG_FROM in main/rt.h; the log format is documented there too.
 const CMD_LOG_FROM = 0x8C;
 const LOG_HDR = 12;
@@ -556,15 +553,9 @@ function disconnect(dev, d) {
 // report's grace, so a row is not flickered out while its own report is still arriving.
 // ---- notification dispatch -----------------------------------------------------------------
 //
-// The board sends a packed binary report (RT_RPT_VER 5). Older firmware sent CSV text lines.
-// Both are still decoded here, and the two can never be confused: a binary chunk starts with a
-// type byte of 0x01 or 0x02, and every CSV line starts with 'S', 'T', 'X' or 'R' - 0x53, 0x54,
-// 0x58, 0x52. So the first byte alone settles it.
-//
-// This matters more than it looks. The old CSV path had a hard ordering requirement: the page
-// had to be redeployed *before* firmware that changed the format was flashed, or the UI
-// silently stopped parsing. Accepting both removes the ordering entirely - flash and deploy in
-// whatever order, and a board that has not been reflashed yet keeps working.
+// Packed binary only, v9 and v10 (RT_RPT_VER in main/rt.h). The first byte is the type: 0x01
+// status chunk, 0x02 rows chunk, 0x03 log, 0x04 a v9 board's FTM rows. Anything older is told to
+// reflash rather than decoded.
 const RST_NAMES = ['unknown', 'power-on', 'sw-restart', 'PANIC', 'INT-WDT', 'TASK-WDT',
                    'WDT', 'BROWNOUT', 'ext-pin', 'deepsleep', 'usb'];
 const PHY_NAMES = ['?', '1M', '2M', 'coded'];
@@ -573,6 +564,7 @@ const PHY_LABELS = ['phy ?', ...['coded', '2M'].flatMap(w =>
   [`phy ${w}`, ...PHY_NAMES.map(g => `phy ${w} (${g})`)])];
 // 'ap' is another board's AP as heard by this board's Wi-Fi scan (ap scan), a v10 row kind.
 const CH_NAMES  = ['espnow', 'ble_adv', '154', 'ap'];
+const RPT_MIN = 9, RPT_MAX = 10;
 
 function onNotify(d, view) {
   d.seen = Date.now();
@@ -580,9 +572,10 @@ function onNotify(d, view) {
   if (t === 0x01 || t === 0x02) return onChunk(d, view);
   if (t === 0x03) return onLog(d, view);
   if (t === 0x04) return onFtmRows(d, view);
-  // Older firmware: CSV text, one line per notification.
-  for (const line of new TextDecoder().decode(view).split('\n')) {
-    if (line.trim()) onLine(d, line);
+  // Text: firmware from before the binary report.
+  if (!d.oldWarned) {
+    d.oldWarned = true;
+    logMsg(`${labelOf(d.name)}: firmware too old for this page - reflash the board`, true);
   }
 }
 
@@ -594,67 +587,33 @@ const hexId = n => n.toString(16).toUpperCase().padStart(6, '0');
 // Decode one chunk of a packed report. Layout is documented in main/rt.h; every offset here has
 // to match the serialiser in rt_stats.c byte for byte.
 function onChunk(d, v) {
-  const type = v.getUint8(0), gen = v.getUint8(1), last = v.getUint8(3) & 1;
+  const type = v.getUint8(0), gen = v.getUint8(1);
   let o = 4;
 
   if (type === 0x01) {
     const ver = v.getUint8(o);
-    // v5 adds a one-byte LED field after the state byte - the state byte was full at bit7 and
-    // three LED states do not fit in one bit - which shifts every field behind it by one.
-    //
-    // Both are decoded, and the reason is that this bump is unlike the ones before it. v4
-    // changed the packets boards send *each other*, so a mixed pair could not measure
-    // anything and "reflash rather than decode both" cost nothing. The LED changed only what
-    // a board says to a phone: a v4 board and a v5 board still range-test each other exactly
-    // as before. Refusing the older one would mean reflashing every board in the drawer to
-    // change an LED, and the page is the easy end to update - so the page carries the
-    // difference, which is one byte of offset.
-    //
-    // This is the version byte doing the job it exists for. Without it the two layouts would
-    // decode as each other and produce plausible nonsense rather than a named difference.
-    //
-    // v6 appends GNSS and packet-log status to the end of the status block and flags rows whose
-    // peer carries its position; nothing before the tail moves. Unlike v5, v6 boards also send a
-    // longer measurement packet once they have a fix, which a v4/v5 board cannot hear - so the
-    // page reads all three, but a mixed fleet is only whole while nobody has a fix.
-    //
-    // v7 is the same tail two bytes shorter, with positions keyed by seq and a different log.
-    // A v6 board's report is still read; its log is not asked for.
-    //
-    // v8 is v7's layout with the mode byte turned into the test switches, plus FTM rows (their
-    // own notification, 0x04) and an FTM record in the log.
-    // v9: bit 4 of that byte is the AP test, FTM distances are signed, and the FTM notification
-    // opens with what the last scan found.
-    // v10: FTM and AP-scan rows inside the report, temperature and on-air state in the status.
-    if (ver < 4 || ver > 10) {
-      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v10 - ` +
-             (ver < 4 ? 'reflash the board' : 'update the page'), true);
+    // v10 moved FTM rows into the report and added AP-scan rows, temperature and on-air state.
+    if (ver < RPT_MIN || ver > RPT_MAX) {
+      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v${RPT_MIN} to ` +
+             `v${RPT_MAX} - ` + (ver < RPT_MIN ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
     }
     d.rptOk = true;
-    // The byte v5 inserted after the state byte. Every offset past state carries it, so the
-    // two layouts are one variable apart rather than two copies of the same decoder.
-    const S = ver >= 5 ? 1 : 0;
     const node  = u24(v, o + 1);
-    const lc    = v.getUint8(o + 4);
+    const tests = v.getUint8(o + 4);
     const state = v.getUint8(o + 5);
-    // undefined, not 0, on a v4 board: it has no LED to report, which is a different
-    // thing from reporting one that is off.
-    const led   = S ? v.getUint8(o + 6) : undefined;
-    const upMs  = v.getUint32(o + 6 + S, true);
+    const led   = v.getUint8(o + 6);
+    const upMs  = v.getUint32(o + 7, true);
 
-    // Uptime going backwards is the only reliable sign the board reset - it comes back and
-    // reconnects on its own and otherwise says nothing about having lost everything.
-    //
-    // Except that it is not reliable when the board was out of reach for longer than it had been
-    // up: a drone that browns out mid-flight and is reconnected ten minutes later is further
-    // along than it was. v6 carries the log session, which is new on every boot, so a v6 board
-    // is caught either way. Checked here, before the clock offset is touched, because a reboot
-    // missed is a clock offset that is wrong from then on.
+    // Uptime going backwards, or a new log session, is the sign the board reset - it comes back
+    // and reconnects on its own and otherwise says nothing about having lost everything. The
+    // session catches a board that was out of reach for longer than it had been up. Checked
+    // before the clock offset is touched, because a reboot missed is a clock offset that is
+    // wrong from then on.
     const up = Math.floor(upMs / 1000);
-    const sess = ver >= 6 ? v.getUint32(o + 88, true) : undefined;
-    const newLife = sess !== undefined && d.logSt !== undefined && sess !== d.logSt.session;
+    const sess = v.getUint32(o + 88, true);
+    const newLife = d.logSt !== undefined && sess !== d.logSt.session;
     if (d.uptime !== undefined && (up < d.uptime || newLife)) {
       logMsg(`${labelOf(d.name)}: REBOOTED after ${d.uptime}s` +
              (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
@@ -664,13 +623,8 @@ function onChunk(d, v) {
       d.diag = undefined;
     }
 
-    // A new report generation retires the previous one's rows, exactly as the S line used to.
-    // One report's grace, so a row is not flickered out while its own report is still arriving.
-    //
-    // First binary chunk from a board that was talking CSV a moment ago (it has just been
-    // reflashed): drop the old rows outright. Their generation numbers came from the other
-    // path's counter and would never compare as stale against this one's.
-    if (d.genN === undefined) d.rows.clear();
+    // A new report generation retires the previous one's rows. One report's grace, so a row is
+    // not flickered out while its own report is still arriving.
     if (gen !== d.gen) { d.gen = gen; d.genN = (d.genN ?? 0) + 1; }
     for (const [k, r] of d.rows) {
       if (r.gen < d.genN - 1) d.rows.delete(k);
@@ -679,8 +633,7 @@ function onChunk(d, v) {
     d.rptVer  = ver;
     d.node    = hexId(node);
     d.uptime  = up;
-    d.tests   = ver >= 8 ? lc : LC_AS_TESTS[lc] ?? 0;
-    d.legacy  = ver < 8;   // commands still go as the old one-byte modes
+    d.tests   = tests;
     d.lr      = state & 1 ? 1 : 0;
     d.ant     = state & 2 ? 1 : 0;
     d.wifiOn  = state & 4 ? 1 : 0;
@@ -695,23 +648,23 @@ function onChunk(d, v) {
     const candidate = Date.now() - upMs;
     d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
 
-    d.pwr = [v.getInt8(o + 10 + S), v.getInt8(o + 11 + S), v.getInt8(o + 12 + S)];
+    d.pwr = [v.getInt8(o + 11), v.getInt8(o + 12), v.getInt8(o + 13)];
 
     const prev = d.diag;
     d.diag = {
-      rst:     RST_NAMES[v.getUint8(o + 13 + S)] ?? 'unknown',
-      heap:    v.getUint32(o + 14 + S, true),
-      heapMin: v.getUint32(o + 18 + S, true),
-      frames:  v.getUint32(o + 22 + S, true),
-      ours:    v.getUint32(o + 26 + S, true),
-      coex:    v.getUint32(o + 30 + S, true),
+      rst:     RST_NAMES[v.getUint8(o + 14)] ?? 'unknown',
+      heap:    v.getUint32(o + 15, true),
+      heapMin: v.getUint32(o + 19, true),
+      frames:  v.getUint32(o + 23, true),
+      ours:    v.getUint32(o + 27, true),
+      coex:    v.getUint32(o + 31, true),
     };
     if (!prev || prev.rst !== d.diag.rst) {
       logMsg(`${labelOf(d.name)}: last reset was ${d.diag.rst}`,
              /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
     }
 
-    o += 35 + S;   // status fields; tx records follow
+    o += 36;   // status fields; tx records follow
     d.tx = new Map();
     for (let c = 0; c < 3; c++, o += 16) {
       d.tx.set(CH_NAMES[c], {
@@ -723,19 +676,16 @@ function onChunk(d, v) {
       });
     }
 
-    if (ver >= 6) {
-      const gb = v.getUint8(o);
-      d.gnss = { state: gb & 3, had: !!(gb & 4), mode: (gb >> 3) & 3, sats: v.getUint8(o + 1),
-                 hdop: v.getUint8(o + 2), baud: v.getUint8(o + 3) * 1200 };
-      d.logSt = { session: v.getUint32(o + 4, true), oldest: v.getUint32(o + 8, true),
-                  newest: v.getUint32(o + 12, true), cap: v.getUint16(o + 16, true),
-                  v6: ver === 6 };
-      o += ver === 6 ? 20 : 18;
-      // Once per connection, and only now: the request carries this page's cursor into the
-      // board's log, and the status just read is what says which log that is. Never to a v6
-      // board, whose log this page no longer reads.
-      if (!d.logAsked && ver >= 7) askLog(d);
-    }
+    const gb = v.getUint8(o);
+    d.gnss = { state: gb & 3, had: !!(gb & 4), mode: (gb >> 3) & 3, sats: v.getUint8(o + 1),
+               hdop: v.getUint8(o + 2), baud: v.getUint8(o + 3) * 1200 };
+    d.logSt = { session: v.getUint32(o + 4, true), oldest: v.getUint32(o + 8, true),
+                newest: v.getUint32(o + 12, true), cap: v.getUint16(o + 16, true) };
+    o += 18;
+    // Once per connection, and only now: the request carries this page's cursor into the
+    // board's log, and the status just read is what says which log that is.
+    if (!d.logAsked) askLog(d);
+
     // v10: temperature, what is actually on the air, and what the last Wi-Fi scan found. FTM
     // rows come in this same report now, so a new report starts their table afresh.
     if (ver >= 10) {
@@ -756,9 +706,9 @@ function onChunk(d, v) {
   if (!d.rptOk) return;
   while (o + 21 <= v.byteLength) {
     const peer = hexId(u24(v, o));
-    const cb   = v.getUint8(o + 3);                  // v6: bit7 = peer carries its position
+    const cb   = v.getUint8(o + 3);                  // bit7 = peer carries its position
     // v10: kind 4 is an FTM row, 21 bytes - see the report format in main/rt.h.
-    if ((cb & 0x7f) === 4 && (d.rptVer ?? 0) >= 10) {
+    if ((cb & 0x7f) === 4) {
       const age = v.getUint16(o + 19, true) * 100;
       (d.ftm ||= new Map()).set(peer, {
         peer, st: v.getUint8(o + 4),
@@ -802,121 +752,27 @@ function onChunk(d, v) {
 const FTM_ST = ['ok', 'unsupported', 'rejected', 'no response', 'fail', 'no valid msmt', 'ended'];
 const ftmSt = s => s === 0xFE ? 'not started' : s === 0xFF ? 'timeout' : FTM_ST[s] ?? `status ${s}`;
 
-// The report's FTM rows (RT_RPT_TYPE_FTM in main/rt.h): one per responder this board has ranged
-// to. Sent after the report they belong to, so they carry its generation, and they are dropped
-// with the rest of a report that has gone stale - see updateCard().
+// A v9 board's FTM rows, in their own notification after the report they belong to: scan status,
+// then one row per responder. v10 carries both inside the report instead.
 function onFtmRows(d, v) {
-  if (!d.rptOk || v.byteLength < 4) return;
+  if (!d.rptOk || v.byteLength < 12) return;
   const n = v.getUint8(2);
   d.ftm = new Map();
   d.ftmGen = d.genN ?? 0;
-  // v9 opens with what the last scan found, and carries distances signed. A v8 board sent them
-  // unsigned, and wrapped anything below zero round to kilometres.
-  const v9 = (d.rptVer ?? 0) >= 9;
-  let o = 4;
-  if (v9 && v.byteLength >= 12) {
-    const age = v.getUint16(8, true);
-    d.ftmScan = { on: !!(v.getUint8(3) & 1), aps: v.getUint8(4), ours: v.getUint8(5),
-                  noftm: v.getUint8(6), known: v.getUint8(7),
-                  age: age === 0xFFFF ? undefined : age / 10 };
-    o = 12;
-  }
-  const d16 = k => (v9 ? v.getInt16(k, true) : v.getUint16(k, true)) / 10;
-  for (let i = 0; i < n && o + 20 <= v.byteLength; i++, o += 20) {
+  const sage = v.getUint16(8, true);
+  d.ftmScan = { on: !!(v.getUint8(3) & 1), aps: v.getUint8(4), ours: v.getUint8(5),
+                noftm: v.getUint8(6), known: v.getUint8(7),
+                age: sage === 0xFFFF ? undefined : sage / 10 };
+  for (let i = 0, o = 12; i < n && o + 20 <= v.byteLength; i++, o += 20) {
     const peer = hexId(u24(v, o));
     const age = v.getUint16(o + 18, true) * 100;
     d.ftm.set(peer, {
       peer, st: v.getUint8(o + 3),
-      dist: d16(o + 4), avg: d16(o + 6),
+      dist: v.getInt16(o + 4, true) / 10, avg: v.getInt16(o + 6, true) / 10,
       rssi: v.getInt8(o + 8), pdr: v.getInt8(o + 9),
       ok: v.getUint32(o + 10, true), fail: v.getUint32(o + 14, true),
       age, abs: (d.boardMs ?? 0) - age,
     });
-  }
-  scheduleRender();
-}
-
-function onLine(d, line) {
-  const f = line.trim().split(',');
-  d.seen = Date.now();
-
-  if (f[0] === 'S') {
-    const up = +f[2];
-    // Uptime going backwards is the only reliable sign a board reset - it comes back on its
-    // own, reconnects on its own, and otherwise says nothing about having lost everything.
-    if (d.uptime !== undefined && up < d.uptime) {
-      logMsg(`${labelOf(d.name)}: REBOOTED after ${d.uptime}s` +
-             (d.diag ? ` - reason on next report, previous was ${d.diag.rst}` : ''), true);
-      d.rebootAt = Date.now();
-      d.reboots = (d.reboots ?? 0) + 1;
-      d.offset = undefined;   // board clock restarted; re-learn it
-      // Force the reset reason to be re-logged: it is the single most useful thing to know
-      // right now, and it may well have changed.
-      d.diag = undefined;
-    }
-    d.gen = (d.gen ?? 0) + 1;
-    for (const [k, r] of d.rows) {
-      if (r.gen < d.gen - 1) d.rows.delete(k);
-    }
-
-    d.node = f[1]; d.uptime = up; d.tests = LC_AS_TESTS[+f[3]] ?? 0; d.legacy = true;
-    d.lr = +f[4];
-
-    // The board's own millisecond clock at the instant it took this snapshot. Every age in
-    // this report is measured against it, so keeping it lets ages be computed on the board's
-    // timebase rather than on arrival times.
-    //
-    // offset converts board time to browser time. It is a running *minimum* because transit
-    // delay is always positive and never negative: the smallest (arrival - boardMs) ever seen
-    // is the one with the least delay, and therefore the best estimate. Taking the latest
-    // instead would make every age jitter by however long that particular report took to
-    // cross - which, spread over several connection events at 350-500ms each, is the seconds
-    // of wander that made the ticking uneven.
-    if (f.length > 9) {
-      d.boardMs = +f[9];
-      const candidate = Date.now() - d.boardMs;
-      d.offset = d.offset === undefined ? candidate : Math.min(d.offset, candidate);
-    }
-    // Achieved dBm per radio, in CH_ order - what the radio reported back, not what was asked
-    // for. Absent on firmware older than the power work; left undefined rather than defaulted.
-    if (f.length > 7) d.pwr = [+f[5], +f[6], +f[7]];
-    // Absent on firmware older than the antenna work; undefined rather than assumed internal.
-    if (f.length > 8) d.ant = +f[8];
-  } else if (f[0] === 'R') {
-    // R,peer,chan,rssi,avg,min,max,pdrNow,pdrAll,rx,miss,ageMs
-    putRow(d, f[1] + '/' + f[2], {
-      peer: f[1], ch: f[2], rssi: +f[3], avg: +f[4], min: +f[5], max: +f[6],
-      pdrNow: +f[7], pdrAll: +f[8], rx: +f[9], miss: +f[10], age: +f[11],
-      snr: f.length > 12 ? +f[12] : -128,
-      lqi: f.length > 13 ? +f[13] : -1,
-      // The far end's own transmit power, carried in every packet. loss = ptx - rssi is the
-      // end-to-end path loss, which is what to compare against free-space for the distance -
-      // and unlike rssi it does not move when either side changes power.
-      ptx: f.length > 14 ? +f[14] : undefined,
-      gen: d.gen ?? 0,
-      // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
-      // so its age is a straight subtraction from "now" and cannot drift with arrival times.
-      abs: (d.boardMs ?? 0) - (+f[11]),
-    });
-  } else if (f[0] === 'T') {
-    // T,chan,queued,ok,rejected,offmode
-    (d.tx ||= new Map()).set(f[1], {
-      queued: +f[2], ok: +f[3], rejected: +f[4], offmode: +f[5],
-      offmodeAge: f.length > 6 ? +f[6] : undefined,
-    });
-  } else if (f[0] === 'X') {
-    // X,resetReason,heapFree,heapMin,rx154frames,rx154ours,coexRefused
-    const prev = d.diag;
-    d.diag = {
-      rst: f[1], heap: +f[2], heapMin: +f[3],
-      frames: +f[4], ours: +f[5], coex: +f[6],
-    };
-    // The board reports why it last reset in every report, so the page learns it the moment it
-    // connects - no need to have been watching serial when it booted.
-    if (!prev || prev.rst !== d.diag.rst) {
-      logMsg(`${labelOf(d.name)}: last reset was ${d.diag.rst}`,
-             /PANIC|WDT|BROWNOUT/.test(d.diag.rst));
-    }
   }
   scheduleRender();
 }
@@ -1585,8 +1441,7 @@ function parseBlock(d, bn, b) {
       const tB = b2t(d, P.clk);
       if (tB !== undefined) {
         ftmPut({ t: tB, dev: d.name, peer: hexId(u24(dv, o + 2)), st: u[o + 5],
-                 dist: ((d.rptVer ?? 0) >= 9 ? dv.getInt16(o + 6, true)
-                                             : dv.getUint16(o + 6, true)) / 10,
+                 dist: dv.getInt16(o + 6, true) / 10,
                  rssi: dv.getInt8(o + 8) });
       }
     } else if (t === 0x04) {
@@ -3694,12 +3549,16 @@ function ftmLowest(dev, peer) {
   return lo;
 }
 
-function setFtmCal(dev, peer, m) {
+// The zero button's last tap, for telling a second tap (reset) from a first - see the card.
+const ZERO_RETAP_MS = 4000;
+const zeroTap = { k: undefined, t: 0 };
+
+function setFtmCal(dev, peer, m, how) {
   const k = idOf(dev) + '>' + idOf(peer);
   if (m === undefined) delete ftmOff[k]; else ftmOff[k] = Math.round(m * 10) / 10;
   try { localStorage.setItem(FTM_OFF_KEY, JSON.stringify(ftmOff)); } catch (e) { /* fine */ }
   logMsg(m === undefined ? `ftm ${labelOf(dev)}→${labelOf(peer)}: zero cleared`
-                         : `ftm ${labelOf(dev)}→${labelOf(peer)}: zeroed, ${ftmOff[k]} m taken off`);
+                         : `ftm ${labelOf(dev)}→${labelOf(peer)}: zeroed${how ? ` (${how})` : ''}, ${ftmOff[k]} m taken off`);
   ftmRev++;
   srcBuiltRev = -1;
   render();
@@ -5067,8 +4926,7 @@ function buildCard(d) {
   R.led = document.createElement('button');
   R.led.title = 'The board’s LED (GPIO15): cycles off, on, 2Hz blink. Off at boot and never ' +
                 'remembered - a power cycle always puts it out. Costs no airtime and breaks ' +
-                'nothing, so the board’s button deliberately leaves it alone. Boards on the ' +
-                'older v4 report have no LED control at all - reflash to get it.';
+                'nothing, so the board’s button deliberately leaves it alone.';
   // Cycles, but sends the state it is cycling to rather than a "next" byte - see CMD_LED_*.
   // A board whose state has not arrived yet starts the cycle at "on", which is what an
   // unanswered press most likely meant.
@@ -5170,9 +5028,17 @@ function buildCard(d) {
   R.body.onclick = ev => {
     const z = ev.target.closest('[data-zero]');
     if (z) {
-      const peer = z.dataset.zero;
-      return setFtmCal(d.name, peer,
-                       ftmCal(d.name, peer) ? undefined : ftmLowest(d.name, peer) ?? +z.dataset.avg);
+      // Tap: the lower of the stored zero and the shortest distance seen this session, so the
+      // zero only ever improves and survives reloads. A second tap soon after: this session's
+      // shortest alone (or no zero, if there is none), for when the stored one was bad.
+      const peer = z.dataset.zero, k = idOf(d.name) + '>' + idOf(peer);
+      const lo = ftmLowest(d.name, peer) ?? +z.dataset.avg;
+      if (zeroTap.k === k && Date.now() - zeroTap.t < ZERO_RETAP_MS) {
+        zeroTap.k = undefined;
+        return setFtmCal(d.name, peer, ftmLowest(d.name, peer), 'reset to this session');
+      }
+      zeroTap.k = k; zeroTap.t = Date.now();
+      return setFtmCal(d.name, peer, k in ftmOff ? Math.min(ftmOff[k], lo) : lo);
     }
     const t = ev.target.closest('.peer');
     if (t) renameBoard(t.dataset.id);
@@ -5191,11 +5057,6 @@ function buildCard(d) {
 const TEST_PENDING_MS = 3000;
 
 function flipTest(d, i) {
-  if (d.legacy) {
-    // v7 and older take one-byte modes: every radio, or one channel alone, and no FTM.
-    if (i > 2) return fail(`${labelOf(d.name)}: that firmware has no ${TESTS[i]} - reflash it`);
-    return cmd(d, (d.tests ?? 0) === 1 << i ? 0 : i + 1);
-  }
   const base = d.testsWant !== undefined && Date.now() - d.testsWantAt < TEST_PENDING_MS
     ? d.testsWant : d.tests ?? 0;
   d.testsWant = base ^ (1 << i);
@@ -5292,8 +5153,7 @@ function updateCard(d) {
     (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
     `up ${d.uptime ?? '?'}s` +
     (d.temp !== undefined ? ` · chip <b class="${d.temp >= 70 ? 'bad' : d.temp >= 55 ? 'warn' : 'dim'}">${d.temp}°C</b>` : '') +
-    ` · testing: <b>${esc(testsTxt(d.tests ?? 0))}</b>` +
-    (d.legacy ? ' · <b class="warn">old firmware: one test at a time</b>' : '') + '<br />' +
+    ` · testing: <b>${esc(testsTxt(d.tests ?? 0))}</b><br />` +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
     'report <b class="fresh"></b>';
   R.fresh = R.meta.querySelector('.fresh');
@@ -5308,7 +5168,6 @@ function updateCard(d) {
     const want = d.testsWant === undefined ? on : !!(d.testsWant & (1 << i));
     b.className = on ? 'on' : '';
     setLab(b, [TESTS[i], TESTS[i] + ' …'], TESTS[i] + (want !== on ? ' …' : ''));
-    b.disabled = !!d.legacy && i > 2;
   });
   const carried = carrying(d.name);
   setLab(R.carry, ['carry', 'carried', 'put down'],
@@ -5325,12 +5184,7 @@ function updateCard(d) {
                     : d.txMute ? 'espnow+154 tx muted' : 'espnow+154 tx on');
   R.txm.className = d.txMute ? 'on' : '';
 
-  // A v4 board has no LED to command, so the button says so rather than offering a press the
-  // firmware would ignore. Nothing else on the row does this, because nothing else is missing
-  // from v4 - and once every board is reflashed this condition is simply never true.
-  R.led.disabled = d.rptVer !== undefined && d.rptVer < 5;
-  setLab(R.led, ['led n/a', 'led ?', ...LED_NAMES],
-         R.led.disabled ? 'led n/a' : (LED_NAMES[d.led] ?? 'led ?'));
+  setLab(R.led, ['led ?', ...LED_NAMES], LED_NAMES[d.led] ?? 'led ?');
   R.led.className = d.led ? 'on' : '';
 
   // Only where there is a GNSS to speak of: a board that has never seen NMEA has nothing to set.
@@ -5436,9 +5290,7 @@ function updateCard(d) {
   }
   if (d.logSt) {
     const L = d.logSt;
-    if (L.v6) {
-      diag.push('<span class="ch">log</span> <b class="warn">v6 firmware - reflash to fetch its log</b>');
-    } else if (!L.cap) {
+    if (!L.cap) {
       diag.push('<span class="ch">log</span> <b class="warn">none - no memory for one</b>');
     } else {
       const held = L.newest - L.oldest + 1;
@@ -5478,11 +5330,11 @@ function updateCard(d) {
       `<span class="peer nameable ${nameOf(f.peer) ? '' : 'dim'}" data-id="${esc(f.peer)}" ` +
       `title="Click to name this board">${esc(labelOf(f.peer))}</span>` +
       (f.st ? ` <span class="bad" title="How the last session ended">${esc(ftmSt(f.st))}</span>` : '') +
-      // Zero: on the shortest distance seen between the pair - see ftmLowest().
+      // Zero: the shortest distance seen between the pair - see the click handler.
       (f.ok ? `<button class="mini${cal ? ' on' : ''}" data-zero="${esc(f.peer)}" ` +
-              `data-avg="${f.avg}" title="${cal ? 'Zeroed (' + cal + ' m). Tap to clear.'
-              : 'Zero this pair on the shortest distance seen between them this session - they are ' +
-                'never closer than touching, so that is the offset. Kept in this browser.'}">0</button>` : '') +
+              `data-avg="${f.avg}" title="${cal ? 'Zeroed (' + cal + ' m). Tap to take any shorter distance seen since; tap twice to zero on this session only.'
+              : 'Zero this pair on the shortest distance seen between them - they are ' +
+                'never closer than touching, so that is the offset. Kept in this browser, and only ever lowered by later taps.'}">0</button>` : '') +
       '</td>' +
       `<td class="big" title="${raw}">${f.ok ? (f.dist - cal).toFixed(1) + '<span class="dim">m</span>' : '–'}</td>` +
       `<td class="dim" title="${raw}">${f.ok ? (f.avg - cal).toFixed(1) : '–'}</td>` +
