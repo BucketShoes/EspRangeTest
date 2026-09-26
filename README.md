@@ -62,12 +62,21 @@ switch (`RT_TEST_*` in `main/rt.h`), set from the phone, and all of them are off
 A switch turns off everything its radio does on its own schedule, not just its packets: with no
 Wi-Fi test on the Wi-Fi driver stops; without `ap` or `ftm resp` there is no AP (the driver runs
 station-only for `espnow`, `ftm` or `ap scan`); with `ble_adv` off the coded scanner stops; with
-`154` off its receiver sleeps. The report carries an **on air** line — on the card and in the
-serial report — along with the chip temperature. It is what each driver says it has running at
-the moment of the report (the AP up, the coded scanner started, the 802.15.4 receiver not asleep),
-not a measurement: nothing on this chip reports actual rx or tx time, so it cannot catch a radio
-that listens while its driver says it is stopped. Current draw is the real measure — see the
-bring-up ladder below for splitting it by radio.
+`154` off the 802.15.4 radio is disabled outright, not just asleep.
+
+That last part, and BLE modem sleep (`CONFIG_BT_LE_SLEEP_ENABLE` in `sdkconfig.defaults`), are
+about the RF itself rather than any radio's traffic. The C6's radios share one RF, and each
+driver holds it powered while it is enabled unless it has a way to let go: without power
+management built in, a sleeping 802.15.4 radio never lets go, and a BLE controller without
+modem sleep never does either. A held RF draws near receiver current whether anything is
+received or not. See the comments beside each for the driver source that shows it.
+
+The report carries an **on air** line — on the card and in the serial report — along with the
+chip temperature. It is what each driver says it has running at the moment of the report (the
+AP up, the coded scanner started, the 802.15.4 radio enabled), not a measurement: nothing on
+this chip reports actual rx or tx time, so it cannot catch a radio that listens while its
+driver says it is stopped. Current draw is the real measure — see the bring-up ladder below for
+splitting it by radio.
 
 A station on its own does not doze and miss ESP-NOW frames: `esp_now_set_wake_window()`
 defaults to always awake, and nothing here changes it.
@@ -75,9 +84,11 @@ defaults to always awake, and nothing here changes it.
 LR applies to the station and the AP together — with it on, the AP is LR too and phones cannot
 see it. FTM has not been tried with LR on yet; that is what the toggle is for.
 
-The BLE link to the phone is **not** a test and has no switch — it is always on. It runs slow
-(long advert and connection intervals) while some test other than `ble_adv` is on, to hand that
-test the antenna, and fast otherwise. See `UI_SLOW()` in `main/rt_ui.c`.
+Control links are **not** tests and have no switch. BLE to the phone is the only one built so
+far; a Wi-Fi one (websockets) is meant to follow, so control is not meant to depend on BLE. The
+BLE link is always on. It yields — long advert and connection intervals — while some test other
+than `ble_adv` is on, to hand that test the antenna, and runs at full rate (short intervals)
+otherwise; the on-air line says which. See `UI_SLOW()` in `main/rt_ui.c`.
 
 ## GPIO9
 
@@ -257,6 +268,33 @@ Chrome only. Its scanner cannot see extended or coded adverts, which is why the 
 separate plain legacy advert just for the browser — that one is not a measurement, it's the
 window onto the measurements. On connect the board asks to move the phone link to coded S=8
 and logs whether the phone accepted.
+
+### On the map
+
+- **Range walk** — drop one board, tap **set base** where you left it, turn on **GPS**, and walk.
+  Every packet is pinned to where you were standing when it arrived, so bare track is ground
+  where nothing got through.
+- **GNSS boards** draw their own track, and every packet to or from one is pinned to where *it*
+  was. Connect to any board — the one with the GNSS or one that heard it — and the track fills
+  in from whatever each has seen; a board that was out of reach sends what it stockpiled once
+  you reconnect.
+- **field** turns one link into a coverage map: pick the two boards, the protocol and a stretch
+  of time when nothing but position changed, and the packets heard and missed are spread into
+  colour between and around where they landed. **trace** lays what it was made from over the
+  top; **bearing** lets a walk out in one direction stand in for the others.
+- Colour covers everything it can reach. The white line rings ground that was actually
+  measured, the fainter one ground a measurement reached; outside both, the colour is the
+  nearest reading carried over, and worth no more than that. **cells** draws the averages
+  themselves, over the ground they cover and no further. **losses count** keeps a stretch where
+  nothing got through from reading as no data: those packets count as readings at the floor.
+- The **fit** row (off by default) fits signal against range and draws the map through it, so a
+  few spokes describe a whole disc. **height** takes out how high a GNSS end was flying — low
+  down the ground itself is in the way — and the **at** slider says which height the map
+  answers for. **leftovers** shows only what the fit could not explain, which is where hills
+  are; on **delivery** that is the clearest shadow map there is, since a dead link reports no
+  signal and only the packets that never arrived can show it.
+- **FTM** — see [Wi-Fi scan: `ap scan` and FTM](#wi-fi-scan-ap-scan-and-ftm) for rings, zeroing
+  and **carry**.
 
 ## Not done yet
 

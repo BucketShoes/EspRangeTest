@@ -97,17 +97,27 @@ The owner's framing, which supersedes "low contention" as the organising idea:
 - **FTM travels in the one report**, as rows beside the link rows (v10). v9 sent it as a
   separate notification, which is extra control-link antenna time - what the owner does not
   want. Two boards still fit a single notification.
-- **Heat, reported the next day**: boards ran hotter at idle than before, too hot to touch, worse
-  with tx power - around 10x the ~25mA expected with every test off, which is what continuous rx
-  looks like. The expectation: with every test off only the UI adverts and the control link run,
-  so the radio should be idle but for a few ms each BLE interval. Reading the code (not measuring)
-  found every radio's off path apparently in place and the RF switch code (GPIO3/14) unchanged;
-  what reading cannot see is exactly the suspect - a radio that keeps receiving with no transmit
-  call anywhere near it, the way an AP does. Airtime that was found was all FTM (every board a
-  responder in v8/v9, back-to-back sessions, active scans drawing probe responses); now passive,
-  a 1-2s gap, responder only under `ftm resp`. Unresolved until measured on the boards: the
-  report's chip temperature, and current per `RT_STAGE` rung. The "on air" line is each
-  driver's own flags at report time - not an rx/tx measurement, which this chip does not offer.
+- **Heat, reported the next day**: boards ran hot at idle, too hot to touch, worse with tx power.
+  Measured after the first round of changes: ~120mA average from boot with every test off
+  (expected ~25mA), chip at 57C. That is continuous-rx current with nothing meant to be
+  receiving. Reading call sites found nothing, because the cause is not a call: it is the RF
+  hold each driver takes at enable (`esp_phy_enable`). From the IDF 5.5.1 source:
+  - `esp_ieee802154_enable()` takes the hold, and `esp_ieee802154_sleep()` gives it back only
+    when power management and tickless idle are built in (`IEEE802154_RF_DISABLE()` is empty
+    otherwise). So the 154 receiver's "asleep" never powered the RF down. Now: disabled when
+    the test is off, enabled and reconfigured when on.
+  - The C6 BLE controller takes the hold at enable and releases it only from
+    `controller_sleep_cb`, registered only under `CONFIG_BT_LE_SLEEP_ENABLE`. Now on (modem
+    sleep: RF off between BLE events; CPU stays awake, no PM or light sleep).
+  - Wi-Fi releases its hold on `esp_wifi_stop()`, which already runs with no Wi-Fi test on.
+  Not measured yet with the fix. If current is still high, the `RT_STAGE` ladder isolates the
+  radio, and PM + tickless idle is the next step (CPU clock is the remaining floor).
+  Earlier airtime cuts, all FTM, stand: passive scans, a 1-2s gap, responder only under
+  `ftm resp`. The "on air" line is each driver's own flags at report time - not an rx/tx
+  measurement, which this chip does not offer, and blind to an RF hold.
+- **Control is transport-agnostic** (owner): BLE is *a* control link, not *the* one - a Wi-Fi
+  (websockets) one is planned. Report building and commands should not grow BLE-only
+  assumptions; the BLE side's fast/slow is labelled as BLE's.
 - **Tap cycle is range candidates only** (espnow, ble_adv, 154, ap): FTM and the scan cannot
   answer "what gives the best practical range at 90% PER or below", so they are page-only.
 - **The page decodes v9 and v10 only**; older firmware is told to reflash. The owner reflashes
