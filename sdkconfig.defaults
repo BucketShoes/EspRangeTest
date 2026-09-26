@@ -111,6 +111,13 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # default 23-byte ATT MTU would truncate them, so ask for a large one up front.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
 
+# BLE modem sleep: the controller gives the shared RF back between its events. Without it the
+# controller takes the RF at enable and never lets go (controller_sleep_cb is only registered
+# under this option - bt/controller/esp32c6/bt.c), so the RF sits powered, near receiver
+# current, the whole time the board is up. No power management or light sleep: the CPU stays
+# awake, only the radio sleeps between advert and connection events.
+CONFIG_BT_LE_SLEEP_ENABLE=y
+
 # 802.11mc FTM. Without this the driver is built without FTM, and the SoftAP's
 # ftm_responder = true in main.c is silently ignored. Initiator and responder support both
 # default on once this is set. (Errata WIFI-9686 says C6 initiator is broken; see CONTEXT.md.)

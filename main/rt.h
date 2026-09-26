@@ -52,7 +52,8 @@ extern const char *rt_chan_name[CH_COUNT];
 // actually used: one thing under test, or a chosen few running together because that is how
 // they will be flown (802.15.4 to get close, FTM for the last stretch, say).
 //
-// The BLE control link is not a test and has no switch. It is always on, in every combination,
+// A control link is not a test and has no switch. BLE is the one built so far - there is meant to
+// be a Wi-Fi one too, so nothing about control belongs to BLE alone. It is always on, in every combination,
 // and everything here is arranged around keeping it that way.
 //
 // Each bit means everything its radio does on its own schedule, not just its packets:
@@ -777,7 +778,7 @@ void rt_report(void);
 //     u8  radios        what is actually using the antenna right now, whatever the switches say:
 //                       bit0 Wi-Fi driver up, bit1 SoftAP up, bit2 SoftAP answering FTM,
 //                       bit3 coded beacon on, bit4 coded scanner on, bit5 scanner continuous
-//                       (else 40%), bit6 802.15.4 receiver on, bit7 control link slowed
+//                       (else 40%), bit6 802.15.4 receiver on, bit7 BLE control link slowed
 //     u8  scan_aps      APs the last Wi-Fi scan heard, any
 //     u8  scan_ours     of them ours (ESPRT- SSIDs)
 //     u8  scan_ftm      of those, advertising the FTM responder bit

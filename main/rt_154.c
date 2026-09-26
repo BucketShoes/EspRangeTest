@@ -215,20 +215,31 @@ static bool transmit_with_retries(uint8_t *frame)
     return false;
 }
 
-// The receiver is a mode-level thing too, not just the transmitter.
+// The receiver is a mode-level thing too, not just the transmitter - and so is the RF itself.
 //
-// This radio is configured rx_when_idle at startup and, until now, was never told to stop - so
-// in modes without 802.15.4 the receiver stayed on
-// continuously while the report claimed the channel was off. A receiver is not free: this one
-// is a 100%-duty claim on the antenna, and it sits at the bottom of the coex arbiter, so it
-// spent those modes losing every arbitration and taking time from the channel actually under
-// test. It is exactly the fault this project already fixed twice - once for the BLE scanner,
-// once for the Wi-Fi driver - in the one radio nobody went back to check.
+// Sleeping the radio is not enough. esp_ieee802154_enable() takes a hold on the shared PHY
+// (esp_phy_enable), and esp_ieee802154_sleep() only gives it back when power management and
+// tickless idle are built in (IEEE802154_RF_DISABLE() in the driver's esp_ieee802154_util.h is
+// empty otherwise). They are not, so a "sleeping" 802.15.4 kept the RF powered for good - near
+// receiver current, all the time, on a board with every test off. So off means disabled, and
+// on means enabled and configured from scratch (enable resets the driver's settings).
 //
 // Driven from tx_task rather than from rt_set_tests(), so every radio call in this file happens on
 // one task. Costs up to one TX_PERIOD_MS of latency on a mode change, which is a deliberate,
 // operator-commanded event.
-static bool s_rx_on = true;
+static bool s_rx_on;
+
+static void radio_up(void)
+{
+    RT_TRY(TAG, esp_ieee802154_enable());
+    RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
+    rt_154_apply_power();
+    RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
+    RT_TRY(TAG, esp_ieee802154_set_short_address((uint16_t)rt_node_id()));
+    RT_TRY(TAG, esp_ieee802154_set_promiscuous(true));  // hear everything, filter in rt_rx
+    RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(true));
+    RT_TRY(TAG, esp_ieee802154_receive());
+}
 
 static void apply_rx_gate(void)
 {
@@ -237,14 +248,12 @@ static void apply_rx_gate(void)
         return;
     }
     if (want) {
-        RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(true));
-        RT_TRY(TAG, esp_ieee802154_receive());
+        radio_up();
     } else {
-        RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(false));
-        RT_TRY(TAG, esp_ieee802154_sleep());
+        RT_TRY(TAG, esp_ieee802154_disable());
     }
     s_rx_on = want;
-    ESP_LOGI(TAG, "receiver %s", want ? "on" : "asleep (154 test off)");
+    ESP_LOGI(TAG, "radio %s", want ? "on, receiving" : "disabled (154 test off)");
 }
 
 static void tx_task(void *pv)
@@ -382,15 +391,9 @@ void esp_ieee802154_transmit_failed(const uint8_t *frame, esp_ieee802154_tx_erro
 
 void rt_154_start(void)
 {
-    RT_TRY(TAG, esp_ieee802154_enable());
-    RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
+    // Nothing is enabled here: the radio comes up when the 154 test is switched on - see
+    // apply_rx_gate(). Power is still set, so the report says what it will transmit at.
     rt_154_apply_power();
-    RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
-    RT_TRY(TAG, esp_ieee802154_set_short_address((uint16_t)rt_node_id()));
-    RT_TRY(TAG, esp_ieee802154_set_promiscuous(true));  // hear everything, filter in rt_rx
-    RT_TRY(TAG, esp_ieee802154_set_rx_when_idle(true));
-    RT_TRY(TAG, esp_ieee802154_receive());
-
     xTaskCreate(tx_task, "154_tx", 3072, NULL, 4, NULL);
     ESP_LOGI(TAG, "channel %d, tx every %dms", CHANNEL, TX_PERIOD_MS);
 }
