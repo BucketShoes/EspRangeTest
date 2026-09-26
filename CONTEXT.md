@@ -80,7 +80,7 @@ The owner's framing, which supersedes "low contention" as the organising idea:
 - **Protocols stay 11b (+LR).** The same revision added 11g/n "for FTM"; the owner: FTM is
   802.11mc, uses the AP only to arrange the session, and reaches further than those rates could.
 - **Button restore = boot state**: every test off. The control link then has the antenna to
-  itself, which is the most reconnectable a board can be. Tap steps through single tests for
+  itself, which is the most reconnectable a board can be. Tap steps through the single range candidates for
   bench work without a phone.
 - **FTM initiator**: a passive scan of our own channel finds `ESPRT-` APs advertising the FTM
   responder bit, then ranges to each, one session at a time with a randomised gap - not the
@@ -98,16 +98,26 @@ The owner's framing, which supersedes "low contention" as the organising idea:
   separate notification, which is extra control-link antenna time - what the owner does not
   want. Two boards still fit a single notification.
 - **Heat, reported the next day**: boards ran hotter at idle than before, too hot to touch, worse
-  with tx power. Nothing in the diff since the old everything-on default transmits more with
-  every test off, and the RF switch code (GPIO3/14) is unchanged. What did add airtime was all
-  FTM: every board with Wi-Fi was a responder in v8/v9, sessions ran back to back, and active
-  scans drew probe responses every 5s. Now passive, a 1-2s gap, and the responder only under
-  `ftm resp`. To find the rest on the bench, the report carries the chip temperature and an
-  "on air" set read from each radio's own state, not from the switches.
+  with tx power - around 10x the ~25mA expected with every test off, which is what continuous rx
+  looks like. The expectation: with every test off only the UI adverts and the control link run,
+  so the radio should be idle but for a few ms each BLE interval. Reading the code (not measuring)
+  found every radio's off path apparently in place and the RF switch code (GPIO3/14) unchanged;
+  what reading cannot see is exactly the suspect - a radio that keeps receiving with no transmit
+  call anywhere near it, the way an AP does. Airtime that was found was all FTM (every board a
+  responder in v8/v9, back-to-back sessions, active scans drawing probe responses); now passive,
+  a 1-2s gap, responder only under `ftm resp`. Unresolved until measured on the boards: the
+  report's chip temperature, and current per `RT_STAGE` rung. The "on air" line is each
+  driver's own flags at report time - not an rx/tx measurement, which this chip does not offer.
+- **Tap cycle is range candidates only** (espnow, ble_adv, 154, ap): FTM and the scan cannot
+  answer "what gives the best practical range at 90% PER or below", so they are page-only.
+- **The page decodes v9 and v10 only**; older firmware is told to reflash. The owner reflashes
+  every board before testing, so decoding old formats was only complexity.
 - **FTM distances are signed.** `dist_est` is declared unsigned, but uncalibrated FTM goes below
   zero close up, and v8 turned that into kilometre rings. Zeroing is per pair, on the page, on
-  the shortest distance seen between them this session (they are never closer than touching, so
-  below zero is always wrong), kept in the browser; the raw figure is what is recorded. Rings
+  the shortest distance ever seen between them (they are never closer than touching, so below
+  zero is always wrong): a tap takes the lower of the stored zero and this session's shortest,
+  so a zero only improves and survives reloads; two taps start again from this session. The raw
+  figure is what is recorded. Rings
   are drawn at the absolute value of whatever is left.
 - **On the map**, a range is a hairline ring at ~20% opacity round where the initiator was, so
   agreeing rings pile up into a bright spot; a best-fit cross is drawn once rings come from more

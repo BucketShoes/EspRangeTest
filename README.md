@@ -62,9 +62,12 @@ switch (`RT_TEST_*` in `main/rt.h`), set from the phone, and all of them are off
 A switch turns off everything its radio does on its own schedule, not just its packets: with no
 Wi-Fi test on the Wi-Fi driver stops; without `ap` or `ftm resp` there is no AP (the driver runs
 station-only for `espnow`, `ftm` or `ap scan`); with `ble_adv` off the coded scanner stops; with
-`154` off its receiver sleeps. The report says what is actually on the air, from each radio's own
-state — the **on air** line on the card and in the serial report — along with the chip
-temperature.
+`154` off its receiver sleeps. The report carries an **on air** line — on the card and in the
+serial report — along with the chip temperature. It is what each driver says it has running at
+the moment of the report (the AP up, the coded scanner started, the 802.15.4 receiver not asleep),
+not a measurement: nothing on this chip reports actual rx or tx time, so it cannot catch a radio
+that listens while its driver says it is stopped. Current draw is the real measure — see the
+bring-up ladder below for splitting it by radio.
 
 A station on its own does not doze and miss ESP-NOW frames: `esp_now_set_wake_window()`
 defaults to always awake, and nothing here changes it.
@@ -78,8 +81,8 @@ test the antenna, and fast otherwise. See `UI_SLOW()` in `main/rt_ui.c`.
 
 ## GPIO9
 
-- **tap** — step through the tests one at a time: none → espnow → ble_adv → 154 → ftm → ap →
-  ftm resp → ap scan → none. For a bench without a phone; combinations are set from the page. A
+- **tap** — step through the range candidates one at a time: none → espnow → ble_adv → 154 → ap →
+  none. FTM and the Wi-Fi scan are not range candidates, so they are page-only, as are combinations. A
   tap on a combination clears it.
 - **hold** — restore: every test off, LR off, control link back on coded PHY, tx unmuted —
   exactly as booted.
@@ -111,9 +114,10 @@ FTM — so an empty table says why. AP and FTM rows travel in the same report no
 everything else.
 
 Distances are signed; uncalibrated FTM reads with an offset, below zero close up. The **0**
-button on a card's FTM row zeroes that pair on the shortest distance the page has seen between
-them — they are never closer than touching — and keeps it in this browser. The raw distance stays
-in the records and the export, with the zero beside it.
+button on a card's FTM row zeroes that pair on the shortest distance ever seen between them —
+they are never closer than touching — kept in this browser: a tap takes the lower of the stored
+zero and this session's shortest, so it only ever improves. Tap twice to start again from this
+session alone. The raw distance stays in the records and the export, with the zero beside it.
 
 On the page each range is a faint ring round where it was measured from, drawn at its absolute
 size (**rings** shows and hides them); where they agree is where the other board is, and once they
@@ -194,6 +198,11 @@ stage names the layer that broke it. **If even stage 0 fails, the problem is bui
 configuration, not radio code** — every failure on this project so far has been in that
 layer: console routed to the wrong USB socket, an app partition smaller than the image, and a
 flash/MMU page size mismatch between what PlatformIO set and what ESP-IDF derived.
+
+The same ladder splits idle current by radio. With every test off, each stage should add only
+what its radio does while idle; a stage that adds a receiver's worth of current (or heat) is the
+one holding a radio on. Stage 0 is the floor: no radio, and no power management, so the CPU
+never sleeps.
 
 After changing anything in `sdkconfig.defaults` or `partitions.csv`, run
 `pio run -e devkitm -t fullclean` first — the bootloader is built from the same config, and a
