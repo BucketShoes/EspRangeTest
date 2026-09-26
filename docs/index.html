@@ -188,15 +188,18 @@
   its own, or a few together the way they will be used. The Bluetooth link to this page is not a
   test and stays on; the more tests share the antenna with it, the slower it gets. Holding a
   board's button turns every test off again.<br><br>
-  <b>ftm</b> on a board ranges to every other board with <b>ap</b> on. Each range is a faint
+  <b>ftm</b> on a board ranges to every other board with <b>ftm resp</b> on. Each range is a faint
   ring on the map round where it was measured from (<b>rings</b> shows and hides them), and
   where the rings agree is where the other board is; once they come from more than one spot a
   cross marks the best fit. Each range is also a mark like a packet, so <b>ftm distance</b>,
   its RSSI and its success rate can be drawn as ticks beside any other link - and so can
-  <b>height</b>. FTM reads with an offset until zeroed: with the two boards side by side, tap
-  the <b>0</b> on that FTM row. The rings need to know where the measuring board was: its own
-  GNSS if it has one, otherwise tap <b>carry</b> on its card while you have it with you. A
-  board's stockpile of ranges comes down when it is back in reach, like its packets.<br><br>
+  <b>height</b>. FTM reads with an offset until zeroed: bring the two boards together once, then tap
+  the <b>0</b> on that FTM row - it zeroes on the shortest distance seen. The rings need to know
+  where the measuring board was: its own GNSS if it has one, otherwise tap <b>carry</b> on its
+  card while you have it with you. A board's stockpile of ranges comes down when it is back in
+  reach, like its packets.<br><br>
+  <b>ap scan</b> listens for other boards' APs - any with <b>ap</b> or <b>ftm resp</b> on - and
+  shows each as a link like a packet one, heard or missed each scan, under <b>ap</b>.<br><br>
   For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
   and walk. Every packet gets pinned to where you were standing when it arrived, so bare
   track is ground where nothing got through.<br><br>
@@ -290,16 +293,20 @@ const CMD = '9c7a0003-1b2c-4a7e-9a1e-5f6b2c3d4e5f';
 // boot and the board's button restore turns them all off; the BLE link this page talks over is
 // not one of them and is never off. Written as the whole set in one command, [0x90, mask], so a
 // lost or repeated write cannot leave a switch the wrong way round.
-const TESTS = ['espnow', 'ble_adv', '154', 'ftm', 'ap'];
+const TESTS = ['espnow', 'ble_adv', '154', 'ftm', 'ap', 'ftm resp', 'ap scan'];
 const TEST_TITLES = [
   'ESP-NOW packets out and in, station side only. Brings the Wi-Fi driver up.',
   'The coded-PHY beacon and scanner. The scanner listens continuously when this is the only ' +
     'test on, and shares the antenna when it is not.',
   '802.15.4 frames out, and the receiver on.',
-  'FTM initiator: finds other boards’ APs and ranges to them one after another. Brings the ' +
-    'Wi-Fi driver up, station side only - the boards it ranges to need ap on.',
-  'The Wi-Fi AP: beaconing, listening, and visible to a phone while LR is off. It is also the ' +
-    'FTM responder, so a board that others should range to needs this on.',
+  'FTM initiator: finds other boards with ftm resp on and ranges to them one after another. ' +
+    'Brings the Wi-Fi driver up, station side only.',
+  'The Wi-Fi AP: beaconing, listening, and visible to a phone while LR is off. What ap scan on ' +
+    'another board measures. Does not answer FTM.',
+  'The Wi-Fi AP, answering FTM - for a board others should range to. Separate from ap because ' +
+    'being ranged costs antenna time of its own.',
+  'Scans for other boards’ APs and reports each as a link, heard or missed, like packets. ' +
+    'A scan costs more antenna time than running an AP.',
 ];
 const CMD_TESTS = 0x90;
 // A board on v7 or older reports a low-contention mode instead: 0 every radio (the AP was up
@@ -564,7 +571,8 @@ const PHY_NAMES = ['?', '1M', '2M', 'coded'];
 // Everything the control-link PHY button can say, so it can be sized for the longest.
 const PHY_LABELS = ['phy ?', ...['coded', '2M'].flatMap(w =>
   [`phy ${w}`, ...PHY_NAMES.map(g => `phy ${w} (${g})`)])];
-const CH_NAMES  = ['espnow', 'ble_adv', '154'];
+// 'ap' is another board's AP as heard by this board's Wi-Fi scan (ap scan), a v10 row kind.
+const CH_NAMES  = ['espnow', 'ble_adv', '154', 'ap'];
 
 function onNotify(d, view) {
   d.seen = Date.now();
@@ -617,8 +625,9 @@ function onChunk(d, v) {
     // own notification, 0x04) and an FTM record in the log.
     // v9: bit 4 of that byte is the AP test, FTM distances are signed, and the FTM notification
     // opens with what the last scan found.
-    if (ver < 4 || ver > 9) {
-      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v9 - ` +
+    // v10: FTM and AP-scan rows inside the report, temperature and on-air state in the status.
+    if (ver < 4 || ver > 10) {
+      logMsg(`${labelOf(d.name)}: report format v${ver}, this page decodes v4 to v10 - ` +
              (ver < 4 ? 'reflash the board' : 'update the page'), true);
       d.rptOk = false;
       return;
@@ -727,14 +736,41 @@ function onChunk(d, v) {
       // board, whose log this page no longer reads.
       if (!d.logAsked && ver >= 7) askLog(d);
     }
+    // v10: temperature, what is actually on the air, and what the last Wi-Fi scan found. FTM
+    // rows come in this same report now, so a new report starts their table afresh.
+    if (ver >= 10) {
+      const t = v.getInt8(o), age = v.getUint16(o + 6, true);
+      d.temp   = t === -128 ? undefined : t;
+      d.radios = v.getUint8(o + 1);
+      d.ftmScan = { on: !!(d.tests & (8 | 64)), aps: v.getUint8(o + 2), ours: v.getUint8(o + 3),
+                    ftm: v.getUint8(o + 4), known: v.getUint8(o + 5),
+                    age: age === 0xFFFF ? undefined : age / 10 };
+      o += 8;
+      d.ftm = new Map();
+      d.ftmGen = d.genN ?? 0;
+    }
   }
 
   // Rows fill whatever is left of the chunk, in both types.
   // A rows-only chunk has no version of its own; its report's status chunk decided.
   if (!d.rptOk) return;
-  while (o + 23 <= v.byteLength) {
+  while (o + 21 <= v.byteLength) {
     const peer = hexId(u24(v, o));
     const cb   = v.getUint8(o + 3);                  // v6: bit7 = peer carries its position
+    // v10: kind 4 is an FTM row, 21 bytes - see the report format in main/rt.h.
+    if ((cb & 0x7f) === 4 && (d.rptVer ?? 0) >= 10) {
+      const age = v.getUint16(o + 19, true) * 100;
+      (d.ftm ||= new Map()).set(peer, {
+        peer, st: v.getUint8(o + 4),
+        dist: v.getInt16(o + 5, true) / 10, avg: v.getInt16(o + 7, true) / 10,
+        rssi: v.getInt8(o + 9), pdr: v.getInt8(o + 10),
+        ok: v.getUint32(o + 11, true), fail: v.getUint32(o + 15, true),
+        age, abs: (d.boardMs ?? 0) - age,
+      });
+      o += 21;
+      continue;
+    }
+    if (o + 23 > v.byteLength) break;
     const ch   = CH_NAMES[cb & 0x7f] ?? '?';
     const age  = v.getUint16(o + 18, true) * 100;   // 0.1 s units on the wire
     putRow(d, peer + '/' + ch, {
@@ -750,7 +786,7 @@ function onChunk(d, v) {
       age,
       snr:    v.getInt8(o + 20),     // -128 where the radio measures no noise floor
       lqi:    v.getUint8(o + 21),
-      ptx:    v.getInt8(o + 22),
+      ptx:    v.getInt8(o + 22) === -128 ? undefined : v.getInt8(o + 22),   // -128: unknown
       gen:    d.genN ?? 0,
       // When the packet actually arrived, on the board's clock. Fixed for the life of the row,
       // so its age is a straight subtraction from "now" and cannot drift with arrival times.
@@ -1144,7 +1180,7 @@ let gRev = 0;            // bumped whenever anything a position lookup could use
 const GNSS_COLS = ['#f59e0b', '#e879f9', '#22d3ee', '#fb923c'];
 // rt_seq_ms() in main/rt.h: each channel's nominal ms per seq. Also used to spread a GNSS
 // board's own misses back in time.
-const SEQ_MS = [250, 500, 250];
+const SEQ_MS = [250, 500, 250, 2000];   // ap: AP_SCAN_MS in main/rt_ftm.c
 // RT_GEO_W and RT_GEO_G in main/rt.h, number for number - see Momentum there. Tables, not
 // Math.exp, so this page and the board cannot disagree in the last bit.
 const GEO_K_MAX = 60;
@@ -1628,7 +1664,8 @@ function logRx(d, R, seq, gap, rssi, q, pos, bt) {
 
   addSample(S, {
     t, t0: t, key: skey, dev: d.name, peer: R.node, ch,
-    rssi, ptx: R.ptx, loss: R.ptx - rssi,
+    rssi, ptx: R.ptx === -128 ? undefined : R.ptx,
+    loss: R.ptx === -128 ? undefined : R.ptx - rssi,
     snr: R.ch === 0 ? (q << 24 >> 24) : -128,
     lqi: R.ch === 2 ? q : 0,
     pdr: Math.round(100 * w.reduce((a, x) => a + x, 0) / w.length),
@@ -1680,7 +1717,7 @@ const mval  = (s, m) =>
   : m === 'alt'  ? (typeof s.alt === 'number' && isFinite(alts.lo) ? s.alt - alts.lo : undefined)
   : m === 'dist' ? (s.f && s.f.st === 0 ? s.f.dist - ftmCal(s.f.dev, s.f.peer) : undefined)
   : s[m];
-const PROTOS = ['espnow', 'ble_adv', '154', 'ftm'];
+const PROTOS = ['espnow', 'ble_adv', '154', 'ap', 'ftm'];
 
 const plot = {
   met: 'rssi',
@@ -3636,14 +3673,26 @@ const FTM_MAX = 60000;
 const ftmCols = new Map();  // responder id -> colour, in the order first heard
 
 // Zero offsets, per initiator→responder pair, in metres. FTM out of the box reads with an offset
-// of its own - and uncalibrated, it can read below zero close up - so the pair can be zeroed
-// with the boards side by side (the "zero" on the card's FTM row). The offset is taken off
+// of its own - and uncalibrated, it can read below zero close up - so each pair can be zeroed
+// on the shortest distance seen between them (the "0" on the card's FTM row). The offset is taken off
 // wherever a distance is drawn or shown as measured; the raw figure stays in the records and
 // the export, with the offset beside it.
 const FTM_OFF_KEY = 'esprt.ftmoff';
 let ftmOff = {};
 try { ftmOff = JSON.parse(localStorage.getItem(FTM_OFF_KEY)) || {}; } catch (e) { ftmOff = {}; }
 const ftmCal = (dev, peer) => ftmOff[idOf(dev) + '>' + idOf(peer)] ?? 0;
+
+// The shortest raw distance this page has seen between a pair, from every session it holds. The
+// boards are never closer than touching, so that is the zero - and a board pair never brought
+// close together just zeroes on a poor figure, which the tooltip makes plain.
+function ftmLowest(dev, peer) {
+  let lo;
+  for (const f of ftms) {
+    if (f.st === 0 && idOf(f.dev) === idOf(dev) && idOf(f.peer) === idOf(peer) &&
+        (lo === undefined || f.dist < lo)) lo = f.dist;
+  }
+  return lo;
+}
 
 function setFtmCal(dev, peer, m) {
   const k = idOf(dev) + '>' + idOf(peer);
@@ -3719,7 +3768,8 @@ function groundOf(id) {
 function ftmRing(f) {
   const c = f.pos || boardPos(idOf(f.dev), f.t);
   if (!c) return null;
-  let r = Math.max(0, f.dist - ftmCal(f.dev, f.peer));
+  // A negative reading - an uncalibrated offset, or zeroed on a bad day - is drawn at its size.
+  let r = Math.abs(f.dist - ftmCal(f.dev, f.peer));
   const lo = groundOf(idOf(f.dev));
   if (typeof c.alt === 'number' && lo !== undefined) {
     const dz = c.alt - lo;
@@ -4064,18 +4114,18 @@ function drawMap() {
     g.fillText(`${labelOf(G.node)} ${F.alt}m`, px + 8, py - 6);
   }
 
-  // Boards placed by the operator rather than by a GNSS of their own: an open circle, at the
-  // phone while carried, where it was left once put down.
+  // Boards put down by the operator: an open circle where each was left. A carried board is
+  // where the phone is by definition, and the phone already has its dot.
   const tNow = Date.now();
   for (const id of Object.keys(roles)) {
     const G = gtr.get(id);
     if (G && G.list.length) continue;   // it has a track and a diamond of its own
     const p = boardPos(id, tNow);
-    if (!p) continue;
+    if (!p || p.how !== 'put') continue;
     const px = sxOf(p.x), py = syOf(p.y);
     g.strokeStyle = g.fillStyle = '#e8eaf0';
     g.beginPath(); g.arc(px, py, 5, 0, Math.PI * 2); g.stroke();
-    g.fillText(labelOf(id) + (p.how === 'carry' ? ' (carried)' : ''), px + 8, py - 6);
+    g.fillText(labelOf(id), px + 8, py - 6);
   }
   // Finish placing whatever is still provisional, even if nothing else arrives to cause a redraw.
   if (gRev !== gResolvedRev && !gTimer) {
@@ -5121,7 +5171,8 @@ function buildCard(d) {
     const z = ev.target.closest('[data-zero]');
     if (z) {
       const peer = z.dataset.zero;
-      return setFtmCal(d.name, peer, ftmCal(d.name, peer) ? undefined : +z.dataset.avg);
+      return setFtmCal(d.name, peer,
+                       ftmCal(d.name, peer) ? undefined : ftmLowest(d.name, peer) ?? +z.dataset.avg);
     }
     const t = ev.target.closest('.peer');
     if (t) renameBoard(t.dataset.id);
@@ -5239,8 +5290,9 @@ function updateCard(d) {
     (rebooted ? '<b class="bad">REBOOTED</b> · ' : '') +
     (d.reboots ? `<b class="bad">${d.reboots} reset${d.reboots > 1 ? 's' : ''}</b> · ` : '') +
     (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
-    `up ${d.uptime ?? '?'}s · testing: <b>${esc(testsTxt(d.tests ?? 0))}</b>` +
-    (d.wifiOn !== undefined ? ` · wifi <b class="dim">${d.wifiOn ? 'on, AP answering FTM' : 'off'}</b>` : '') +
+    `up ${d.uptime ?? '?'}s` +
+    (d.temp !== undefined ? ` · chip <b class="${d.temp >= 70 ? 'bad' : d.temp >= 55 ? 'warn' : 'dim'}">${d.temp}°C</b>` : '') +
+    ` · testing: <b>${esc(testsTxt(d.tests ?? 0))}</b>` +
     (d.legacy ? ' · <b class="warn">old firmware: one test at a time</b>' : '') + '<br />' +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
     'report <b class="fresh"></b>';
@@ -5359,13 +5411,28 @@ function updateCard(d) {
   }
   // What FTM is doing when it has nothing to show in the table - heard no APs, heard some and
   // none were ours, or found ours and got nothing back. Said every report while FTM is on.
+  // What is actually on the air, from each radio's own state - v10. The switches say what was
+  // asked for; this says what is running, and the two differing is the fault to look for.
+  if (d.radios !== undefined) {
+    const b = d.radios, on = [];
+    if (b & 1) on.push('wifi' + (b & 2 ? (b & 4 ? ' + AP answering FTM' : ' + AP') : ' station'));
+    if (b & 8) on.push('coded beacon');
+    if (b & 16) on.push('coded scan ' + (b & 32 ? '100%' : '40%'));
+    if (b & 64) on.push('154 rx');
+    on.push('control link ' + (b & 128 ? 'slow' : 'fast'));
+    diag.push(`<span class="ch">on air</span> ${on.join(' · ')}`);
+  }
+  // What the Wi-Fi scan is finding, so an empty FTM or AP table says why: nothing heard, heard
+  // APs but none ours, or ours but none answering FTM. Said every report while either is on.
   if (d.ftmScan && (d.ftmScan.on || d.ftm?.size)) {
     const s = d.ftmScan;
-    diag.push('<span class="ch">ftm</span> ' + (!s.on ? 'off' : s.age === undefined
+    const ours = s.ours + (s.noftm ?? 0);            // v9 counted the two apart
+    const ftm  = s.ftm ?? s.ours;
+    diag.push('<span class="ch">scan</span> ' + (!s.on ? 'off' : s.age === undefined
       ? '<b class="warn">not scanned yet</b>'
-      : `last scan ${fmtAge4(s.age * 1000)} ago: ${s.aps} APs, ` +
-        `<b class="${s.ours + s.noftm ? 'ok' : 'warn'}">${s.ours + s.noftm} ours</b>` +
-        (s.noftm ? ` (${s.noftm} not advertising FTM)` : '') + ` · ${s.known} in rotation`));
+      : `${fmtAge4(s.age * 1000)} ago: ${s.aps} APs, ` +
+        `<b class="${ours ? 'ok' : 'warn'}">${ours} ours</b>, ${ftm} answering FTM` +
+        ` · ${s.known} FTM targets`));
   }
   if (d.logSt) {
     const L = d.logSt;
@@ -5411,11 +5478,11 @@ function updateCard(d) {
       `<span class="peer nameable ${nameOf(f.peer) ? '' : 'dim'}" data-id="${esc(f.peer)}" ` +
       `title="Click to name this board">${esc(labelOf(f.peer))}</span>` +
       (f.st ? ` <span class="bad" title="How the last session ended">${esc(ftmSt(f.st))}</span>` : '') +
-      // Zero: the boards are side by side now, so the current average is the offset.
+      // Zero: on the shortest distance seen between the pair - see ftmLowest().
       (f.ok ? `<button class="mini${cal ? ' on' : ''}" data-zero="${esc(f.peer)}" ` +
               `data-avg="${f.avg}" title="${cal ? 'Zeroed (' + cal + ' m). Tap to clear.'
-              : 'With the two boards side by side: take the current average off every distance ' +
-                'between them from now on, here and on the map'}">0</button>` : '') +
+              : 'Zero this pair on the shortest distance seen between them this session - they are ' +
+                'never closer than touching, so that is the offset. Kept in this browser.'}">0</button>` : '') +
       '</td>' +
       `<td class="big" title="${raw}">${f.ok ? (f.dist - cal).toFixed(1) + '<span class="dim">m</span>' : '–'}</td>` +
       `<td class="dim" title="${raw}">${f.ok ? (f.avg - cal).toFixed(1) : '–'}</td>` +
@@ -5448,7 +5515,7 @@ function updateCard(d) {
       // standard defines one (802.15.4), nothing where neither exists (BLE). One column
       // because they answer the same question, labelled per row so they are not confused.
       const q = r.snr !== -128 ? `${r.snr}<span class="dim">dB</span>`
-              : r.lqi >= 0    ? `${r.lqi}<span class="dim">lqi</span>`
+              : r.ch === '154' ? `${r.lqi}<span class="dim">lqi</span>`
               : '–';
       return `<tr data-abs="${r.abs}">` +
         // A named peer is the readable thing in the row, so it is not dimmed; an unnamed one
