@@ -64,11 +64,11 @@ The owner's framing, which supersedes "low contention" as the organising idea:
   last stretch. Whatever wins for distance (802.15.4 or ESP-NOW) runs *alongside* FTM, so
   real use is neither "all at once" nor "one at a time" but a chosen few.
 - **So every test is an independent switch, and all default off** (`RT_TEST_*` in `main/rt.h`):
-  espnow, ble_adv, 154, ftm, ap. The BLE control link is not a test, is always on, and should
+  espnow, ble_adv, 154, ftm, ap, ftm resp, ap scan. The BLE control link is not a test, is always on, and should
   still spend as little antenna time as it reasonably can without ever becoming unrecoverable.
 - **The AP is a test channel of its own**, owner's correction the same day. It stands in for
   anything a phone could later do over Wi-Fi (ping, a page) and is what the tracker needs up to
-  be ranged by FTM. `LC_WIFI_UI`'s "BLE off" part is gone; the AP part is the `ap` switch.
+  be ranged by FTM (with `ftm resp`). `LC_WIFI_UI`'s "BLE off" part is gone; the AP part is the `ap` switch.
   Ordinary Wi-Fi traffic is otherwise abandoned: even 11b loses to LR for the same reason BLE
   does - it has to connect, and a connection fails where connectionless ESP-NOW still gets 10%
   through. **Assume most testing is LR**; the LR toggle stays in case LR upsets FTM.
@@ -82,14 +82,33 @@ The owner's framing, which supersedes "low contention" as the organising idea:
 - **Button restore = boot state**: every test off. The control link then has the antenna to
   itself, which is the most reconnectable a board can be. Tap steps through single tests for
   bench work without a phone.
-- **FTM initiator**: scans only our own channel, ranges to every `ESPRT-` AP (the responder bit
-  is counted, not required), one session at a time with a randomised gap - not the 2-4Hz of the
-  packet tests. Every session, failed or not, goes in the report and the log, and the report
-  says what the last scan found so "no results" explains itself. The owner confirmed their C6
-  revisions do FTM both ways (see Errata WIFI-9686 under Platform findings).
+- **FTM initiator**: a passive scan of our own channel finds `ESPRT-` APs advertising the FTM
+  responder bit, then ranges to each, one session at a time with a randomised gap - not the
+  2-4Hz of the packet tests. Every session, failed or not, goes in the report and the log, and
+  the report says what the last scan found so "no results" explains itself. The owner confirmed
+  their C6 revisions do FTM both ways (see Errata WIFI-9686 under Platform findings).
+- **`ftm resp` is its own switch, not part of `ap`** (owner, next day): the tests exist to
+  remove contention, and being ranged is contention. The AP answers FTM only while it is on.
+- **`ap scan` is a test**: the scan the initiator already needs, reported as links (each of our
+  boards' APs heard or missed per scan). It is why `ap` alone is a mode: that is its target.
+  Results are reported only while `ap scan` is on - the scan also runs for the initiator, but
+  reporting what is not under test is wasted control-link time. Scans are passive: an active
+  scan made every AP in range answer a probe.
+- **FTM travels in the one report**, as rows beside the link rows (v10). v9 sent it as a
+  separate notification, which is extra control-link antenna time - what the owner does not
+  want. Two boards still fit a single notification.
+- **Heat, reported the next day**: boards ran hotter at idle than before, too hot to touch, worse
+  with tx power. Nothing in the diff since the old everything-on default transmits more with
+  every test off, and the RF switch code (GPIO3/14) is unchanged. What did add airtime was all
+  FTM: every board with Wi-Fi was a responder in v8/v9, sessions ran back to back, and active
+  scans drew probe responses every 5s. Now passive, a 1-2s gap, and the responder only under
+  `ftm resp`. To find the rest on the bench, the report carries the chip temperature and an
+  "on air" set read from each radio's own state, not from the switches.
 - **FTM distances are signed.** `dist_est` is declared unsigned, but uncalibrated FTM goes below
-  zero close up, and v8 turned that into kilometre rings. Zeroing is per pair, on the page, with
-  the boards side by side; the raw figure is what is recorded.
+  zero close up, and v8 turned that into kilometre rings. Zeroing is per pair, on the page, on
+  the shortest distance seen between them this session (they are never closer than touching, so
+  below zero is always wrong), kept in the browser; the raw figure is what is recorded. Rings
+  are drawn at the absolute value of whatever is left.
 - **On the map**, a range is a hairline ring at ~20% opacity round where the initiator was, so
   agreeing rings pile up into a bright spot; a best-fit cross is drawn once rings come from more
   than one place. Each range is also a sample, so FTM distance - and height - can be drawn as
@@ -101,7 +120,7 @@ The owner's framing, which supersedes "low contention" as the organising idea:
 - **"Carry"** (CONTEXT's old "pick up / put down" role idea, finally built): the phone's GPS is
   ascribed to a board while carried; put down, it stays where the phone was. Page-only, never
   sent to the board. It places non-GNSS boards and their FTM rings; packet marks still go where
-  the phone was, as before.
+  the phone was, as before. A carried board has no marker of its own - it is where the phone is.
 - **UI holds still**: buttons are as wide as their longest label, and ticking ages are at most
   four characters, so nothing reflows as values change.
 
@@ -632,8 +651,8 @@ Everything else checked and clear:
   radio has no reason to transmit on its own.
 - The coded-PHY scanner is `passive = 1` — a passive scanner never transmits, so scan power
   is moot (set anyway, for completeness).
-- The SoftAP's `ftm_responder = true` only replies to an FTM request, and nothing here sends
-  one; it transmits at the AP's power in any case.
+- The SoftAP's `ftm_responder` (set only under `ftm resp`) only replies to an FTM request;
+  it transmits at the AP's power in any case.
 - Both advertising instances (coded beacon, phone-UI advert) take their power from the table.
 - No other component in the image drives a radio.
 

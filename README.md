@@ -54,13 +54,17 @@ switch (`RT_TEST_*` in `main/rt.h`), set from the phone, and all of them are off
 | `espnow` | ESP-NOW packets out and in, from the station side. Brings the Wi-Fi driver up. |
 | `ble_adv` | the coded-PHY beacon and scanner. The scanner listens continuously when this is the only test on, and duty-cycles when sharing. |
 | `154` | 802.15.4 frames out, and the receiver on. |
-| `ftm` | the FTM initiator: scan our Wi-Fi channel for other boards' APs, range to each in turn. Brings the Wi-Fi driver up, station side. |
-| `ap` | the Wi-Fi AP: beaconing, listening, visible to a phone while LR is off — a comms test in its own right, standing in for what a phone could do over it later. It is also the FTM responder, so a board to be ranged to needs this on. |
+| `ftm` | the FTM initiator: find boards with `ftm resp` on, range to each in turn. Brings the Wi-Fi driver up, station side. |
+| `ap` | the Wi-Fi AP: beaconing, listening, visible to a phone while LR is off — a comms test in its own right, and what `ap scan` measures. Does not answer FTM. |
+| `ftm resp` | the Wi-Fi AP, answering FTM. Separate from `ap` because being ranged is antenna time of its own. |
+| `ap scan` | scan for other boards' APs and report each as a link, heard or missed, like a packet link. |
 
 A switch turns off everything its radio does on its own schedule, not just its packets: with no
-Wi-Fi test on the Wi-Fi driver stops, with `ap` off the AP is gone (the driver runs station-only
-for `espnow` or `ftm`), with `ble_adv` off the coded scanner stops, with `154` off its receiver
-sleeps.
+Wi-Fi test on the Wi-Fi driver stops; without `ap` or `ftm resp` there is no AP (the driver runs
+station-only for `espnow`, `ftm` or `ap scan`); with `ble_adv` off the coded scanner stops; with
+`154` off its receiver sleeps. The report says what is actually on the air, from each radio's own
+state — the **on air** line on the card and in the serial report — along with the chip
+temperature.
 
 A station on its own does not doze and miss ESP-NOW frames: `esp_now_set_wake_window()`
 defaults to always awake, and nothing here changes it.
@@ -75,8 +79,8 @@ test the antenna, and fast otherwise. See `UI_SLOW()` in `main/rt_ui.c`.
 ## GPIO9
 
 - **tap** — step through the tests one at a time: none → espnow → ble_adv → 154 → ftm → ap →
-  none. For a bench without a phone; combinations are set from the page. A tap on a
-  combination clears it.
+  ftm resp → ap scan → none. For a bench without a phone; combinations are set from the page. A
+  tap on a combination clears it.
 - **hold** — restore: every test off, LR off, control link back on coded PHY, tx unmuted —
   exactly as booted.
 
@@ -86,33 +90,39 @@ is the only thing that clears it. Changing a setting on one board used to wipe t
 record of what it had heard from the other one, which was backwards: the slider changes what
 the board *transmits*, and the table is what it *received*.
 
-## FTM
+## Wi-Fi scan: `ap scan` and FTM
 
-With `ftm` on, a board scans its own Wi-Fi channel for APs named `ESPRT-xxxxxx` and ranges to
-them one session at a time with a randomised pause between — no fixed rate. The name is the only
-filter; whether the beacon advertises the FTM responder bit is counted, not required, and the
-session's own answer says whether it works. Timings, frame count and how long an unanswering
-board is kept on the list are at the top of `main/rt_ftm.c`.
+One task owns the Wi-Fi scan (`main/rt_ftm.c`, timings at the top). It is passive and on our own
+channel only: it listens for beacons, so the scanning board transmits nothing and no AP is asked
+to answer. It only ever looks at SSIDs named `ESPRT-xxxxxx`.
 
-Every session is a result, successful or not: it goes in the FTM rows of the report (distance,
-recent average, RSSI of the FTM frames, success rate of the last 16) and into the packet log,
-GNSS or not, so a board that ranged while out of reach of the phone hands its ranges over when
-it is back, like its packets. While `ftm` is on, the card and the serial report also say what
-the last scan found — how many APs, how many ours — so no results can say why.
+- **`ap scan`**: each of our boards' APs is a link — heard or missed each scan, at what RSSI —
+  reported as an `ap` row exactly like a packet link, and logged like one on a GNSS board.
+  Results are only reported while `ap scan` is on.
+- **`ftm`**: the scan finds targets — boards whose AP advertises the FTM responder bit, i.e. with
+  `ftm resp` on — then ranges to each in turn, one session at a time with a randomised pause.
+  It scans only as often as it needs targets unless `ap scan` is also on.
 
-Distances are signed. Uncalibrated FTM reads with an offset, below zero close up. On the page,
-the **0** button on an FTM row zeroes that pair: with the two boards side by side, the current
-average becomes the offset taken off everything shown or drawn for them. The raw distance stays
+Every FTM session is a result, successful or not: an FTM row in the report (distance, recent
+average, RSSI of the FTM frames, success rate of the last 16) and a record in the packet log, GNSS
+or not, so a board that ranged while out of reach of the phone hands its ranges over when it is
+back. The card and the serial report also say what the last scan found — APs, ours, answering
+FTM — so an empty table says why. AP and FTM rows travel in the same report notification as
+everything else.
+
+Distances are signed; uncalibrated FTM reads with an offset, below zero close up. The **0**
+button on a card's FTM row zeroes that pair on the shortest distance the page has seen between
+them — they are never closer than touching — and keeps it in this browser. The raw distance stays
 in the records and the export, with the zero beside it.
 
-On the page each range is a faint ring round where it was measured from (**rings** on the map
-shows and hides them); where they agree is where the other board is, and once they come from
-more than one spot a cross marks the best fit. Each range is also a mark like a packet, so
-**ftm distance**, the FTM frames' RSSI and the success rate can be drawn as ticks alongside any
-other link — as can **height**, measured from the lowest anything on the page has been (a zero
-for the scale; the altitude recorded is untouched). A board with its own GNSS is placed by it;
-any other board is placed by tapping **carry** on its card — it then follows the phone's GPS
-until tapped again, which leaves it where you stood.
+On the page each range is a faint ring round where it was measured from, drawn at its absolute
+size (**rings** shows and hides them); where they agree is where the other board is, and once they
+come from more than one spot a cross marks the best fit. Each range is also a mark like a packet,
+so **ftm distance**, the FTM frames' RSSI and the success rate can be drawn as ticks alongside any
+other link — as can **height**, measured from the lowest anything on the page has been (a zero for
+the scale; the altitude recorded is untouched). A board with its own GNSS is placed by it; any
+other board is placed by tapping **carry** on its card — it then follows the phone's GPS until
+tapped again, which leaves it where you stood.
 
 A ring from a drone is drawn at the ground distance its slant range means, taking the lowest the
 drone has been as ground level. Display only — the numbers are the slant range.
