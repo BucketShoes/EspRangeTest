@@ -289,10 +289,10 @@ bool rt_tx_enabled(int chan)
 
 const char *rt_tests_name(unsigned mask, char *buf, int len)
 {
-    static const char *const nm[] = { "espnow", "ble_adv", "154", "ftm", "ap" };
+    static const char *const nm[] = { "espnow", "ble_adv", "154", "ftm", "ap", "ftm_resp", "ap_scan" };
     int n = 0;
     buf[0] = '\0';
-    for (int i = 0; i < 5 && n < len; i++) {
+    for (int i = 0; i < 7 && n < len; i++) {
         if (mask & (1u << i)) {
             n += snprintf(buf + n, len - n, "%s%s", n ? "+" : "", nm[i]);
         }
@@ -636,8 +636,10 @@ int rt_snapshot_rows(void)
 
 int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
 {
-    const uint32_t now   = rt_ms();
-    const int      total = rt_snapshot_rows();
+    const uint32_t now    = rt_ms();
+    const int      links  = rt_snapshot_rows();
+    // AP and FTM rows follow the link rows, in the same report - see v10 in rt.h.
+    const int      total  = links + rt_wifi_rows();
 
     if (cap > RT_RPT_CHUNK_MAX) {
         cap = RT_RPT_CHUNK_MAX;
@@ -704,6 +706,16 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         n = put_u32(out, n, ls.oldest);
         n = put_u32(out, n, ls.newest);
         n = put_u16(out, n, ls.cap);
+        // v10: temperature, what is on the air, and what the last Wi-Fi scan found.
+        rt_scan_st_t ss;
+        rt_scan_status(&ss);
+        n = put_u8(out, n, (uint8_t)rt_temp_c());
+        n = put_u8(out, n, rt_radios());
+        n = put_u8(out, n, ss.aps);
+        n = put_u8(out, n, ss.ours);
+        n = put_u8(out, n, ss.ours_ftm);
+        n = put_u8(out, n, ss.known);
+        n = put_u16(out, n, ss.age_ds);
         // The page decodes this block at fixed offsets, so a field added here without updating
         // RT_RPT_STATUS - and the matching reader - would silently shift every row that
         // follows. Say so loudly instead; a wrong offset is not a thing to discover from a
@@ -715,12 +727,33 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         st->started = 1;
     }
 
-    while (st->row_next < total && n + RT_RPT_ROW <= cap) {
+    while (st->row_next < total) {
+        if (st->row_next >= links) {
+            // AP and FTM rows, which rt_ftm.c serialises itself.
+            const int w = rt_wifi_row(st->row_next - links, out + n, cap - n);
+            if (w == 0) {
+                break;                    // next chunk
+            }
+            if (w < 0) {
+                st->row_next = total;     // table changed under us; the next report is right
+                break;
+            }
+            n += w;
+            st->row_next++;
+            continue;
+        }
+        if (n + RT_RPT_ROW > cap) {
+            break;
+        }
         uint32_t peer = 0;
         uint8_t  chan = 0;
         rt_link *l = row_at(st->row_next, &peer, &chan);
         if (l == NULL) {
-            break;  // table changed under us; the next report carries the truth
+            // Fewer link rows than counted - a reset landed mid-report. Stopping here would
+            // leave row_next short of total for good, and every later call would emit an empty
+            // chunk; carry on with the rows after them instead. The next report is right.
+            st->row_next = links;
+            continue;
         }
         st->row_next++;
 
@@ -845,6 +878,24 @@ void rt_report(void)
            (unsigned long)esp_get_free_heap_size(),
            (unsigned long)esp_get_minimum_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
+    // What is actually on the air, from each radio's own state rather than the switches, and how
+    // hot the chip is. The two together are how to find a radio left on.
+    const uint8_t rb = rt_radios();
+    const int8_t  tc = rt_temp_c();
+    printf("  on air: %s%s%s%s%s  control link %s  chip ",
+           rb & RT_RADIO_WIFI ? "wifi" : "wifi off",
+           rb & RT_RADIO_AP ? (rb & RT_RADIO_AP_FTM ? " +AP answering FTM" : " +AP") : "",
+           rb & RT_RADIO_BEACON ? "  coded beacon" : "",
+           rb & RT_RADIO_SCAN ? (rb & RT_RADIO_SCAN_ALL ? "  coded scan 100%" : "  coded scan 40%")
+                              : "",
+           rb & RT_RADIO_154_RX ? "  154 rx" : "",
+           rb & RT_RADIO_UI_SLOW ? "slow" : "fast");
+    if (tc == -128) {
+        printf("temp unreadable\n");
+    } else {
+        printf("%dC\n", tc);
+    }
 
     // Said every report, including "none": a GNSS that is wired but silent and one that is not
     // fitted look identical from everywhere else, and the difference is a loose wire.

@@ -58,6 +58,11 @@ static const char *TAG = "ui";
 // is ADV_INSTANCE in rt_ble.c and nothing here has ever touched its interval.)
 #define UI_SLOW() ((g_tests & ~RT_TEST_BLE_ADV) != 0 && (g_tests & RT_TEST_BLE_ADV) == 0)
 
+bool rt_ui_slow(void)
+{
+    return UI_SLOW();
+}
+
 // Connection parameters requested once a phone connects. Peripheral-preferred, so the phone
 // may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
 // responsive; "slow" trades that for airtime back to whichever channel is under test - a
@@ -609,11 +614,6 @@ void rt_ui_notify(void)
             log_backoff();
             return;
         }
-    }
-    // FTM's rows are part of the report, sent straight after it with the same generation.
-    if ((len = rt_ftm_rows(buf, cap, s_gen)) > 0 && !send(buf, len)) {
-        log_backoff();
-        return;
     }
 
     // After the report, never before it.

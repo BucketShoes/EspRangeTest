@@ -60,22 +60,31 @@ extern const char *rt_chan_name[CH_COUNT];
 //   BLE_ADV  the coded-PHY beacon and the coded-PHY scanner - the scanner listens continuously
 //            when this is the only test on, and duty-cycles when it is sharing (rt_ble.c).
 //   154      802.15.4 frames out, and the receiver on.
-//   FTM      FTM initiator: scans for other boards' APs and ranges to them in turn (rt_ftm.c).
-//            Needs the Wi-Fi driver, station side only.
+//   FTM      FTM initiator: finds other boards that answer FTM and ranges to them in turn
+//            (rt_ftm.c). Needs the Wi-Fi driver, station side only.
 //   AP       the SoftAP: beaconing, listening, visible to a phone while LR is off - a test of
-//            its own, standing in for everything a phone could later do over it. It is also
-//            the FTM responder, so a board that is to be ranged to needs this on.
+//            its own, standing in for everything a phone could later do over it, and the thing
+//            AP_SCAN on another board measures. Does not answer FTM.
+//   FTM_RESP the SoftAP as above, and answering FTM. Separate from AP because being ranged is
+//            antenna time of its own: an initiator nearby keeps this board busy.
+//   AP_SCAN  scans our Wi-Fi channel for other boards' APs, and reports each as a link - heard
+//            or missed, and at what RSSI - exactly like a packet link (rt_ftm.c). The FTM
+//            initiator scans too, to find targets, but its scans are only reported with this on.
 //
-// The Wi-Fi driver runs whenever any of ESPNOW, FTM or AP is on: APSTA with AP, STA alone
-// without. A station on its own does not doze and miss ESP-NOW frames - esp_now's wake window
-// defaults to always awake (esp_now_set_wake_window() in esp_now.h), and nothing here changes it.
+// The Wi-Fi driver runs whenever any of ESPNOW, FTM, AP, FTM_RESP or AP_SCAN is on: APSTA with
+// AP or FTM_RESP, STA alone otherwise. A station on its own does not doze and miss ESP-NOW
+// frames - esp_now's wake window defaults to always awake (esp_now_set_wake_window() in
+// esp_now.h), and nothing here changes it.
 #define RT_TEST_ESPNOW   (1u << CH_ESPNOW)
 #define RT_TEST_BLE_ADV  (1u << CH_BLE_ADV)
 #define RT_TEST_154      (1u << CH_154)
 #define RT_TEST_FTM      (1u << 3)
 #define RT_TEST_AP       (1u << 4)
-#define RT_TEST_ALL      0x1Fu
-#define RT_TEST_WIFI     (RT_TEST_ESPNOW | RT_TEST_FTM | RT_TEST_AP)
+#define RT_TEST_FTM_RESP (1u << 5)
+#define RT_TEST_AP_SCAN  (1u << 6)
+#define RT_TEST_ALL      0x7Fu
+#define RT_TEST_SOFTAP   (RT_TEST_AP | RT_TEST_FTM_RESP)
+#define RT_TEST_WIFI     (RT_TEST_ESPNOW | RT_TEST_FTM | RT_TEST_SOFTAP | RT_TEST_AP_SCAN)
 
 // Two bytes: { RT_CMD_TESTS, mask }. The whole set, not a toggle - same reason as the LED: a
 // write that is lost or repeated cannot leave the board one step out of phase with the page.
@@ -756,38 +765,47 @@ void rt_report(void);
 // their own (below) and an FTM record in the log. The layout is otherwise v7's, and the packets
 // boards send each other are untouched, so v7 and v8 boards still range-test each other.
 //
-// v9: the fifth byte's bit 4 is the AP test (it was "ftm resp"), FTM distances are signed -
-// uncalibrated FTM reads below zero close up, and v8 wrapped those to kilometres - and the FTM
-// notification always goes while FTM is on and starts with what the last scan found, so "no
-// results" can say why. The log's FTM record is signed from v9 on.
+// v9 bumped for the AP test and signed FTM distances, and sent FTM as a notification of its own
+// (type 0x04) after the report. The page still reads a v9 board.
 //
-//   FTM: a notification of its own, type 0x04, after the report's last chunk, while FTM is on
-//   or this board has FTM results to describe. Not rows in the report proper, because a page
-//   that does not know them would read them as 23-byte link rows.
-//     u8 0x04, u8 gen (the report's), u8 n, u8 flags (bit0 = the FTM test is on)
-//     scan, 8 bytes:
-//       u8  aps         APs the last scan heard, any
-//       u8  ours        of them ours, answering FTM
-//       u8  ours_noftm  of them ours, but not advertising the FTM responder bit
-//       u8  known       responders being taken in turn now
-//       u16 age_ds      since the last scan, 0.1s units; 0xFFFF = never scanned
-//       u16 reserved
-//     n x 20 bytes:
-//       u24 peer        the responder's node id, from its SSID
-//       u8  status      the last session's wifi_ftm_status_t; 0 = success
-//       i16 dist_dm     the last successful session's distance, decimetres, clamped
-//       i16 avg_dm      the mean of the last RT_FTM_AVG successful ones
-//       i8  rssi        of the last successful session's FTM frames, averaged; -128 unknown
-//       i8  pdr         successful share of the last 16 sessions, percent; -1 before any
-//       u32 ok, u32 fail  sessions since boot or the last stats reset
-//       u16 age_ds      since the last session ended, either way, 0.1s units, clamped
-#define RT_RPT_VER      9
-#define RT_RPT_FTM_SCAN 8
-#define RT_RPT_TYPE_FTM 0x04
-#define RT_RPT_FTM_ROW  20
+// v10 folds FTM back into the report itself - one notification carries everything for a
+// two-board setup, as the report always has, because every extra notification is control-link
+// airtime taken from whatever is under test. What changed:
+//
+//   status block grows 8 bytes, after log_cap (110 in all):
+//     i8  temp_c        chip temperature, whole degrees C; -128 unreadable
+//     u8  radios        what is actually using the antenna right now, whatever the switches say:
+//                       bit0 Wi-Fi driver up, bit1 SoftAP up, bit2 SoftAP answering FTM,
+//                       bit3 coded beacon on, bit4 coded scanner on, bit5 scanner continuous
+//                       (else 40%), bit6 802.15.4 receiver on, bit7 control link slowed
+//     u8  scan_aps      APs the last Wi-Fi scan heard, any
+//     u8  scan_ours     of them ours (ESPRT- SSIDs)
+//     u8  scan_ftm      of those, advertising the FTM responder bit
+//     u8  ftm_known     FTM targets being taken in turn now
+//     u16 scan_age_ds   since the last scan, 0.1s units; 0xFFFF = never scanned
+//
+//   n_rows counts every row below, of every kind.
+//
+//   rows are told apart by the low 7 bits of their fourth byte:
+//     0..2  a link row, as above (espnow, ble_adv, 154)
+//     3     an AP row, the same 23 bytes: another board's AP as heard by this board's Wi-Fi
+//           scans - rx = scans it was heard in, missed = scans since first heard that it was
+//           not, pdr_now = of the last 16 scans. snr -128, lqi 0, peer_txdbm -128 (unknown).
+//           Only while the AP_SCAN test is on.
+//     4     an FTM row, 21 bytes: u24 peer (the responder's node id, from its SSID), u8 4,
+//           u8 status (the last session's wifi_ftm_status_t, 0 = success; RT_FTM_ST_* below),
+//           i16 dist_dm (the last success, decimetres, signed, clamped), i16 avg_dm (mean of
+//           the last RT_FTM_AVG successes), i8 rssi (the last success's FTM frames, averaged,
+//           -128 unknown), i8 pdr (successful share of the last 16 sessions, -1 before any),
+//           u32 ok, u32 fail, u16 age_ds (since the last session ended, either way).
+//           While the FTM test is on, or while it has results from before it went off.
+#define RT_RPT_VER      10
 #define RT_RPT_HDR      4
-#define RT_RPT_STATUS   102
+#define RT_RPT_STATUS   110
 #define RT_RPT_ROW      23
+#define RT_RPT_ROW_AP   3
+#define RT_RPT_ROW_FTM  4
+#define RT_RPT_FTM_ROW  21
 #define RT_RPT_TYPE_STATUS 0x01
 #define RT_RPT_TYPE_ROWS   0x02
 
@@ -858,6 +876,8 @@ int rt_snapshot_rows(void);
 //                    arithmetic as the results table, done where the table is. 0 = the same seq
 //                    heard again (a BLE advert goes out 2-3 times per seq, and each one heard
 //                    counts, as in the table), or unknown.
+//                    v10: chan 3 is an AP heard by this board's Wi-Fi scan (AP_SCAN): seq is this
+//                    board's scan number, ptx is -128 (unknown), q is 0.
 //   0x05 POS    (10) u24 node, 6 bytes exactly as on the wire (rt_geo_wire_t)
 //                    Where that node's next packet said it was. Sets the node's current POS
 //                    for the records after it in this block.
@@ -919,16 +939,17 @@ void rt_log_status(rt_log_st_t *out);
 // caller copies *adv into it, so a notification that fails to queue is simply built again.
 int rt_log_chunk(const rt_log_cur_t *c, uint8_t *out, int cap, rt_log_cur_t *adv);
 
-// ---- FTM initiator (rt_ftm.c) ------------------------------------------------------------
+// ---- Wi-Fi scan and FTM initiator (rt_ftm.c) ----------------------------------------------
 //
-// While RT_TEST_FTM is on: scan our own Wi-Fi channel for APs named like ours that say they
-// answer FTM, then range to each in turn, one session at a time with a pause between - see the
-// timings at the top of rt_ftm.c. Every session is a result, success or not: it lands in the
-// FTM rows of the report and in the log.
-//
-// A board ranges only to boards running this firmware: an AP is a candidate only if its SSID is
-// rt_node_name()'s pattern and its beacon has the FTM responder bit. Its node id comes from the
-// SSID, so FTM results are filed under the same id as everything else.
+// One task owns the Wi-Fi scan, for two uses:
+//   AP_SCAN  the scan is the measurement: each of our boards' APs heard or missed, reported as
+//            AP rows (see the report) and logged like a packet while this board has GNSS - RX
+//            records with chan 3, seq = this board's scan number.
+//   FTM      the scan finds targets - ours, advertising the FTM responder bit (the FTM_RESP test
+//            on that board) - then ranges to each in turn, one session at a time with a pause
+//            between. Every session is a result, success or not: an FTM row, and a log record.
+// Timings at the top of rt_ftm.c. A board only ever looks at SSIDs in rt_node_name()'s pattern,
+// and files everything under the node id from the SSID.
 #define RT_FTM_AVG 8
 
 // Session outcomes, as carried in the status byte of the rows and the log: wifi_ftm_status_t
@@ -938,13 +959,48 @@ int rt_log_chunk(const rt_log_cur_t *c, uint8_t *out, int cap, rt_log_cur_t *adv
 #define RT_FTM_ST_TIMEOUT 0xFF   // started, and no report came back in time
 
 void rt_ftm_start(void);
-// Clear the FTM results - part of RT_CMD_STATS_RESET, like the rest of the table.
+// Clear the AP and FTM results - part of RT_CMD_STATS_RESET, like the rest of the table.
 void rt_ftm_reset(void);
-// Rows for the report, as described under RT_RPT_TYPE_FTM. Returns bytes written into out, or 0
-// if there is nothing to say. cap is what the connection can carry.
-int rt_ftm_rows(uint8_t *out, int cap, uint8_t gen);
-// One line per responder, for the serial report.
+
+// The extra rows this board adds to the report: AP rows, then FTM rows. rt_wifi_rows() is how
+// many; rt_wifi_row() writes row i (0-based) into out if it fits in room bytes, returning its
+// length, 0 if it does not fit, or -1 if there is no row i any more (the table moved).
+int rt_wifi_rows(void);
+int rt_wifi_row(int i, uint8_t *out, int room);
+
+typedef struct {
+    uint8_t  aps, ours, ours_ftm, known;
+    uint16_t age_ds;   // 0xFFFF never scanned
+} rt_scan_st_t;
+void rt_scan_status(rt_scan_st_t *out);
+
+// For the serial report.
 void rt_ftm_report(void);
+
+// ---- What is on the air (the report's radios byte) -----------------------------------------
+//
+// Asked of each radio's own state, not worked out from the switches: the recurring fault in this
+// project is a radio still on while the switches say it is off.
+#define RT_RADIO_WIFI     0x01
+#define RT_RADIO_AP       0x02
+#define RT_RADIO_AP_FTM   0x04
+#define RT_RADIO_BEACON   0x08
+#define RT_RADIO_SCAN     0x10
+#define RT_RADIO_SCAN_ALL 0x20
+#define RT_RADIO_154_RX   0x40
+#define RT_RADIO_UI_SLOW  0x80
+
+uint8_t rt_radios(void);
+uint8_t rt_wifi_radio_bits(void);   // main.c
+uint8_t rt_ble_radio_bits(void);    // rt_ble.c
+bool    rt_154_rx_on(void);         // rt_154.c
+bool    rt_ui_slow(void);           // rt_ui.c
+
+// Chip temperature, from the on-die sensor, read once per report (main.c). Whole degrees C, or
+// -128 if the sensor could not be read. How hot the board is running is the one thing that
+// cannot be checked by touch while it is too hot to touch.
+int8_t rt_temp_c(void);
+void   rt_temp_update(void);
 
 void rt_espnow_start(void);
 void rt_ble_start(void);

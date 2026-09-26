@@ -365,3 +365,12 @@ void rt_ble_start(void)
     nimble_port_freertos_init(host_task);
     xTaskCreate(adv_task, "ble_adv", 4096, NULL, 4, NULL);
 }
+
+// What BLE has on the air besides the control link, asked of NimBLE and of this file's own
+// state rather than of the switches - see RT_RADIO_* in rt.h.
+uint8_t rt_ble_radio_bits(void)
+{
+    return (ble_gap_ext_adv_active(ADV_INSTANCE) ? RT_RADIO_BEACON : 0)
+         | (s_scanning ? RT_RADIO_SCAN : 0)
+         | (s_scanning && s_scan_solo ? RT_RADIO_SCAN_ALL : 0);
+}

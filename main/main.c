@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "driver/temperature_sensor.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -139,6 +140,7 @@ uint8_t rt_reset_code(void)
 static bool    s_wifi_on;
 static uint8_t s_wifi_proto;
 static bool    s_wifi_ap;
+static bool    s_wifi_resp;   // the AP answering FTM
 
 // Set once in wifi_start(), and put back every time the AP comes up again after a spell in
 // STA-only mode, rather than trusting the driver to have kept it across the mode change.
@@ -175,7 +177,7 @@ static uint8_t wifi_proto(void)
 // either: nothing has asked for it yet.
 static bool ap_wanted(void)
 {
-    return (g_tests & RT_TEST_AP) != 0;
+    return (g_tests & RT_TEST_SOFTAP) != 0;
 }
 
 // Idempotent: brings the driver to whatever g_tests and g_lr currently ask for. Both a switch
@@ -191,9 +193,13 @@ static void wifi_apply(void)
 {
     const bool    want  = wifi_wanted();
     const bool    ap    = want && ap_wanted();
+    // Answering FTM is antenna time of its own - an initiator nearby keeps the AP busy - so only
+    // under its own switch.
+    const bool    resp  = ap && (g_tests & RT_TEST_FTM_RESP) != 0;
     const uint8_t proto = wifi_proto();
 
-    if (s_wifi_on == want && (!want || (s_wifi_proto == proto && s_wifi_ap == ap))) {
+    if (s_wifi_on == want
+        && (!want || (s_wifi_proto == proto && s_wifi_ap == ap && s_wifi_resp == resp))) {
         return;
     }
 
@@ -214,6 +220,7 @@ static void wifi_apply(void)
     RT_TRY(TAG, esp_wifi_set_protocol(WIFI_IF_STA, proto));
     if (ap) {
         RT_TRY(TAG, esp_wifi_set_protocol(WIFI_IF_AP, proto));
+        s_ap_cfg.ap.ftm_responder = resp;
         RT_TRY(TAG, esp_wifi_set_config(WIFI_IF_AP, &s_ap_cfg));
     }
 
@@ -229,9 +236,11 @@ static void wifi_apply(void)
     RT_TRY(TAG, esp_wifi_set_channel(WIFI_CHAN, WIFI_SECOND_CHAN_NONE));
     s_wifi_proto = proto;
     s_wifi_ap    = ap;
+    s_wifi_resp  = resp;
     rt_espnow_resume();  // no-op until rt_espnow_start() has run
 
-    ESP_LOGI(TAG, "wifi started: %s, lr=%s", ap ? "AP + station" : "station only",
+    ESP_LOGI(TAG, "wifi started: %s, lr=%s",
+             !ap ? "station only" : resp ? "AP answering FTM + station" : "AP + station",
              g_lr ? "on" : "off");
 }
 #endif
@@ -273,6 +282,54 @@ bool rt_wifi_active(void)
 #else
     return false;
 #endif
+}
+
+uint8_t rt_wifi_radio_bits(void)
+{
+#if RT_STAGE >= 1
+    return (s_wifi_on ? RT_RADIO_WIFI : 0)
+         | (s_wifi_on && s_wifi_ap ? RT_RADIO_AP : 0)
+         | (s_wifi_on && s_wifi_resp ? RT_RADIO_AP_FTM : 0);
+#else
+    return 0;
+#endif
+}
+
+uint8_t rt_radios(void)
+{
+    return rt_wifi_radio_bits() | rt_ble_radio_bits()
+         | (rt_154_rx_on() ? RT_RADIO_154_RX : 0) | (rt_ui_slow() ? RT_RADIO_UI_SLOW : 0);
+}
+
+// ---- Chip temperature ------------------------------------------------------------------------
+//
+// The on-die sensor, installed on first use and read once per report - slow on purpose, nobody
+// needs it faster, and every read is a little time on the ADC. The range is the sensor's
+// most accurate one that still covers "too hot to touch".
+static temperature_sensor_handle_t s_tsens;
+static bool   s_tsens_failed;
+static int8_t s_temp_c = -128;
+
+int8_t rt_temp_c(void)
+{
+    return s_temp_c;
+}
+
+void rt_temp_update(void)
+{
+    if (s_tsens == NULL && !s_tsens_failed) {
+        const temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(20, 100);
+        if (temperature_sensor_install(&cfg, &s_tsens) != ESP_OK
+            || temperature_sensor_enable(s_tsens) != ESP_OK) {
+            ESP_LOGW(TAG, "no temperature sensor - the report will say so");
+            s_tsens_failed = true;
+            return;
+        }
+    }
+    float c = 0;
+    if (s_tsens != NULL && temperature_sensor_get_celsius(s_tsens, &c) == ESP_OK) {
+        s_temp_c = (int8_t)(c < -127 ? -127 : c > 127 ? 127 : (int)(c + (c < 0 ? -0.5f : 0.5f)));
+    }
 }
 
 void rt_set_lr(bool lr)
@@ -330,7 +387,8 @@ static void restore_control(void)
 static unsigned next_solo(unsigned tests)
 {
     static const uint8_t cycle[] = { 0, RT_TEST_ESPNOW, RT_TEST_BLE_ADV, RT_TEST_154,
-                                     RT_TEST_FTM, RT_TEST_AP };
+                                     RT_TEST_FTM, RT_TEST_AP, RT_TEST_FTM_RESP,
+                                     RT_TEST_AP_SCAN };
     const int n = sizeof(cycle) / sizeof(cycle[0]);
     for (int i = 0; i < n; i++) {
         if (cycle[i] == tests) {
@@ -367,7 +425,8 @@ static void wifi_start(void)
     ap->ap.channel        = WIFI_CHAN;
     ap->ap.authmode       = WIFI_AUTH_OPEN;   // throwaway instrument, not a product
     ap->ap.max_connection = 4;
-    ap->ap.ftm_responder  = true;             // needs CONFIG_ESP_WIFI_FTM_ENABLE (sdkconfig.defaults)
+    // ftm_responder is set per start from the FTM_RESP test - see wifi_apply(). Needs
+    // CONFIG_ESP_WIFI_FTM_ENABLE (sdkconfig.defaults).
 
     wifi_apply();  // started for ESP-NOW's init; app_main stops it again right after
 }
@@ -704,6 +763,7 @@ void app_main(void)
         ESP_LOGI(TAG, "alive %lus (stage 0, no radios)",
                  (unsigned long)(rt_ms() / 1000));
 #else
+        rt_temp_update();
         rt_report();
 #endif
 #if RT_STAGE >= 4

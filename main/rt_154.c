@@ -395,9 +395,15 @@ void rt_154_start(void)
     ESP_LOGI(TAG, "channel %d, tx every %dms", CHANNEL, TX_PERIOD_MS);
 }
 
+bool rt_154_rx_on(void)
+{
+    return s_rx_on;
+}
+
 #else  // no 802.15.4 radio on this target (C3, S3)
 
 void rt_154_start(void) {}
+bool rt_154_rx_on(void) { return false; }
 void rt_154_apply_power(void) {}
 void rt_154_counters(uint32_t *frames, uint32_t *ours, uint32_t *coex)
 {
