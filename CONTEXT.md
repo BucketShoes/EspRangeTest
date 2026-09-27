@@ -115,9 +115,21 @@ The owner's framing, which supersedes "low contention" as the organising idea:
   Earlier airtime cuts, all FTM, stand: passive scans, a 1-2s gap, responder only under
   `ftm resp`. The "on air" line is each driver's own flags at report time - not an rx/tx
   measurement, which this chip does not offer, and blind to an RF hold.
+- **The BLE link runs one rate, always** (owner, 2026-09-27): 800ms adverts, 350-500ms connection
+  interval, the spec's maximum 32s supervision timeout - `UI_ITVL_*` / `CONN_*` in
+  `main/rt_ui.c`. Calling the old slow mode "yielding" was false: BLE keeps its coex priority
+  and never yields, it is only infrequent. Nothing about it changes with the tests any more, so
+  the report no longer says anything about it (bit 7 of `radios` is unused). Supersedes the
+  fast/slow history under Radio isolation.
+- **Measured, after 802.15.4 was disabled instead of slept**: ~110mA with every test off, against
+  ~100mA for a blank sketch on the same USB meter (not a precise one) and 130-140mA before - the
+  same as the old firmware with 802.15.4 receiving. So "all off" had been 802.15.4 still
+  receiving. BLE sleep (`CONFIG_BT_LE_SLEEP_ENABLE`) went in at the same time; its own share was
+  not measured, and the owner's view is that BLE never receives outside its windows anyway.
+  The RF switch (GPIO3) is powered once at boot and never turned off, as it should be.
 - **Control is transport-agnostic** (owner): BLE is *a* control link, not *the* one - a Wi-Fi
   (websockets) one is planned. Report building and commands should not grow BLE-only
-  assumptions; the BLE side's fast/slow is labelled as BLE's.
+  assumptions.
 - **Tap cycle is range candidates only** (espnow, ble_adv, 154, ap): FTM and the scan cannot
   answer "what gives the best practical range at 90% PER or below", so they are page-only.
 - **The page decodes v9 and v10 only**; older firmware is told to reflash. The owner reflashes
@@ -851,7 +863,7 @@ not occasionally, unlike everything else on this board (adverts every 500ms, ESP
 (`rt_tx_enabled(CH_BLE_ADV)`), same condition as the coded beacon's own TX gate, and `on_sync`
 applies the same gate rather than arming it unconditionally at boot.
 
-*Pass 2 — the phone UI.* The legacy advert/GATT connection (`rt_ui.c`) is needed for the
+*Pass 2 — the phone UI.* (Superseded 2026-09-27: one rate always - see "The BLE link runs one rate" near the top.) The legacy advert/GATT connection (`rt_ui.c`) is needed for the
 interface/control path regardless of what's under test, so it stays up rather than stopping.
 **It runs slow in exactly two modes — `espnow` and `154` — and fast everywhere else.** Those
 two are the only ones whose point is handing airtime to a non-BLE channel, and they are

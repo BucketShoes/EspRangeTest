@@ -64,12 +64,10 @@ Wi-Fi test on the Wi-Fi driver stops; without `ap` or `ftm resp` there is no AP 
 station-only for `espnow`, `ftm` or `ap scan`); with `ble_adv` off the coded scanner stops; with
 `154` off the 802.15.4 radio is disabled outright, not just asleep.
 
-That last part, and BLE modem sleep (`CONFIG_BT_LE_SLEEP_ENABLE` in `sdkconfig.defaults`), are
-about the RF itself rather than any radio's traffic. The C6's radios share one RF, and each
-driver holds it powered while it is enabled unless it has a way to let go: without power
-management built in, a sleeping 802.15.4 radio never lets go, and a BLE controller without
-modem sleep never does either. A held RF draws near receiver current whether anything is
-received or not. See the comments beside each for the driver source that shows it.
+Disabled, because asleep was not off: without power management built in, a sleeping 802.15.4
+radio kept receiving, and "every test off" measured the same as 802.15.4 on. BLE sleep
+(`CONFIG_BT_LE_SLEEP_ENABLE` in `sdkconfig.defaults`) went in at the same time, so the BLE
+controller also hands the RF back between its events. See the comments beside each.
 
 The report carries an **on air** line — on the card and in the serial report — along with the
 chip temperature. It is what each driver says it has running at the moment of the report (the
@@ -86,9 +84,9 @@ see it. FTM has not been tried with LR on yet; that is what the toggle is for.
 
 Control links are **not** tests and have no switch. BLE to the phone is the only one built so
 far; a Wi-Fi one (websockets) is meant to follow, so control is not meant to depend on BLE. The
-BLE link is always on. It yields — long advert and connection intervals — while some test other
-than `ble_adv` is on, to hand that test the antenna, and runs at full rate (short intervals)
-otherwise; the on-air line says which. See `UI_SLOW()` in `main/rt_ui.c`.
+BLE link is always on, at one unhurried rate whatever the tests are — it never gives up its
+place to them, it is just infrequent enough to leave them the gaps. See `UI_ITVL_*` and
+`CONN_*` in `main/rt_ui.c`.
 
 ## GPIO9
 
