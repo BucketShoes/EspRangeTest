@@ -67,6 +67,8 @@
           color:var(--dim);margin-bottom:2px}
   .logtop button{padding:2px 8px;font-size:12px;border-radius:6px}
   .hint{color:var(--dim);font-size:13px;line-height:1.5}
+  .helpbox{margin-top:8px}
+  .helpbox summary{cursor:pointer;display:inline-block}
   .pwr{border-top:1px solid var(--line);margin:2px 0 10px;padding-top:8px}
   .pwrhead{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);
            font-weight:600;margin-bottom:6px}
@@ -182,10 +184,63 @@
 
 <div class="hint" id="hint">
   Tap <b>Connect a board</b>; tap it again for the next one. Each board reports what it hears.
-  Boards start with every test off; holding a board's button turns them all off again. The
-  README has the rest.<br><br>
+  Boards start with every test off; holding a board's button turns them all off again.
+  <b>help</b> below has the rest.<br><br>
   Needs Chrome on Android or desktop, over https:// or localhost - not a <code>file://</code> page.
 </div>
+<!-- The full help, folded away: always there, never in the way. -->
+<details class="hint helpbox">
+  <summary>help</summary>
+  Flash two boards, leave one behind, and walk away with the other plus this page.<br><br>
+  Connect to either board — each one reports what <em>it</em> can hear, so the numbers are
+  for the link between them. Tap <b>Connect a board</b> again to add the second one.<br><br>
+  Boards start with every test off. Switch on whichever you are testing, on each board - one on
+  its own, or a few together the way they will be used. The Bluetooth link to this page is not a
+  test and stays on, at one unhurried rate so the tests get the gaps. Holding a
+  board's button turns every test off again.<br><br>
+  <b>ftm</b> on a board ranges to every other board with <b>ftm resp</b> on. Each range is a faint
+  ring on the map round where it was measured from (<b>rings</b> shows and hides them), and
+  where the rings agree is where the other board is; once they come from more than one spot a
+  cross marks the best fit. Each range is also a mark like a packet, so <b>ftm distance</b>,
+  its RSSI and its success rate can be drawn as ticks beside any other link - and so can
+  <b>height</b>. FTM reads with an offset until zeroed: bring the two boards together once, then tap
+  the <b>0</b> on that FTM row - it zeroes on the shortest distance ever seen between them, kept
+  in this browser; tap it twice to start again from this session only. The rings need to know
+  where the measuring board was: its own GNSS if it has one, otherwise tap <b>carry</b> on its
+  card while you have it with you. A board's stockpile of ranges comes down when it is back in
+  reach, like its packets.<br><br>
+  <b>ap scan</b> listens for other boards' APs - any with <b>ap</b> or <b>ftm resp</b> on - and
+  shows each as a link like a packet one, heard or missed each scan, under <b>ap</b>.<br><br>
+  For a range walk, drop one board, tap <b>set base</b> where you left it, turn on <b>GPS</b>,
+  and walk. Every packet gets pinned to where you were standing when it arrived, so bare
+  track is ground where nothing got through.<br><br>
+  A board with a GNSS module draws its own track, and every packet to or
+  from it is pinned to where <em>it</em> was instead. Connect to any board - the one with the
+  GNSS or one that heard it - and the track fills in from whatever each has seen; a board that
+  was out of reach sends what it stockpiled once you reconnect.<br><br>
+  <b>field</b> turns one link into a coverage map: pick the two boards, the protocol and a
+  stretch of time when nothing but position changed, and the packets heard and missed are
+  spread into colour between and around where they landed. <b>trace</b> lays what it was made
+  from over the top, and <b>bearing</b> lets a walk out in one direction stand in for the
+  others.<br><br>
+  Colour covers everything it can reach. The white line rings ground that was actually measured,
+  the fainter one ground a measurement reached; outside both, the colour is the nearest reading
+  carried over, and worth no more than that. <b>cells</b> draws the averages themselves, over the
+  ground they cover and no further - the measurements, with nothing added. <b>losses count</b>
+  keeps a stretch where nothing got through from reading as no data: those packets count as
+  readings at the floor, and drag the colour down.<br><br>
+  The <b>fit</b> row is optional and starts off. It fits signal against range and draws the map
+  through it, so a few spokes describe a whole disc; <b>height</b> takes out how high a GNSS end
+  was flying, since low down the ground itself is in the way - 900 m along the ground beats
+  1.1 km at 100 m up - and the <b>at</b> slider says which height the map answers for.
+  <b>leftovers</b> shows only what the fit could not explain, which is where hills are. On
+  <b>delivery</b> that is the clearest shadow map there is: a shadow deep enough to matter kills
+  the link, and a dead link reports no signal at all, so only the packets that never arrived can
+  show it.<br><br>
+  Needs Chrome on Android or desktop. Web Bluetooth won't work from a
+  <code>file://</code> page — use the GitHub Pages URL, or <code>python3 -m http.server</code>
+  and open <code>http://localhost:8000</code>.
+</details>
 
 <!-- What the page can see about its own caching. On a range walk there are no
      dev tools and often no signal, so both of these are plain on-page links
@@ -5228,8 +5283,7 @@ function updateCard(d) {
     if (b & 8) on.push('coded beacon');
     if (b & 16) on.push('coded scan ' + (b & 32 ? '100%' : '40%'));
     if (b & 64) on.push('154 rx');
-    on.push('ble control ' + (b & 128 ? 'yielding to tests' : 'full rate'));
-    diag.push(`<span class="ch">on air</span> ${on.join(' · ')}`);
+    diag.push(`<span class="ch">on air</span> ${on.join(' · ') || 'nothing but the BLE link'}`);
   }
   // What the Wi-Fi scan is finding, so an empty FTM or AP table says why: nothing heard, heard
   // APs but none ours, or ours but none answering FTM. Said every report while either is on.
