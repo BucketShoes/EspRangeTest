@@ -778,7 +778,7 @@ void rt_report(void);
 //     u8  radios        what is actually using the antenna right now, whatever the switches say:
 //                       bit0 Wi-Fi driver up, bit1 SoftAP up, bit2 SoftAP answering FTM,
 //                       bit3 coded beacon on, bit4 coded scanner on, bit5 scanner continuous
-//                       (else 40%), bit6 802.15.4 receiver on, bit7 BLE control link slowed
+//                       (else 40%), bit6 802.15.4 radio enabled (receiving), bit7 unused
 //     u8  scan_aps      APs the last Wi-Fi scan heard, any
 //     u8  scan_ours     of them ours (ESPRT- SSIDs)
 //     u8  scan_ftm      of those, advertising the FTM responder bit
@@ -989,13 +989,11 @@ void rt_ftm_report(void);
 #define RT_RADIO_SCAN     0x10
 #define RT_RADIO_SCAN_ALL 0x20
 #define RT_RADIO_154_RX   0x40
-#define RT_RADIO_UI_SLOW  0x80
 
 uint8_t rt_radios(void);
 uint8_t rt_wifi_radio_bits(void);   // main.c
 uint8_t rt_ble_radio_bits(void);    // rt_ble.c
 bool    rt_154_rx_on(void);         // rt_154.c
-bool    rt_ui_slow(void);           // rt_ui.c
 
 // Chip temperature, from the on-die sensor, read once per report (main.c). Whole degrees C, or
 // -128 if the sensor could not be read. How hot the board is running is the one thing that

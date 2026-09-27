@@ -298,7 +298,7 @@ uint8_t rt_wifi_radio_bits(void)
 uint8_t rt_radios(void)
 {
     return rt_wifi_radio_bits() | rt_ble_radio_bits()
-         | (rt_154_rx_on() ? RT_RADIO_154_RX : 0) | (rt_ui_slow() ? RT_RADIO_UI_SLOW : 0);
+         | (rt_154_rx_on() ? RT_RADIO_154_RX : 0);
 }
 
 // ---- Chip temperature ------------------------------------------------------------------------

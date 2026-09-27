@@ -113,9 +113,9 @@ CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
 
 # BLE modem sleep: the controller gives the shared RF back between its events. Without it the
 # controller takes the RF at enable and never lets go (controller_sleep_cb is only registered
-# under this option - bt/controller/esp32c6/bt.c), so the RF sits powered, near receiver
-# current, the whole time the board is up. No power management or light sleep: the CPU stays
-# awake, only the radio sleeps between advert and connection events.
+# under this option - bt/controller/esp32c6/bt.c). What that hold costs was not measured on its
+# own: it went in with the 802.15.4 fix, which is what took idle current down. No power
+# management or light sleep: the CPU stays awake.
 CONFIG_BT_LE_SLEEP_ENABLE=y
 
 # 802.11mc FTM. Without this the driver is built without FTM, and the SoftAP's

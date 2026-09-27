@@ -20,8 +20,7 @@ static const char *TAG = "ui";
 
 #define UI_INSTANCE  1
 
-// Advertising and connection timings are given as ranges, never as a single value, and the
-// ranges are deliberately wide.
+// Advertising and connection timings are given as ranges, never as a single value.
 //
 // A controller handed itvl_min == itvl_max has exactly one instant it may use, so every board
 // running this firmware picks the same one and then holds it against everything else that
@@ -29,60 +28,28 @@ static const char *TAG = "ui";
 // room, the controller can slide its events into gaps instead of colliding with them, and two
 // boards that start out aligned drift apart on their own. Nothing here needs an event to
 // happen at a particular time; it only needs it to happen.
-#define UI_ITVL_FAST_MIN 0x00A0  // 0.625ms units -> 100ms
-#define UI_ITVL_FAST_MAX 0x0140  // -> 200ms
-// Slow, but still findable. 800-1600ms could not be reconnected to in any reasonable time -
-// Chrome scans on its own duty cycle and two sparse schedules miss each other for a long while.
-// These are the owner's numbers; do not "improve" them in either direction.
-#define UI_ITVL_SLOW_MIN 0x03C0  // -> 600ms
-#define UI_ITVL_SLOW_MAX 0x0640  // -> 1000ms
-
-// Slow while some test other than BLE is on and ble_adv is not; fast otherwise.
 //
-// Slow is for handing airtime to a channel that is not BLE: every millisecond this link does
-// not use is one espnow, 802.15.4 or FTM can. Fast everywhere else, because slowing this link
-// where nothing is waiting for the antenna buys nothing and costs something real:
-//
-//   - with every test off, this link is the only thing on the air. Nothing gains from it
-//     being slow, and it is the state the button restores to - the one that has to be
-//     easiest to reconnect to. Every reconnect *starts* with seeing an advert, so a 1s advert
-//     interval is a 1s-plus stall on each one.
-//   - ble_adv is the BLE test itself, which is partly about whether a connection can be
-//     established and held at all and asks for coded S=8 on it. Throttling the UI there
-//     handicaps the thing under test.
-//   - a slow connection interval means nothing can be sent *at all* until the next connection
-//     event. Slowing it anywhere the results are wanted promptly does not make the reports
-//     cheaper, it makes them late or absent - and a report not seen is a test not run.
-//
-// (This is the UI advert on UI_INSTANCE, the 1M control link. The coded-PHY measurement beacon
-// is ADV_INSTANCE in rt_ble.c and nothing here has ever touched its interval.)
-#define UI_SLOW() ((g_tests & ~RT_TEST_BLE_ADV) != 0 && (g_tests & RT_TEST_BLE_ADV) == 0)
-
-bool rt_ui_slow(void)
-{
-    return UI_SLOW();
-}
+// One rate, whatever the tests are. BLE never yields to them - it keeps its place in the coex
+// arbiter - it is just infrequent, all the time, so a test gets the gaps without the link ever
+// changing under it. These are the owner's numbers.
+#define UI_ITVL_MIN 0x0500  // 0.625ms units -> 800ms
+#define UI_ITVL_MAX 0x0550  // -> 850ms, a little room per the note above
 
 // Connection parameters requested once a phone connects. Peripheral-preferred, so the phone
-// may not honor them exactly, but it is what we ask for. "Fast" keeps the live-walk UI
-// responsive; "slow" trades that for airtime back to whichever channel is under test - a
-// laggy link and a slow initial connection are fine, this is a bench-test mode.
-#define CONN_ITVL_FAST_MIN 0x0010  // 20ms
-#define CONN_ITVL_FAST_MAX 0x0050  // 100ms
-// 350-500ms, the owner's numbers. 500ms is the ceiling because nothing can be sent until a
-// connection event, and the report has to arrive while it is still worth reading.
+// may not honor them exactly, but it is what we ask for.
 //
-// Latency stays at zero. Note what it actually costs, which is not what an earlier comment here
-// claimed: a slave with data queued uses the next anchor point regardless of latency, so
-// reports were never delayed by it. What latency delays is the *other* direction - a command
-// from the phone can wait up to (1+latency) intervals before the board hears it. At latency 4
-// and 500ms that is 2.5s of dead control, which is the part worth not having.
-#define CONN_ITVL_SLOW_MIN 0x0118  // 1.25ms units -> 350ms
-#define CONN_ITVL_SLOW_MAX 0x0190  // -> 500ms
-#define CONN_LATENCY_SLOW  0
-// Supervision timeout must clear (1 + latency) * itvl_max * 2 or the link drops on its own.
-#define CONN_TIMEOUT_FAST 400  // 10ms units -> 4s
-#define CONN_TIMEOUT_SLOW 1000 // -> 10s. Must clear (1+4)*750ms*2 = 7.5s; 8s left no margin.
+// 350-500ms. 500ms is the ceiling because nothing can be sent until a connection event, and the
+// report has to arrive while it is still worth reading.
+//
+// Latency stays at zero: a slave with data queued uses the next anchor point regardless of
+// latency, so reports are never delayed by it, but a command from the phone can wait up to
+// (1+latency) intervals before the board hears it.
+#define CONN_ITVL_MIN  0x0118  // 1.25ms units -> 350ms
+#define CONN_ITVL_MAX  0x0190  // -> 500ms
+#define CONN_LATENCY   0
+// The longest the spec allows (0x0C80, 10ms units): a link at the edge of range rides out a
+// long fade rather than dropping and needing a fresh connection, which is far harder to get.
+#define CONN_TIMEOUT   3200    // -> 32s
 
 // The packet log rides behind the report, as fast as the link will actually take it.
 //
@@ -129,7 +96,6 @@ static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static bool     s_subscribed;
 static uint8_t  s_own_addr_type;
 static char     s_name[16];
-static int      s_last_tests = -1;  // forces the first apply_test_ble_params() to actually run
 
 // Bumped on every connection. A log request belongs to the connection it arrived on; one left
 // over from a phone that has since gone is not something to keep streaming for.
@@ -151,18 +117,18 @@ static struct {
 
 static int start_adv(void);
 
-// Ask the current connection (if any) for slower or faster parameters. Peripheral-preferred
-// only - the central can decline - but it is what we ask for.
-static void apply_conn_params(bool slow)
+// Ask the current connection for this link's parameters. Peripheral-preferred only - the
+// central can decline - but it is what we ask for.
+static void apply_conn_params(void)
 {
     if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
         return;
     }
     struct ble_gap_upd_params p = { 0 };
-    p.itvl_min = slow ? CONN_ITVL_SLOW_MIN : CONN_ITVL_FAST_MIN;
-    p.itvl_max = slow ? CONN_ITVL_SLOW_MAX : CONN_ITVL_FAST_MAX;
-    p.latency  = slow ? CONN_LATENCY_SLOW : 0;
-    p.supervision_timeout = slow ? CONN_TIMEOUT_SLOW : CONN_TIMEOUT_FAST;
+    p.itvl_min = CONN_ITVL_MIN;
+    p.itvl_max = CONN_ITVL_MAX;
+    p.latency  = CONN_LATENCY;
+    p.supervision_timeout = CONN_TIMEOUT;
     const int rc = ble_gap_update_params(s_conn, &p);
     if (rc != 0) {
         ESP_LOGW(TAG, "update_params rc=%d", rc);
@@ -209,23 +175,6 @@ void rt_set_conn_phy(bool two_m)
     g_conn_2m = two_m;
     s_conn_phy_actual = 0;  // unknown until the controller says otherwise
     apply_conn_phy();
-}
-
-// Called whenever g_tests changes. This link is never switched off - there is no test that
-// does it - only slowed while another channel wants the antenna. See the UI_ITVL_SLOW /
-// CONN_*_SLOW comments.
-static void apply_test_ble_params(void)
-{
-    const bool slow = UI_SLOW();
-    if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
-        // Only touch the advertising instance while nothing is connected on it - restarting
-        // it while connected would open a second, unwanted connection slot rather than
-        // change anything about the link already up.
-        ble_gap_ext_adv_stop(UI_INSTANCE);
-        start_adv();
-    } else {
-        apply_conn_params(slow);
-    }
 }
 
 static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
@@ -337,7 +286,7 @@ static int gap_cb(struct ble_gap_event *event, void *arg)
             // stays on 1M - this must never be allowed to cost us the UI connection, so the
             // result is logged and otherwise ignored.
             apply_conn_phy();
-            apply_conn_params(UI_SLOW());
+            apply_conn_params();
         } else {
             start_adv();
         }
@@ -390,8 +339,8 @@ static int start_adv(void)
     p.own_addr_type = s_own_addr_type;
     p.primary_phy   = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
-    p.itvl_min      = UI_SLOW() ? UI_ITVL_SLOW_MIN : UI_ITVL_FAST_MIN;
-    p.itvl_max      = UI_SLOW() ? UI_ITVL_SLOW_MAX : UI_ITVL_FAST_MAX;
+    p.itvl_min      = UI_ITVL_MIN;
+    p.itvl_max      = UI_ITVL_MAX;
     // The phone link shares the BLE level: it is the same radio, and a separate knob for the
     // control advert would be a fourth thing to get wrong for no measurement it enables.
     p.tx_power      = rt_power_dbm(CH_BLE_ADV);
@@ -563,19 +512,10 @@ static void log_stream(int cap)
 // gives a partial update rather than nothing at all.
 void rt_ui_notify(void)
 {
-    // Polled here rather than driven from rt_set_tests() directly: this runs on the ui task,
-    // not whatever task/ISR context a switch was requested from (button task, or the NimBLE
-    // host task via cmd_write). Every REPORT_MS is plenty responsive for a deliberate,
-    // operator-commanded change.
-    if (g_tests != s_last_tests) {
-        s_last_tests = g_tests;
-        apply_test_ble_params();
-    }
-
     // Advertising power is fixed when the instance is configured, so a level change needs the
     // advert rebuilding. Only safe while nothing is connected on it - restarting a connectable
     // instance mid-connection would open a second slot rather than change the existing link,
-    // which is the same reason apply_lc_ble_params() leaves it alone when connected. A phone
+    // which is why nothing here touches it while connected. A phone
     // that is already connected keeps the power it connected at until it drops.
     static int s_last_pwr = -128;
     if (g_pwr_dbm[CH_BLE_ADV] != s_last_pwr) {

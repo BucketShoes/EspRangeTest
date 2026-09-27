@@ -883,14 +883,13 @@ void rt_report(void)
     // hot the chip is. The two together are how to find a radio left on.
     const uint8_t rb = rt_radios();
     const int8_t  tc = rt_temp_c();
-    printf("  on air: %s%s%s%s%s  ble control %s  chip ",
+    printf("  on air: %s%s%s%s%s  chip ",
            rb & RT_RADIO_WIFI ? "wifi" : "wifi off",
            rb & RT_RADIO_AP ? (rb & RT_RADIO_AP_FTM ? " +AP answering FTM" : " +AP") : "",
            rb & RT_RADIO_BEACON ? "  coded beacon" : "",
            rb & RT_RADIO_SCAN ? (rb & RT_RADIO_SCAN_ALL ? "  coded scan 100%" : "  coded scan 40%")
                               : "",
-           rb & RT_RADIO_154_RX ? "  154 rx" : "",
-           rb & RT_RADIO_UI_SLOW ? "yielding to tests" : "full rate");
+           rb & RT_RADIO_154_RX ? "  154 rx" : "");
     if (tc == -128) {
         printf("temp unreadable\n");
     } else {
