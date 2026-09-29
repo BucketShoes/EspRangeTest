@@ -5352,7 +5352,11 @@ function updateCard(d) {
       `<td class="dim">${f.ok}</td><td class="dim">${f.fail}</td>` +
       '<td class="dim age">–</td></tr>';
     }).join('') +
-    '</table>';
+    '</table>' +
+    // A ring is drawn round where this board was, so with no position there is nothing to draw.
+    (boardPos(idOf(d.name), Date.now()) ? '' :
+      '<div class="hint">No rings on the map: this board has no position. Tap <b>carry</b> ' +
+      '(with GPS on) while it is with you, or give it GNSS.</div>');
 
   if (!rows.length) {
     R.body.innerHTML = (d.tests ? '<div class="hint">Nothing heard yet. Is the other board ' +
