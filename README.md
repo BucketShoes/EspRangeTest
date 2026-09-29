@@ -137,8 +137,7 @@ the scale; the altitude recorded is untouched). A board with its own GNSS is pla
 other board is placed by tapping **carry** on its card — it then follows the phone's GPS until
 tapped again, which leaves it where you stood.
 
-A ring from a drone is drawn at the ground distance its slant range means, taking the lowest the
-drone has been as ground level. Display only — the numbers are the slant range.
+Rings are drawn at the distance measured, straight line and all, including from a drone.
 
 ## GNSS (optional)
 

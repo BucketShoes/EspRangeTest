@@ -146,9 +146,10 @@ The owner's framing, which supersedes "low contention" as the organising idea:
   than one place. Each range is also a sample, so FTM distance - and height - can be drawn as
   ticks and compared with rssi, lqi and the rest. Every layer has its own on/off switch (rings,
   tracks, field, misses); no switch hides other layers.
-- **Height**: a drone's slant range is flattened to ground distance for the rings, and the
-  height tick is measured from the lowest anything has been - both display zeros only, never
-  applied to a recorded number.
+- **Height**: the height tick is measured from the lowest anything has been - a display zero
+  only, never applied to a recorded number. Rings are drawn at the measured (slant) distance:
+  flattening them by height above the lowest point of the track, as an earlier revision did,
+  let one cold-start GNSS altitude tens of metres low shrink every ring of a walk to a dot.
 - **"Carry"** (CONTEXT's old "pick up / put down" role idea, finally built): the phone's GPS is
   ascribed to a board while carried; put down, it stays where the phone was. Page-only, never
   sent to the board. It places non-GNSS boards and their FTM rings; packet marks still go where
