@@ -3524,11 +3524,9 @@ function boardPos(id, t) {
 // low opacity, so where many of them agree the edges pile up into one bright spot and a stray
 // reading stays a faint line.
 //
-// The distance is the straight line, and a drone is not at ground level. Where the initiator's
-// position has a height, the ring is drawn at the ground distance that slant range means for a
-// responder at ground level - taking "ground" to be the lowest that board's track has been,
-// which for a drone is where it took off. A responder far above or below that is drawn too
-// small or too large.
+// Drawn at the distance measured, straight line and all. An earlier revision flattened it to a
+// ground distance using the initiator's height above the lowest its track had been - and one
+// cold-start GNSS altitude tens of metres low shrank every ring of a walk to a dot.
 //
 // Rings from one spot only say how far, not which way, so the page also finds the spot the
 // rings agree on best, per responder, once they come from more than one place - see ftmEstimate().
@@ -3620,30 +3618,12 @@ function placeFtm(s) {
   }
 }
 
-// The lowest a GNSS board's track has been. Recomputed when the tracks move on, not per ring.
-function groundOf(id) {
-  const G = gtr.get(id);
-  if (!G || !G.list.length) return undefined;
-  if (G.loRev !== gRev) {
-    let lo = Infinity;
-    for (const F of G.list) if (typeof F.alt === 'number' && F.alt < lo) lo = F.alt;
-    G.lo = isFinite(lo) ? lo : undefined;
-    G.loRev = gRev;
-  }
-  return G.lo;
-}
-
 // A session as a ring on the ground: {x, y, r}, or null while the initiator cannot be placed.
 function ftmRing(f) {
   const c = f.pos || boardPos(idOf(f.dev), f.t);
   if (!c) return null;
   // A negative reading - an uncalibrated offset, or zeroed on a bad day - is drawn at its size.
-  let r = Math.abs(f.dist - ftmCal(f.dev, f.peer));
-  const lo = groundOf(idOf(f.dev));
-  if (typeof c.alt === 'number' && lo !== undefined) {
-    const dz = c.alt - lo;
-    r = Math.sqrt(Math.max(0, r * r - dz * dz));
-  }
+  const r = Math.abs(f.dist - ftmCal(f.dev, f.peer));
   return { x: c.x, y: c.y, alt: c.alt, r };
 }
 
