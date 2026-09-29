@@ -326,10 +326,10 @@ const testsTxt = m => TESTS.filter((_, i) => m & (1 << i)).join(' + ') || 'nothi
 // tap and hold, and hold has to be the restore. Must match RT_CMD_LR_* in main/rt.h.
 const CMD_LR_OFF = 0x80, CMD_LR_ON = 0x81;
 
-// Antenna port. The board always boots on the internal chip antenna and never remembers this,
-// because selecting a connector with nothing on it takes the radio off the air entirely - and
-// that would kill every control path at once, leaving only the button. A power cycle is the
-// guaranteed way back.
+// Antenna port, XIAO only. A XIAO boots on the external (U.FL) antenna and never remembers a
+// change; the button restore picks internal, because selecting a connector with nothing on it
+// takes the radio off the air entirely, and the chip antenna is always there. See the antenna
+// note in main/rt.h.
 //
 // It lives here rather than on the board's button for the same reason LR does: the button has
 // exactly two gestures, tap and hold, and hold has to stay the restore.
@@ -351,7 +351,12 @@ const CMD_TX_UNMUTE = 0x86, CMD_TX_MUTE = 0x87;
 // out of phase with the button. Must match RT_CMD_LED_* in main/rt.h; the polarity (which
 // level lights it) lives in one define in the firmware and never travels.
 const CMD_LED_OFF = 0x89, CMD_LED_ON = 0x8A, CMD_LED_BLINK = 0x8B;
-const LED_NAMES = ['led off', 'led on', 'led 2Hz'];
+// v11 adds colours (the devkits' WS2812) and a two-byte set, [0x91, state]. RT_LED_* order.
+const CMD_LED_SET = 0x91;
+const LED_NAMES = ['led off', 'led on', 'led 2Hz', 'led red', 'led green', 'led blue'];
+// What a tap steps through: the XIAO's plain LED, or a devkit's colours, ending on a white blink.
+const LED_CYCLE = { 1: [0, 1, 2], 2: [0, 3, 4, 5, 2] };
+const BOARD_NAMES = ['?', 'XIAO', 'devkit'];
 
 // What a GNSS board's packets carry between fixes: the latest fix as it is, an EMA of position
 // that eases onto each fix, or that plus a tracked velocity. Explicit states, cycled by one
@@ -382,7 +387,9 @@ const LOG_HDR = 12;
 // hardware's - Wi-Fi cannot go below +2dBm, the other two reach -15 - so "all" clamps each
 // radio to its own floor rather than refusing. Boards boot at minimum.
 const CMD_PWR_SET = 0xB0;
-const PWR_CH = ['espnow', 'ble_adv', '154'];  // CH_ order, matches the S line power fields
+// CH_ order, matches the S line power fields. Channel 0 is the Wi-Fi radio's one power - ESP-NOW,
+// the AP and FTM all transmit at it - so it is labelled wifi.
+const PWR_CH = ['wifi', 'ble_adv', '154'];
 // One span for every radio, deliberately, even though Wi-Fi cannot go below +2dBm and the
 // other two quantise to 3dB steps. A fair test has to look like a fair test: sliders sitting at
 // visibly different places purely because their scales differ reads as a rigged comparison, and
@@ -574,7 +581,7 @@ const PHY_LABELS = ['phy ?', ...['coded', '2M'].flatMap(w =>
   [`phy ${w}`, ...PHY_NAMES.map(g => `phy ${w} (${g})`)])];
 // 'ap' is another board's AP as heard by this board's Wi-Fi scan (ap scan), a v10 row kind.
 const CH_NAMES  = ['espnow', 'ble_adv', '154', 'ap'];
-const RPT_MIN = 9, RPT_MAX = 10;
+const RPT_MIN = 9, RPT_MAX = 11;
 
 function onNotify(d, view) {
   d.seen = Date.now();
@@ -613,7 +620,9 @@ function onChunk(d, v) {
     const node  = u24(v, o + 1);
     const tests = v.getUint8(o + 4);
     const state = v.getUint8(o + 5);
-    const led   = v.getUint8(o + 6);
+    // v11: low nibble the LED state, high nibble which board (BOARD_NAMES).
+    const led   = v.getUint8(o + 6) & (ver >= 11 ? 0x0F : 0xFF);
+    d.board     = ver >= 11 ? v.getUint8(o + 6) >> 4 : 0;
     const upMs  = v.getUint32(o + 7, true);
 
     // Uptime going backwards, or a new log session, is the sign the board reset - it comes back
@@ -4901,9 +4910,9 @@ function buildCard(d) {
   modes.appendChild(R.lr);
 
   R.ant = document.createElement('button');
-  R.ant.title = 'RF switch port. Internal is the onboard ceramic antenna; external is the ' +
-                'U.FL connector. Selecting external with nothing fitted takes the board off ' +
-                'the air - power cycle to get back to internal.';
+  R.ant.title = 'XIAO only: RF switch port. Internal is the onboard ceramic antenna; external ' +
+                'is the U.FL connector, and the default. Selecting external with nothing fitted ' +
+                'takes the board off the air - hold the board’s button to get back to internal.';
   R.ant.onclick = () => cmd(d, d.ant ? CMD_ANT_INT : CMD_ANT_EXT);
   modes.appendChild(R.ant);
 
@@ -4920,7 +4929,11 @@ function buildCard(d) {
   // Cycles, but sends the state it is cycling to rather than a "next" byte - see CMD_LED_*.
   // A board whose state has not arrived yet starts the cycle at "on", which is what an
   // unanswered press most likely meant.
-  R.led.onclick = () => cmd(d, CMD_LED_OFF + ((d.led ?? 0) + 1) % LED_NAMES.length);
+  R.led.onclick = () => {
+    const cyc = LED_CYCLE[d.board] ?? [0, 1, 2];
+    const next = cyc[(cyc.indexOf(d.led ?? 0) + 1) % cyc.length];
+    return d.board ? cmd(d, CMD_LED_SET, next) : cmd(d, CMD_LED_OFF + next);
+  };
   modes.appendChild(R.led);
 
   R.geo = document.createElement('button');
@@ -5141,7 +5154,7 @@ function updateCard(d) {
     (rebooted ? '<b class="bad">REBOOTED</b> · ' : '') +
     (d.reboots ? `<b class="bad">${d.reboots} reset${d.reboots > 1 ? 's' : ''}</b> · ` : '') +
     (rst ? `rst <b class="${rstBad ? 'bad' : 'dim'}">${esc(rst)}</b> · ` : '') +
-    `up ${d.uptime ?? '?'}s` +
+    (d.board ? `${BOARD_NAMES[d.board] ?? '?'} · ` : '') + `up ${d.uptime ?? '?'}s` +
     (d.temp !== undefined ? ` · chip <b class="${d.temp >= 70 ? 'bad' : d.temp >= 55 ? 'warn' : 'dim'}">${d.temp}°C</b>` : '') +
     ` · testing: <b>${esc(testsTxt(d.tests ?? 0))}</b><br />` +
     `LR: <b class="${d.lr ? 'warn' : 'dim'}">${d.lr ? 'on (AP hidden from phones)' : 'off'}</b> · ` +
@@ -5175,6 +5188,8 @@ function updateCard(d) {
   R.txm.className = d.txMute ? 'on' : '';
 
   setLab(R.led, ['led ?', ...LED_NAMES], LED_NAMES[d.led] ?? 'led ?');
+  // A devkit has no RF switch, so there is nothing to choose.
+  R.ant.disabled = d.board === 2;
   R.led.className = d.led ? 'on' : '';
 
   // Only where there is a GNSS to speak of: a board that has never seen NMEA has nothing to set.
