@@ -670,7 +670,7 @@ int rt_snapshot_chunk(uint8_t *out, int cap, uint8_t gen, rt_rpt_state_t *st)
         n = put_u24(out, n, rt_node_id());
         n = put_u8(out, n, g_tests);
         n = put_u8(out, n, state);
-        n = put_u8(out, n, g_led);
+        n = put_u8(out, n, (uint8_t)((g_led & 0x0F) | (g_board << 4)));
         n = put_u32(out, n, now);
         // Achieved dBm, not requested - the page should show what the radio is doing.
         for (int c = 0; c < CH_COUNT; c++) {
@@ -834,8 +834,8 @@ void rt_report(void)
     // who was not watching at the moment it scrolled past - and the moment worth watching is
     // always the one after something went wrong, by which time the banner is long gone.
     char tn[48];
-    printf("\n== node %06lX  up %lus  tests=%s  lr=%s  wifi=%s  ant=%s  led=%s  rst=%s ==\n",
-           (unsigned long)rt_node_id(),
+    printf("\n== node %06lX  %s  up %lus  tests=%s  lr=%s  wifi=%s  ant=%s  led=%s  rst=%s ==\n",
+           (unsigned long)rt_node_id(), rt_board_name(g_board),
            (unsigned long)(now / 1000), rt_tests_name(g_tests, tn, sizeof(tn)),
            g_lr ? "on" : "off",
            rt_wifi_active() ? "on" : "off", g_ant_ext ? "ext" : "int",

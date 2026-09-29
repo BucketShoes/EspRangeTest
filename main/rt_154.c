@@ -122,8 +122,20 @@ void rt_154_counters(uint32_t *frames, uint32_t *ours, uint32_t *coex)
     *coex   = s_tx_err_n[ESP_IEEE802154_TX_ERR_COEXIST];
 }
 
+// True between esp_ieee802154_enable() and _disable() - see radio_up().
+static volatile bool s_enabled;
+
 void rt_154_apply_power(void)
 {
+    if (!s_enabled) {
+        // Nothing to program: the driver's settings only exist while it is enabled (enable
+        // resets them, and radio_up() applies this again straight after). Reading back now
+        // would ask a driver with no channel set, which answers 0 dBm whatever was asked - so
+        // report the request, which is what it will transmit at when switched on.
+        s_txpower = rt_power_dbm(CH_154);
+        rt_power_set_actual(CH_154, s_txpower);
+        return;
+    }
     RT_TRY(TAG, esp_ieee802154_set_txpower(rt_power_dbm(CH_154)));
     // Read back: the driver quantises to 3dB steps, and this value goes into every packet, so
     // the far end records what was actually transmitted rather than what was requested.
@@ -233,6 +245,7 @@ static void radio_up(void)
 {
     RT_TRY(TAG, esp_ieee802154_enable());
     RT_TRY(TAG, esp_ieee802154_set_channel(CHANNEL));
+    s_enabled = true;
     rt_154_apply_power();
     RT_TRY(TAG, esp_ieee802154_set_panid(PANID));
     RT_TRY(TAG, esp_ieee802154_set_short_address((uint16_t)rt_node_id()));
@@ -250,6 +263,7 @@ static void apply_rx_gate(void)
     if (want) {
         radio_up();
     } else {
+        s_enabled = false;
         RT_TRY(TAG, esp_ieee802154_disable());
     }
     s_rx_on = want;

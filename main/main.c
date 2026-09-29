@@ -13,6 +13,8 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "driver/rmt_tx.h"
+#include "esp_rom_sys.h"
 #include "driver/temperature_sensor.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -368,7 +370,7 @@ void rt_apply_test_radios(void)
 // It is the *only* hold, so there is nothing to overshoot into and nothing to release in time.
 static void restore_control(void)
 {
-    ESP_LOGW(TAG, "button restore: every test off, LR off, coded PHY - as booted");
+    ESP_LOGW(TAG, "button restore: every test off, LR off, coded PHY, internal antenna");
     rt_set_lr(false);
     // 2M is the short-range choice, so it is a way to lose the phone by walking away from it -
     // which makes putting it back part of what "restore every control channel" means. Same
@@ -378,6 +380,9 @@ static void restore_control(void)
     // A board left muted by a command nobody remembers sending reads as a dead channel the
     // moment a test is turned back on.
     rt_set_tx_mute(false);
+    // The chip antenna is always fitted; an external one may have come off, and a port with
+    // nothing on it takes the radio off the air. See the antenna note in rt.h.
+    rt_set_antenna(false);
     rt_set_tests(0);
 }
 
@@ -452,9 +457,8 @@ static void wifi_start(void)
 // which is asynchronous - init returning does not mean the controller has been told anything.
 // The timeout is a backstop, not an expectation; if it ever fires, that is worth knowing.
 //
-// GPIO14 (port select) is still never touched: R24 holds it at ground for RF1, the onboard
-// ceramic antenna, which is the only one fitted.
-// Always false at boot and never persisted - see the note in rt.h.
+// External at boot on a XIAO (set in app_main once the board is known), never persisted - see
+// the note in rt.h.
 volatile bool g_ant_ext;
 
 // Set once the pin has been configured, so a command arriving before the switch is up cannot
@@ -479,6 +483,9 @@ static void apply_antenna(bool settle)
 
 void rt_set_antenna(bool external)
 {
+    if (g_board != RT_BOARD_XIAO) {
+        return;   // no RF switch to select with
+    }
     if (external == g_ant_ext) {
         return;
     }
@@ -489,38 +496,162 @@ void rt_set_antenna(bool external)
     // something to do to their table on their behalf. See RT_CMD_STATS_RESET in rt.h.
 }
 
+// ---- Which board this is ------------------------------------------------------------------
+//
+// One firmware for the XIAO ESP32C6 and the Espressif DevKitC/DevKitM, told apart at boot by
+// GPIO3. On the XIAO it is the gate of the RF switch's supply FET, which has a 10k pull-up (see
+// ANT_PWR_GPIO above); on the devkits it goes nowhere. So with the chip's own weak pull-down on
+// it, a XIAO reads high - the 10k wins - and a devkit reads low. Read before anything drives the
+// pin. GPIO14 is read the same way the other way round (R24 pulls it down on the XIAO) and
+// logged beside it, as a cross-check rather than a vote.
+//
+// A wrong answer costs a LED and the antenna default, never the radio: the RF switch is powered
+// on every board regardless - see antenna_switch_on().
+volatile uint8_t g_board;
+
+static int read_pulled(int pin, bool up)
+{
+    const gpio_config_t io = {
+        .pin_bit_mask = 1ULL << pin,
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = up ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,
+        .pull_down_en = up ? GPIO_PULLDOWN_DISABLE : GPIO_PULLDOWN_ENABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    esp_rom_delay_us(200);
+    const int v = gpio_get_level(pin);
+    gpio_reset_pin(pin);
+    return v;
+}
+
+static void detect_board(void)
+{
+    const int g3  = read_pulled(ANT_PWR_GPIO, false);
+    const int g14 = read_pulled(ANT_SEL_GPIO, true);
+    g_board = g3 ? RT_BOARD_XIAO : RT_BOARD_DEVKIT;
+    ESP_LOGI(TAG, "board: %s (GPIO3 with pull-down reads %d, GPIO14 with pull-up reads %d%s)",
+             rt_board_name(g_board), g3, g14,
+             (g3 != 0) == (g14 == 0) ? "" : " - the two disagree");
+}
+
+const char *rt_board_name(int board)
+{
+    return board == RT_BOARD_XIAO ? "XIAO" : board == RT_BOARD_DEVKIT ? "devkit" : "?";
+}
+
 // ---- User LED ----------------------------------------------------------------------------
 //
-// Off, on, or blinking at 2Hz. Off at boot, and off means floating rather than driven - see
-// LED_GPIO at the top of this file for that and for the polarity.
+// XIAO: the plain LED on GPIO15 - off, on, or 2Hz. Off at boot, and off means floating rather
+// than driven - see LED_GPIO at the top of this file for that and for the polarity.
 //
-// Unlike the antenna there is no readiness flag and no ordering constraint: GPIO15 goes
-// nowhere near the RF path, so the pin can be configured the moment it is first asked for and
-// never needs touching before that.
+// Devkits: the WS2812 on GPIO8 - off, red, green, blue, or white at 2Hz (white steady for
+// "on"), so two devkits side by side can be told apart. Driven by RMT; GPIO8 is a strapping
+// pin, and like GPIO15 it is left alone until the LED is first asked for.
+//
+// Unlike the antenna there is no readiness flag and no ordering constraint: neither pin goes
+// anywhere near the RF path.
 volatile uint8_t g_led;
+
+#define WS_GPIO       8
+#define WS_LEVEL      40      // of 255 per colour: plenty on a bench, not a torch
+#define WS_RES_HZ     10000000
+
+static rmt_channel_handle_t s_ws_chan;
+static rmt_encoder_handle_t s_ws_enc;
+
+static bool ws_init(void)
+{
+    if (s_ws_chan != NULL) {
+        return true;
+    }
+    const rmt_tx_channel_config_t ch = {
+        .gpio_num          = WS_GPIO,
+        .clk_src           = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz     = WS_RES_HZ,
+        .mem_block_symbols = 48,
+        .trans_queue_depth = 4,
+    };
+    // WS2812 bit timings at 0.1us per tick: 0 = 0.3us high, 0.9us low; 1 = 0.9us high, 0.3us low.
+    const rmt_bytes_encoder_config_t enc = {
+        .bit0 = { .level0 = 1, .duration0 = 3, .level1 = 0, .duration1 = 9 },
+        .bit1 = { .level0 = 1, .duration0 = 9, .level1 = 0, .duration1 = 3 },
+        .flags.msb_first = 1,
+    };
+    if (rmt_new_tx_channel(&ch, &s_ws_chan) != ESP_OK) {
+        s_ws_chan = NULL;
+        return false;
+    }
+    if (rmt_new_bytes_encoder(&enc, &s_ws_enc) != ESP_OK || rmt_enable(s_ws_chan) != ESP_OK) {
+        rmt_del_channel(s_ws_chan);
+        s_ws_chan = NULL;
+        return false;
+    }
+    return true;
+}
+
+// One pixel, GRB on the wire. The line idles low between frames, which is the latch.
+static void ws_show(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (s_ws_chan == NULL) {
+        return;
+    }
+    static uint8_t px[3];
+    px[0] = g; px[1] = r; px[2] = b;
+    const rmt_transmit_config_t tx = { .loop_count = 0 };
+    rmt_transmit(s_ws_chan, s_ws_enc, px, sizeof(px), &tx);
+}
+
+// The colour a devkit shows for each state; black for off.
+static void ws_colour(uint8_t mode, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    *r = *g = *b = 0;
+    switch (mode) {
+    case RT_LED_ON:
+    case RT_LED_BLINK: *r = *g = *b = WS_LEVEL; break;
+    case RT_LED_RED:   *r = WS_LEVEL; break;
+    case RT_LED_GREEN: *g = WS_LEVEL; break;
+    case RT_LED_BLUE:  *b = WS_LEVEL; break;
+    default: break;
+    }
+}
 
 // Created on first use and then kept, because the cycle is a button someone is pressing: a
 // timer torn down and rebuilt on every pass through blink is three allocations per cycle for
 // no gain, and the handle is four bytes.
 static esp_timer_handle_t s_led_timer;
-static bool               s_led_lit;   // which half of the blink period the pin is in
+static bool               s_led_lit;   // which half of the blink period the LED is in
 
-// Runs on the esp_timer task. One gpio_set_level and nothing else - anything that could block
-// does not belong on that task, which every other timer on the board shares.
+static void led_show(bool lit)
+{
+    if (g_board == RT_BOARD_DEVKIT) {
+        uint8_t r, g, b;
+        ws_colour(lit ? g_led : RT_LED_OFF, &r, &g, &b);
+        ws_show(r, g, b);
+    } else {
+        gpio_set_level(LED_GPIO, lit ? LED_ON_LEVEL : LED_OFF_LEVEL);
+    }
+}
+
+// Runs on the esp_timer task. One pin write or one queued RMT frame and nothing else - anything
+// that could block does not belong on that task, which every other timer on the board shares.
 static void led_blink_cb(void *pv)
 {
     (void)pv;
     s_led_lit = !s_led_lit;
-    gpio_set_level(LED_GPIO, s_led_lit ? LED_ON_LEVEL : LED_OFF_LEVEL);
+    led_show(s_led_lit);
 }
 
 // Named in one place, so the log line and the serial report cannot drift apart or disagree
-// about what mode 2 is called.
+// about what a mode is called.
 const char *rt_led_name(int mode)
 {
     switch (mode) {
     case RT_LED_ON:    return "on";
     case RT_LED_BLINK: return "2Hz";
+    case RT_LED_RED:   return "red";
+    case RT_LED_GREEN: return "green";
+    case RT_LED_BLUE:  return "blue";
     default:           return "off";
     }
 }
@@ -533,24 +664,31 @@ static void apply_led(void)
         esp_timer_stop(s_led_timer);
     }
 
-    const gpio_config_t io = {
-        .pin_bit_mask = 1ULL << LED_GPIO,
-        // Driven in both lit modes, including the dark half of a blink: while the blink is
-        // running the pin is in use, and releasing it every other half period would hand the
-        // LED to whatever leakage is nearby instead of turning it off. Only the off mode
-        // releases the pin, so off is byte-for-byte the state the board powered up in.
-        .mode         = g_led == RT_LED_OFF ? GPIO_MODE_INPUT : GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io);
+    if (g_board == RT_BOARD_DEVKIT) {
+        if (!ws_init()) {
+            ESP_LOGW(TAG, "no RMT channel for the WS2812");
+        }
+    } else {
+        const gpio_config_t io = {
+            .pin_bit_mask = 1ULL << LED_GPIO,
+            // Driven in both lit modes, including the dark half of a blink: while the blink is
+            // running the pin is in use, and releasing it every other half period would hand
+            // the LED to whatever leakage is nearby instead of turning it off. Only the off mode
+            // releases the pin, so off is byte-for-byte the state the board powered up in.
+            .mode         = g_led == RT_LED_OFF ? GPIO_MODE_INPUT : GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&io);
+    }
 
-    if (g_led != RT_LED_OFF) {
-        // Both lit modes start lit, so a press always answers immediately - a blink that began
-        // on its dark half would look for a quarter second like the press did nothing.
-        s_led_lit = true;
-        gpio_set_level(LED_GPIO, LED_ON_LEVEL);
+    // Every lit mode starts lit, so a press always answers immediately - a blink that began on
+    // its dark half would look for a quarter second like the press did nothing. A devkit's
+    // pixel holds its colour until told otherwise, so "off" has to be sent to it too.
+    s_led_lit = g_led != RT_LED_OFF;
+    if (s_led_lit || g_board == RT_BOARD_DEVKIT) {
+        led_show(s_led_lit);
     }
 
     if (g_led == RT_LED_BLINK) {
@@ -578,7 +716,9 @@ void rt_set_led(int mode)
 {
     // Out of range is ignored rather than clamped, same as every other command byte: a byte
     // this firmware does not understand should do nothing, not the nearest thing to something.
-    if (mode < 0 || mode >= RT_LED_COUNT || (uint8_t)mode == g_led) {
+    // The colours are the WS2812's; the XIAO's plain LED has no colour to show.
+    const int count = g_board == RT_BOARD_DEVKIT ? RT_LED_COUNT : RT_LED_RED;
+    if (mode < 0 || mode >= count || (uint8_t)mode == g_led) {
         return;
     }
     g_led = (uint8_t)mode;
@@ -668,6 +808,10 @@ static void button_task(void *pv)
 
 void app_main(void)
 {
+    // First, before anything drives GPIO3 or GPIO14 - see detect_board().
+    detect_board();
+    g_ant_ext = g_board == RT_BOARD_XIAO;
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();

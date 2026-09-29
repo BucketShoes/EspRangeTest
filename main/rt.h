@@ -461,10 +461,11 @@ uint8_t rt_conn_phy_actual(void);
 // connector. GPIO14 drives the switch's VCTL - low selects RF1, high RF2 - and GPIO3 powers
 // the switch at all (see main.c).
 //
-// Always internal at boot, never remembered. Selecting an antenna that is not fitted takes the
-// radio off the air completely, and that is not a state to wake up in: it would kill every
-// control path at once, leaving only the button. Boot-to-internal means the worst a bad
-// selection can cost is a power cycle.
+// External (U.FL) at boot on a XIAO, never remembered - every XIAO here has an antenna on its
+// connector now, and the chip antenna is the weaker default (owner, 2026-09-29). The button
+// restore picks the internal one: selecting a port with nothing on it takes the radio off the
+// air, and internal is the one that is always fitted, so it is the way back if an external
+// antenna has come off. On a devkit there is no switch, and the command does nothing.
 //
 // This is a UI command rather than a button gesture on purpose. The button has exactly two
 // gestures - tap for the next mode, hold to restore - and a third would turn the hold into a
@@ -528,7 +529,10 @@ void rt_set_tx_mute(bool mute);
 #define RT_LED_OFF   0
 #define RT_LED_ON    1
 #define RT_LED_BLINK 2
-#define RT_LED_COUNT 3
+#define RT_LED_RED   3   // the colours are the devkits' WS2812 only - a XIAO ignores them
+#define RT_LED_GREEN 4
+#define RT_LED_BLUE  5
+#define RT_LED_COUNT 6
 
 // Three explicit states, not a "next state" byte, even though the UI presents them as one
 // button that cycles. Cycling is a view; the wire carries the state itself, so a write that
@@ -537,6 +541,17 @@ void rt_set_tx_mute(bool mute);
 #define RT_CMD_LED_OFF   0x89
 #define RT_CMD_LED_ON    0x8A
 #define RT_CMD_LED_BLINK 0x8B
+// Two bytes: { RT_CMD_LED_SET, RT_LED_* } - any state, colours included. The three one-byte
+// commands above are kept and mean the same as their states.
+#define RT_CMD_LED_SET   0x91
+
+// Which board, found at boot - see detect_board() in main.c. The XIAO has the RF switch (so
+// an antenna choice) and a plain LED; the devkits have neither switch nor choice, and a WS2812.
+#define RT_BOARD_UNKNOWN 0
+#define RT_BOARD_XIAO    1
+#define RT_BOARD_DEVKIT  2
+extern volatile uint8_t g_board;
+const char *rt_board_name(int board);
 
 extern volatile uint8_t g_led;
 void rt_set_led(int mode);
@@ -695,7 +710,8 @@ void rt_report(void);
 //     u8  state         bit0 lr, bit1 ant_ext, bit2 wifi_active, bit3 conn_2m requested,
 //                       bits 4-5 conn PHY actually in use (0 unknown, 1 1M, 2 2M, 3 coded),
 //                       bit6 tx_mute
-//     u8  led           0 off, 1 on, 2 blinking at 2Hz. Its own byte rather than more bits
+//     u8  led           v11: low nibble RT_LED_*, high nibble RT_BOARD_*. (v10 and before: the
+//                       LED state alone, 0 off, 1 on, 2 blinking at 2Hz.) Its own byte rather than more bits
 //                       in state: state was full at bit7, and three states do not fit in one
 //                       bit. Squeezing it in beside something else would have made the
 //                       next field along someone else's problem to find.
@@ -800,7 +816,8 @@ void rt_report(void);
 //           -128 unknown), i8 pdr (successful share of the last 16 sessions, -1 before any),
 //           u32 ok, u32 fail, u16 age_ds (since the last session ended, either way).
 //           While the FTM test is on, or while it has results from before it went off.
-#define RT_RPT_VER      10
+// v11: the led byte carries the board kind in its high nibble, and the LED has colours.
+#define RT_RPT_VER      11
 #define RT_RPT_HDR      4
 #define RT_RPT_STATUS   110
 #define RT_RPT_ROW      23

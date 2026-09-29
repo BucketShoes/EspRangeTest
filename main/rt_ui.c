@@ -214,6 +214,8 @@ static int cmd_write(uint16_t conn_handle, uint16_t attr_handle,
         rt_gnss_set_mode(b[0] - RT_CMD_GEO_FIX);
     } else if (b[0] >= RT_CMD_LED_OFF && b[0] <= RT_CMD_LED_BLINK) {
         rt_set_led(b[0] - RT_CMD_LED_OFF);
+    } else if (b[0] == RT_CMD_LED_SET && len >= 2) {
+        rt_set_led(b[1]);
     } else if (b[0] == RT_CMD_PHY_CODED || b[0] == RT_CMD_PHY_2M) {
         rt_set_conn_phy(b[0] == RT_CMD_PHY_2M);
     } else if (b[0] == RT_CMD_STATS_RESET) {
