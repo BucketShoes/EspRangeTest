@@ -93,14 +93,29 @@ place to them, it is just infrequent enough to leave them the gaps. See `UI_ITVL
 - **tap** — step through the range candidates one at a time: none → espnow → ble_adv → 154 → ap →
   none. FTM and the Wi-Fi scan are not range candidates, so they are page-only, as are combinations. A
   tap on a combination clears it.
-- **hold** — restore: every test off, LR off, control link back on coded PHY, tx unmuted —
-  exactly as booted.
+- **hold** — restore: every test off, LR off, control link back on coded PHY, tx unmuted,
+  internal antenna on a XIAO (the one that is always fitted).
 
 Switching does **not** reset the counters, and neither does anything else — not power, LR or
 antenna either. Each board's card in the phone UI has its own **reset stats** button, and that
 is the only thing that clears it. Changing a setting on one board used to wipe that board's
 record of what it had heard from the other one, which was backwards: the slider changes what
 the board *transmits*, and the table is what it *received*.
+
+## Boards
+
+One firmware for the Seeed XIAO ESP32C6 and the Espressif DevKitC-1 / DevKitM-1. It tells them
+apart at boot from GPIO3, which on the XIAO has a 10k pull-up (the RF switch's supply FET) and on
+the devkits goes nowhere — see `detect_board()` in `main/main.c`. The boot log and the serial
+report name the board, and so does its card on the page.
+
+| | XIAO | devkit |
+|---|---|---|
+| antenna | RF switch: external (U.FL) at boot, internal on the button restore, chosen from the page | none to choose; the page greys the button |
+| LED | plain LED on GPIO15: off → on → 2Hz | WS2812 on GPIO8: off → red → green → blue → white 2Hz |
+
+The **wifi** power slider is the Wi-Fi radio's one transmit power — ESP-NOW, the AP and FTM all
+use it. Its ceiling is `CONFIG_ESP_PHY_MAX_WIFI_TX_POWER` in `sdkconfig.defaults`.
 
 ## Wi-Fi scan: `ap scan` and FTM
 

@@ -127,6 +127,24 @@ The owner's framing, which supersedes "low contention" as the organising idea:
   receiving. BLE sleep (`CONFIG_BT_LE_SLEEP_ENABLE`) went in at the same time; its own share was
   not measured, and the owner's view is that BLE never receives outside its windows anyway.
   The RF switch (GPIO3) is powered once at boot and never turned off, as it should be.
+- **One firmware, board found at boot** (owner, 2026-09-29): XIAO vs devkit from GPIO3 read with
+  the chip's pull-down - the XIAO's 10k gate pull-up reads high, a devkit's bare pin low. GPIO14
+  with pull-up is logged as a cross-check (R24 pulls it down on the XIAO). A wrong answer can
+  only cost the LED and the antenna default: the RF switch is powered on every board anyway.
+  The board kind rides in the high nibble of the report's led byte (v11).
+- **XIAO antenna: external at boot**, owner's call now that every XIAO has one fitted. The
+  button restore selects internal - the port that is always there, so the way back if an
+  external antenna comes off. Devkits have no switch; the command is ignored, the page greys it.
+- **Devkit LED is the WS2812 on GPIO8**, cycling off/red/green/blue/white 2Hz (driven by RMT),
+  so devkits can be told apart; the XIAO keeps off/on/2Hz. Colours are LED states 3-5, set
+  with the two-byte RT_CMD_LED_SET.
+- **Wi-Fi power ceiling back to 20dBm**, and the slider is labelled wifi: it is the radio's one
+  power, used by ESP-NOW, the AP and FTM alike. The 10dBm cap (to bound the moment after each
+  Wi-Fi start before the runtime setting applies) had quietly come back when the generated
+  sdkconfig was rebuilt from the defaults.
+- **802.15.4 power while its radio is disabled** is reported as asked: the driver has no
+  channel until enabled and answered 0dBm to a read-back, which looked like a wrong default
+  that could not be changed.
 - **Control is transport-agnostic** (owner): BLE is *a* control link, not *the* one - a Wi-Fi
   (websockets) one is planned. Report building and commands should not grow BLE-only
   assumptions.
